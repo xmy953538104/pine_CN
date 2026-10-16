@@ -45,6 +45,34 @@ this repository is public. Hosted ARM macOS does not support nested virtualizati
 so it is not used. This alternative does not change Linux KVM permissions and is
 not assumed to succeed before its actual runtime report exists.
 
+**Intel macOS checkpoint, 2026-10-16 19:11 UTC:** source
+`11a190d1597276b40cddc6d30e7bc43b858ba144`, exact APK SHA256
+`07bfacb6e1b7e6914769cc0e7d5bc992148502b640385cb6a03d5c097f64d722`,
+[run 38950428391 / job 117142353647](https://github.com/xmy953538104/pine_CN/actions/runs/38950428391/job/117142353647).
+The official acceleration probe returned 0 and `Hypervisor.Framework OS X Version
+15.7`; read-only `kern.hv_support` returned 1. Android completed boot, but the
+first readiness `pidof system_server` returned `672 1618`, and the runner stopped
+after 1.273 seconds without installing Pine. The [report and commands](https://github.com/xmy953538104/pine_CN/actions/runs/38950428391/artifacts/12068704693)
+record `environment_blocked`, 1 check passed and 17 blocked. Framework logs show
+PID 672 handling boot and system-app ANRs, but no `/proc` identity was captured
+for PID 1618; its cause must not be invented. This is not evidence that Intel
+HVF is unavailable. The next readiness check retries transient missing/multiple
+PIDs or package-service failures within its existing finite budget, while still
+requiring one unchanged PID across the package query and continuity interval.
+
+The same commit's [Ubuntu job 117142353476](https://github.com/xmy953538104/pine_CN/actions/runs/38950428391/job/117142353476)
+successfully installed that APK in 482.404 seconds including its absence query,
+then verified the exact installed SHA256. At 19:20:50.143, Android watchdog killed
+the observed system-server PID 1913 for `Blocked in handler on i/o thread
+(android.io) for 153s`. The Settings start command overlapped this restart and
+returned `Failure calling service activity: Broken pipe (32)`. Its [runtime
+artifact](https://github.com/xmy953538104/pine_CN/actions/runs/38950428391/artifacts/12070356257)
+records 4 checks passed, 14 blocked, and no observed Pine crash; this does not
+establish successful native loading or UI acceptance. The next fresh AVD uses
+4 GiB inside the same standard runner, after the 3 GiB boot logs showed memory/I/O
+pressure and system-app ANRs. This is an empirical capacity retry, not proof of a
+single cause or a controlled game-performance comparison.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.
@@ -274,10 +302,12 @@ APK/UI test. The subsequent actual Android 30 installation attempts are recorded
 in the latest checkpoint above; Android 34 testing is a separate attempt.
 
 The offline `tools/tests/test-android-smoke-deadlines.py` regression also passed
-three tests covering five real controlled subprocess scenarios. It rejects late
-UI/session/native observations, bounds scrolling, and keeps a slow screenshot
-from replacing an already observed result. All five scenarios reject the old
-runner. These are fake-ADB deadline tests; they pass none of the 18 Android APK
-acceptance checks.
+six tests using real controlled subprocesses. The original five deadline scenarios
+reject late UI/session/native observations, bound scrolling, and keep a slow
+screenshot from replacing an already observed result; all five reject the old
+runner. Additional readiness cases cover missing/multiple PIDs and failed package
+queries before a stable observation, persistent ambiguity reaching its deadline,
+and a PID change before a later stable window. These are fake-ADB tests; they
+pass none of the 18 Android APK acceptance checks.
 
 Cleanup checkpoint, **2026-10-16 18:08 UTC**: only the verified owned Android 34 QEMU PID 45401 and full-logcat PID 46096 were stopped with SIGTERM; both reached exited/zombie state and emulator output records normal configuration/render-thread shutdown. The AVD and userdata remain intact, with no wipe or additional installation. Final properties and log tail were preserved before stopping. Those late properties reported `sys.boot_completed=1` and system-server start count 6; this later flag does not replace the earlier blocked strict report or establish any Pine UI/native pass. The last successful target-package absence query remains the one recorded at 17:59:04. Shutdown evidence is `/workspace/android-runtime/api34-final-shutdown.json`, `api34-final-shutdown-getprop.txt`, `api34-pre-shutdown-logcat-tail.txt`, and the final unfiltered `api34-final-stopped-logcat.txt` (8,517,713 bytes, SHA256 `aa552828aaa848ccb5dd6f19dc77ad6d18b76336f8d2ffe2a563a3fd96fe52fc`).

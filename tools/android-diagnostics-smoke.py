@@ -193,7 +193,7 @@ class Smoke:
         temporary.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         temporary.replace(self.output / "runtime-report.json")
 
-    def adb(self, *arguments, timeout=None, check=True, binary=False, save=None):
+    def adb(self, *arguments, timeout=None, check=True, binary=False, save=None, save_stderr=None):
         command = [self.args.adb, "-s", self.args.serial, *map(str, arguments)]
         self.command_number += 1
         started = time.monotonic()
@@ -217,6 +217,9 @@ class Smoke:
         if save:
             (self.output / save).write_bytes(stdout)
             record["saved_stdout"] = save
+        if save_stderr and stderr:
+            (self.output / save_stderr).write_bytes(stderr)
+            record["saved_stderr"] = save_stderr
         with (self.output / "commands.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         if check and code != 0:
@@ -431,47 +434,126 @@ class Smoke:
 
     def device_ready(self):
         deadline = time.monotonic() + self.args.boot_timeout
-        def budget():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise Blocked("Bounded Android boot/readiness gate expired before installation")
-            return min(self.args.command_timeout, remaining)
-        state = decode(self.adb("get-state", timeout=budget())).strip()
-        if state != "device":
-            raise Blocked("ADB device is not authorized/online: " + state)
-        while True:
-            data = self.adb("shell", "getprop", save="device-properties.txt", timeout=budget())
-            properties = dict(re.findall(r"^\[([^]]+)\]: \[([^]]*)\]$", decode(data), re.MULTILINE))
-            if properties.get("sys.boot_completed") == "1":
-                break
-            if time.monotonic() >= deadline:
-                raise Blocked("sys.boot_completed did not become 1; Android boot is not complete")
-            time.sleep(min(5, max(0, deadline - time.monotonic())))
-        if "arm64-v8a" not in properties.get("ro.product.cpu.abilist", "").split(","):
-            raise Blocked("Guest does not advertise the APK's arm64-v8a ABI")
-        self.summary["device"] = {key: properties.get(key, "") for key in (
-            "ro.build.fingerprint", "ro.build.version.sdk", "ro.product.cpu.abi",
-            "ro.product.cpu.abilist", "ro.dalvik.vm.native.bridge", "ro.kernel.qemu", "sys.boot_completed")}
-        # sys.boot_completed can remain 1 across system_server watchdog restarts.
-        # Observe a real package query and short system_server continuity before
-        # first installation. UI success is tested against the installed app;
-        # an unresponsive preflight hierarchy must not prevent that actual attempt.
-        before = decode(self.adb("shell", "pidof", "system_server", timeout=budget(),
-                                 save="readiness-system-server-before.txt")).strip()
-        if not re.fullmatch(r"[0-9]+", before):
-            raise Blocked("No single running Android system_server before UI readiness observation")
-        package = decode(self.adb("shell", "cmd", "package", "path", "android", timeout=budget(),
-                                  save="readiness-package-query.txt"))
-        if not any(line.startswith("package:") for line in package.splitlines()):
-            raise Blocked("Android package manager did not answer its real package query")
-        time.sleep(min(2, max(0, deadline - time.monotonic())))
-        after = decode(self.adb("shell", "pidof", "system_server", timeout=budget(),
-                                save="readiness-system-server-after.txt")).strip()
-        self.summary["android_readiness"] = {"system_server_before": before, "system_server_after": after,
-                                              "package_query_answered": True, "preinstall_ui_required": False}
-        if before != after:
-            raise Blocked("Android system_server restarted during package/PID readiness observation; no APK installation attempted")
-        return {**self.summary["device"], **self.summary["android_readiness"]}
+        observations = []
+        readiness = {"preinstall_ui_required": False, "continuity_window_seconds": 2,
+                     "observations": observations}
+        self.summary["android_readiness"] = readiness
+        sampled_multiple = False
+        last_reason = "No readiness observation completed"
+        # The boot flag can survive a framework restart. Missing/multiple PIDs,
+        # a failed package query or a changed PID are retryable observations;
+        # none permits choosing a candidate or skipping the continuity window.
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            first_command = self.command_number + 1
+            attempt = len(observations) + 1
+            prefix = f"readiness-{attempt:03d}"
+            row = {"attempt": attempt, "started_utc": datetime.now(timezone.utc).isoformat(),
+                   "status": "error", "reason": "Readiness observation did not complete"}
+            files, error_files = {}, {}
+            accepted = None
+
+            def observe(name, *arguments):
+                row["stage"] = name
+                files[name] = f"{prefix}-{name}.txt"
+                error_files[name] = f"{prefix}-{name}.stderr.txt"
+                data = self.adb(*arguments, timeout=self.budget(deadline, "Android readiness"),
+                                save=files[name], save_stderr=error_files[name])
+                self.budget(deadline, "Android readiness")
+                return decode(data)
+
+            def sample_candidates(pids):
+                # Diagnostic only: never use /proc identity to select a PID.
+                samples = row.setdefault("pid_status_samples", [])
+                for index, pid in enumerate(pids[:4], 1):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    name = f"candidate-{index}-{pid}-status"
+                    files[name] = f"{prefix}-{name}.txt"
+                    error_files[name] = f"{prefix}-{name}.stderr.txt"
+                    self.adb("shell", "cat", f"/proc/{pid}/status", check=False,
+                             timeout=min(2, self.args.command_timeout, remaining),
+                             save=files[name], save_stderr=error_files[name])
+                    samples.append({"pid": pid, "command_number": self.command_number,
+                                    "stdout": files[name],
+                                    "stderr": error_files[name] if (self.output / error_files[name]).is_file() else None})
+
+            def single_pid(raw, position):
+                nonlocal sampled_multiple
+                pids = raw.split()
+                if len(pids) != 1 or not re.fullmatch(r"[0-9]+", pids[0]):
+                    if (not sampled_multiple and len(pids) > 1 and
+                            all(re.fullmatch(r"[0-9]+", pid) for pid in pids)):
+                        sampled_multiple = True
+                        sample_candidates(pids)
+                    raise Blocked(f"Expected one Android system_server {position}; observed PID list: {pids!r}")
+                return pids[0]
+
+            try:
+                state = observe("adb-state", "get-state").strip()
+                if state != "device":
+                    raise Blocked("ADB device is not authorized/online: " + state)
+                data = observe("properties", "shell", "getprop")
+                properties = dict(re.findall(r"^\[([^]]+)\]: \[([^]]*)\]$", data, re.MULTILINE))
+                row["boot_completed"] = properties.get("sys.boot_completed", "")
+                self.summary["device"] = {key: properties.get(key, "") for key in (
+                    "ro.build.fingerprint", "ro.build.version.sdk", "ro.product.cpu.abi",
+                    "ro.product.cpu.abilist", "ro.dalvik.vm.native.bridge", "ro.kernel.qemu", "sys.boot_completed")}
+                if row["boot_completed"] != "1":
+                    raise Blocked("sys.boot_completed is not 1; Android boot is not complete")
+                if "arm64-v8a" not in properties.get("ro.product.cpu.abilist", "").split(","):
+                    raise Blocked("Guest does not advertise the APK's arm64-v8a ABI")
+                before = single_pid(observe("system-server-before", "shell", "pidof", "system_server"), "before the package query")
+                continuity_started = time.monotonic()
+                package = observe("package-query", "shell", "cmd", "package", "path", "android")
+                if not any(re.fullmatch(r"package:/\S+\.apk", line) for line in package.splitlines()):
+                    raise Blocked("Android package manager did not answer its real package query with an APK path")
+                row["package_query_answered"] = True
+                if deadline - time.monotonic() <= 2:
+                    raise Blocked("Readiness budget cannot fit the full two-second continuity window")
+                time.sleep(2)
+                after = single_pid(observe("system-server-after", "shell", "pidof", "system_server"), "after the continuity window")
+                row["continuity_seconds"] = round(time.monotonic() - continuity_started, 3)
+                self.budget(deadline, "Android readiness")
+                if before != after:
+                    raise Blocked(f"Android system_server changed during package/PID observation: {before} -> {after}")
+                accepted = {"system_server_before": before, "system_server_after": after,
+                            "package_query_answered": True, "preinstall_ui_required": False}
+                row.update(status="pass", reason="One identical PID across the package query and full two-second window")
+            except Blocked as error:
+                last_reason = str(error)
+                row.update(status="retry" if time.monotonic() < deadline else "blocked", reason=last_reason)
+            except Exception as error:
+                row.update(status="error", reason=f"{type(error).__name__}: {error}")
+                raise
+            finally:
+                for name, position in (("system-server-before", "before"), ("system-server-after", "after")):
+                    path = self.output / files[name] if name in files else None
+                    raw = path.read_text(encoding="utf-8", errors="replace") if path and path.is_file() else None
+                    row[f"system_server_{position}_raw"] = raw
+                    row[f"system_server_{position}_pids"] = raw.split() if raw is not None else None
+                row["command_errors"] = {name: (self.output / path).read_text(encoding="utf-8", errors="replace")
+                                         for name, path in error_files.items() if (self.output / path).is_file()}
+                row["seconds"] = round(time.monotonic() - started, 3)
+                row["command_numbers"] = [first_command, self.command_number]
+                row["evidence"] = sorted(path for path in (*files.values(), *error_files.values())
+                                         if (self.output / path).is_file())
+                observations.append(row)
+                with (self.output / "readiness-observations.jsonl").open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+                if accepted is not None:
+                    readiness.update(accepted)
+                    readiness["accepted_attempt"] = attempt
+                    readiness["status"] = "pass"
+                self.write_summary()
+            if accepted is not None:
+                return {**self.summary["device"], **accepted, "readiness_attempts": attempt,
+                        "readiness_evidence": "readiness-observations.jsonl"}
+            self.pause(deadline, 1 if row.get("boot_completed") == "1" else 5)
+        readiness.update(status="blocked", reason=last_reason)
+        self.write_summary()
+        raise Blocked("Bounded Android boot/readiness gate expired before installation; last observation: " + last_reason)
 
     def fresh_install(self):
         existing = decode(self.adb("shell", "cmd", "package", "path", PACKAGE, check=False)).strip()

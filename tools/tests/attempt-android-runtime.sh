@@ -68,7 +68,7 @@ try:
 except OSError:
     affinity = None
 print(json.dumps({'system': platform.system(), 'machine': platform.machine(), 'cpu_count': os.cpu_count(),
-                  'affinity': affinity, 'guest_memory_mib': 3072}))
+                  'affinity': affinity, 'guest_memory_mib': 4096}))
 if platform.system() == 'Linux':
     for name in ('/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/memory.max', '/proc/meminfo'):
         try:
@@ -89,7 +89,10 @@ elif platform.system() == 'Darwin':
 PY
 # This is a fresh, job-local AVD, never a user's existing device or disk.
 printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-36;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
-"$emulator" -avd PineDiagnosticsCI -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel "$accel" -cores 2 -memory 3072 -skin 480x800 -verbose > "$out/emulator.log" 2>&1 &
+# API36 first-boot logs showed memory/I/O pressure and system-app ANRs with 3 GiB.
+# Give the fresh AVD 4 GiB inside the existing standard runner; this is an
+# empirical capacity retry, not an established cause or a game-performance test.
+"$emulator" -avd PineDiagnosticsCI -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel "$accel" -cores 2 -memory 4096 -skin 480x800 -verbose > "$out/emulator.log" 2>&1 &
 emulator_pid=$!
 framework_logger_pid=''
 cleanup() {

@@ -17,7 +17,7 @@
 	branch = master
 [submodule "Perfetto"]
 	path = app/libraries/perfetto
-	url = https://android.googlesource.com/platform/external/perfetto
+	url = https://github.com/google/perfetto.git
 	branch = releases/v12.x
 [submodule "Vulkan-Hpp"]
 	path = app/libraries/vkhpp

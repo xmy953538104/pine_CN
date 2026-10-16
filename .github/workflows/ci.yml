@@ -6,6 +6,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
 
+concurrency:
+  group: pine-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     # Skip 'labeled' events that didn't add the 'ci' label
@@ -20,12 +24,13 @@ jobs:
       UPLOAD_ARTIFACTS: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci') }}
       CMAKE_VERSION: "3.22.1"
       NDK_VERSION: "27.3.13750724"
-      BUILD_TYPE: release
+      BUILD_TYPE: ${{ github.ref == 'refs/heads/main' && 'release' || 'debug' }}
 
     steps:
       - name: Git Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Restore CCache
@@ -54,8 +59,10 @@ jobs:
           sudo apt-get install -y ninja-build
           ln -s /usr/bin/ninja .
 
+      - uses: android-actions/setup-android@v3
+
       - name: Install CMake & Android NDK
-        run: echo "yes" | $ANDROID_HOME/tools/bin/sdkmanager "cmake;${{ env.CMAKE_VERSION }}" "ndk;${{ env.NDK_VERSION }}" --channel=3 | grep -v = || true
+        run: sdkmanager "cmake;${{ env.CMAKE_VERSION }}" "ndk;${{ env.NDK_VERSION }}" "platforms;android-35"
 
       - name: Decode Keystore
         if: env.IS_BUILD_SIGNED == 'true'

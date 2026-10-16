@@ -28,6 +28,16 @@ android {
         versionCode 2
         versionName "2.1.1"
 
+        // Identify the exact tested source, including PR head checkouts in CI.
+        def commitOutput = new ByteArrayOutputStream()
+        def commitResult = exec {
+            commandLine 'git', 'rev-parse', 'HEAD'
+            standardOutput = commitOutput
+            ignoreExitValue = true
+        }
+        def diagnosticsCommit = commitResult.exitValue == 0 ? commitOutput.toString().trim() : 'unknown'
+        buildConfigField "String", "DIAGNOSTICS_COMMIT", "\"${diagnosticsCommit}\""
+
         ndk {
             //noinspection ChromeOsAbiSupport
             abiFilters "arm64-v8a"

@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Native diagnostic tests
         run: |
           bash tools/tests/run-native-diagnostics.sh
@@ -21,10 +23,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Fake ADB PowerShell 5.1 tests
         shell: powershell
         run: ./tools/tests/pine-diag.Tests.ps1
       - name: Fake ADB pwsh tests
+        if: always()
         shell: pwsh
         run: ./tools/tests/pine-diag.Tests.ps1
   debug-apk:
@@ -33,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
       - uses: actions/setup-java@v4
         with:
@@ -51,7 +57,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
         uses: actions/upload-artifact@v4
         with:
-          name: pine-diagnostics-debug-${{ github.sha }}
+          name: pine-diagnostics-debug-${{ github.event.pull_request.head.sha || github.sha }}
           path: app/build/outputs/apk/full/debug/*.apk
           if-no-files-found: error
       - name: Test reports

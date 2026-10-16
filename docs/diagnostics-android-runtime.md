@@ -105,6 +105,49 @@ configuration retry after observed Android36 ANRs, not an App-code workaround or
 a claim that Android35 has run Pine successfully. The same bounded install/UI,
 identity, native-log, export and crash checks remain required.
 
+**Intel macOS Android35 checkpoint, 2026-10-16 20:15 UTC:** source
+`ecd18ee237b1b9b3cedbe632ab2498d8666b5cb5`, exact APK SHA256
+`b2c5fa02abb9c309b81aebf1c7fbc0be16b1fe17bf544e0c4104ebc5694e6adf`,
+[job 117168807682](https://github.com/xmy953538104/pine_CN/actions/runs/38958338310/job/117168807682).
+The package/PID gate passed with PID 587 unchanged for 2.860 seconds. Installation
+completed in 60.976 seconds including its absence query and the installed SHA256
+matched. The exact Settings launch response was `Status: timeout`,
+`LaunchState: UNKNOWN (-1)`, `WaitTime: 24976`, followed by `Complete`.
+This is an attempted launch, not a successful Activity observation. The report is
+`environment_blocked`: 5 passed, 13 blocked, 0 failed, with no Pine Java/native
+crash observed during capture. Settings, native logging and export remain blocked.
+The final Activity/window dump separately records a Pine task and process PID
+2298, plus an `Application Not Responding: com.android.systemui` window. This
+proves a Pine process/task appeared, not that native initialization or Settings
+rendering completed.
+
+The same commit's [Ubuntu job 117168807495](https://github.com/xmy953538104/pine_CN/actions/runs/38958338310/job/117168807495)
+also installed successfully in 152.957 seconds including its absence query and
+matched the same installed SHA256. Its launch response was `Status: timeout`,
+`LaunchState: UNKNOWN (-1)`, `WaitTime: 31569`. The report is likewise 5 passed,
+13 blocked, 0 failed, with no observed Pine crash. Its saved hierarchy stdout
+files also contain `Permission denied` or `Transport endpoint is not connected`,
+not parseable XML. The final window dump separately records a Nexus Launcher ANR
+and a Pine task/process PID 3422; it does not provide an observed ANR button or
+diagnostic UI. No coordinates or dialog action are inferred from this dump.
+
+Several UI hierarchy captures exposed a separate observer dependency: command 23
+reported `UI hierchary dumped to: /sdcard/...xml` with exit 0, but command 24's
+`exec-out cat` also returned 0 while its stdout was `Transport endpoint is not
+connected`. Commands 25/26 reproduced the same sequence; other reads reported
+`Permission denied`. These saved `.xml` files contain error text, not valid UI
+hierarchies, and the parser correctly rejected them. UiAutomation also timed out.
+The earlier Activity timeout is an independent observation; these logs do not
+establish that the later FUSE reads caused it or that native initialization passed.
+
+The next observer uses its own unique shell-owned `/data/local/tmp` hierarchy
+file, avoiding `/sdcard` FUSE for UI capture without root, permission or security
+changes. A controlled subprocess regression proves a real parsed hierarchy can
+still be observed when shared storage is unavailable and that zero-exit-code
+error text at the old path remains blocked. This is a host observer test, not APK
+execution. The final SAF test still saves through the ordinary document picker
+and reads the actual ZIP in `/sdcard/Download`; its standard is not relaxed.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

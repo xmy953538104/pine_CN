@@ -133,7 +133,10 @@ class Smoke:
             raise Blocked("Output contains a previous run; choose a new --output directory")
         self.command_number = 0
         self.screen_number = 0
-        self.remote_xml = "/sdcard/pine-diag-smoke-" + uuid.uuid4().hex + ".xml"
+        # UIAutomator runs as the authorized shell. Keep its temporary hierarchy
+        # on shell-owned storage: first-boot FUSE failures can make /sdcard
+        # unreadable even after dump reports success. SAF still uses Downloads.
+        self.remote_xml = "/data/local/tmp/pine-diag-smoke-" + uuid.uuid4().hex + ".xml"
         self.session = None
         self.sessions = set()
         self.ever_enabled = False

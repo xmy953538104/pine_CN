@@ -62,6 +62,10 @@ class ObservationDeadlines(unittest.TestCase):
             elif args[:2] == ['exec-out', 'cat']:
                 operation = 'xml'
                 output = '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>'
+                if config.get('shared_storage_unavailable') and args[2].startswith('/sdcard/'):
+                    # Android exec-out can report success while cat's error is
+                    # returned as stdout. This must never become a UI success.
+                    output = 'cat: ' + args[2] + ': Transport endpoint is not connected'
             elif args[:3] == ['shell', 'input', 'swipe']:
                 operation, output = 'swipe', ''
             elif args[:2] == ['exec-out', 'screencap']:
@@ -147,6 +151,21 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertTrue(smoke.summary["capture_warnings"])
         self.assertTrue(any(row["timed_out"] and "screencap" in row["argv"]
                             for row in self.commands(smoke)))
+
+    def test_ui_hierarchy_survives_unavailable_shared_storage_without_faking_xml(self):
+        smoke = self.smoke("shell-storage", {"shared_storage_unavailable": True})
+        screen = smoke.screen("shell-storage", deadline=time.monotonic() + 1)
+        self.assertIsNotNone(screen.find("Ready"))
+        self.assertIsNone(smoke.session)
+        self.assertEqual(smoke.results, {})
+        # Reproduce the observed old-path failure with the same real subprocess
+        # fixture; a zero exit code and saved .xml filename are insufficient.
+        smoke.remote_xml = "/sdcard/" + Path(smoke.remote_xml).name
+        with self.assertRaisesRegex(Blocked, "did not provide parseable XML"):
+            smoke.screen("broken-fuse", deadline=time.monotonic() + 1)
+        self.assertIn("Transport endpoint is not connected",
+                      (smoke.output / "002-broken-fuse.xml").read_text())
+        self.assertEqual(smoke.results, {})
 
     def assert_gate_only(self, smoke, status):
         self.assertEqual(set(smoke.results), {"device_ready"})

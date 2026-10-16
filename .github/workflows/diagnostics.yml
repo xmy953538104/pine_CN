@@ -49,13 +49,20 @@ jobs:
               if not path.is_file():
                   continue
               lines = path.read_text(errors='replace').splitlines()
+              # Print the Pine ANR itself first: a later flood of unrelated
+              # system-app ANRs must not crowd the original app failure out.
+              primary = [index for index, line in enumerate(lines)
+                         if 'ANR in io.github.pine.emu.diagnostics' in line or
+                         ('am_anr' in line and 'io.github.pine.emu.diagnostics' in line)]
+              print(name + ': exact Pine ANR matches=' + str(len(primary)))
+              for index in primary[:8]:
+                  print('\n'.join(lines[max(0, index - 6):index + 65])[:24000])
               selected = set()
               for index, line in enumerate(lines):
-                  if any(term in line for term in ('ANR in io.github.pine.emu.diagnostics', 'Input dispatching timed out',
-                                                    'io.github.pine.emu.diagnostics', 'am_anr', 'Reason:', 'Load:')):
-                      selected.update(range(max(0, index - 4), min(len(lines), index + 35)))
+                  if 'io.github.pine.emu.diagnostics' in line:
+                      selected.update(range(max(0, index - 3), min(len(lines), index + 8)))
               context = '\n'.join(lines[index] for index in sorted(selected))
-              print(name + ':\n' + context[-96000:])
+              print(name + ': first/last Pine context:\n' + context[:48000] + '\n' + context[-48000:])
           PY
   adb:
     runs-on: windows-latest

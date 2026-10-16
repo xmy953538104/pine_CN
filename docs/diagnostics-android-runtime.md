@@ -196,6 +196,12 @@ host tests passed, including app-ANR classification and refused/timed-out probes
 these are not APK execution passes. The fresh AVD still uses the same two cores,
 4 GiB, original UI deadlines and 18 required checks for this evidence-only retry.
 
+The subsequent capacity retry requests four cores and 6 GiB inside the same
+standard free hosts, after both Pine and system-app ANRs occurred at two cores /
+4 GiB. It retains the official image, original deadlines, 18 checks and failure
+probes. This is not an isolated performance experiment or proof of an ANR cause.
+The earlier attempts and their exact APK identities remain unchanged.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

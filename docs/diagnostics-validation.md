@@ -20,6 +20,7 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Windows PS5.1/pwsh ADB | Full suite passed at `d859e3b5`, including native EOF, complete shared-file records and cancellation cleanup | Windows physical-keyboard Ctrl+C still needs manual acceptance; actual POSIX PTY Ctrl+C passed separately |
 | Actual POSIX PTY Ctrl+C, fake ADB and native JSONL replay | Passed | These controlled inputs are not an Android/device run |
 | Preview publication guards | Passed offline tests for rejected commits/jobs, tampered APK/evidence, wrong ABI and extra APK | Test ZIPs are deliberately non-executable fixtures |
+| Android observer safeguards | Local 17 smoke, 4 passive first-boot and 11 startup-probe tests passed using controlled subprocesses | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
 
 Reproduce independent native checks without the Android SDK:
 
@@ -27,6 +28,9 @@ Reproduce independent native checks without the Android SDK:
 bash tools/tests/run-native-diagnostics.sh
 bash tools/tests/run-content-diagnostics.sh
 python3 tools/tests/test-preview-gates.py
+python3 tools/tests/test-android-smoke-deadlines.py
+python3 tools/tests/test-android-first-boot.py
+python3 tools/tests/test-android-startup-probe.py
 ```
 
 Android build and JVM checks use Java17, Gradle8.6, NDK27.3.13750724, SDK35:

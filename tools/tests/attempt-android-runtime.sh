@@ -134,15 +134,34 @@ fi
 # can otherwise lose the framework event that first stalled the package service.
 "$adb" -s emulator-5554 logcat -T 1 -b all -v threadtime > "$out/android-install-logcat.txt" 2>&1 &
 framework_logger_pid=$!
+# Fresh-image BOOT_COMPLETED receiver work can continue after sys.boot_completed.
+# Observe the current system-server's completion marker without changing its
+# queues or settings. A missing marker is retained, not an acceptance failure
+# or permission to skip the unchanged actual APK checks below.
+python3 tools/tests/wait-android-first-boot.py --adb "$adb" --serial emulator-5554 --output "$out/first-boot" --timeout 600 --command-timeout 10 || true
+baseline_result=0
+if [[ $# -ge 4 ]]; then
+  # Separate, exact main APK, tested first on this same fresh AVD. Its Settings
+  # observations never pass the target's Diagnostics checks; order is a confound.
+  if python3 tools/android-startup-probe.py --adb "$adb" --serial emulator-5554 --apk "$4" --package io.github.pine.emu --source-commit f665512f52fa6c3b7e726299d0c23ff3abe09d8c --output "$out/baseline-startup" --fresh-test-avd --install-timeout 900 --ui-timeout 120; then
+    baseline_result=0
+  else
+    baseline_result=$?
+  fi
+fi
 # The first API36 software-accelerated attempt completed boot but exhausted the
 # normal 300s install budget. This larger, finite CI-only budget changes neither
 # device security nor the APK/guest behavior; all unobserved checks stay blocked.
 # This flag is scoped to this newly created, job-owned AVD. Ordinary users of
 # the smoke runner do not automatically interact with another app's ANR dialog.
-if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr; then
+if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr --collect-system-last-anr-traces; then
   smoke_result=0
 else
   smoke_result=$?
+fi
+if [[ "$baseline_result" != 0 && "$baseline_result" != 2 ]]; then
+  echo 'Baseline Settings startup probe failed; see its separate startup-report.json.' >&2
+  exit "$baseline_result"
 fi
 case "$smoke_result" in
   0)

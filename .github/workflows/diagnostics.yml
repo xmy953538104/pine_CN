@@ -13,9 +13,6 @@ concurrency:
 jobs:
   native:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,44 +23,8 @@ jobs:
           bash tools/tests/run-content-diagnostics.sh
           python3 tools/tests/test-preview-gates.py
           python3 tools/tests/test-android-smoke-deadlines.py
-      # Temporary, read-only recovery of this repository's exact earlier ANR
-      # evidence. The development executor cannot transfer signed artifacts.
-      - name: Recover prior Pine ANR evidence
-        uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 38961409089
-          name: pine-android-runtime-macOS-24ff025e54ddabf5a1b2a9d2d924fc44930953eb
-          path: prior-runtime
-      - name: Print bounded prior ANR context
-        run: |
-          python3 - <<'PY'
-          import pathlib
-          root = pathlib.Path('prior-runtime')
-          for name in ('runtime-report.json', 'settings-launch.txt', 'final-activities.txt'):
-              path = root / name
-              if path.is_file():
-                  print(name + ':\n' + path.read_text(errors='replace')[:32000])
-          for name in ('android-install-logcat.txt', 'android-logcat.txt', 'runtime-logcat.txt'):
-              path = root / name
-              if not path.is_file():
-                  continue
-              lines = path.read_text(errors='replace').splitlines()
-              # Print the Pine ANR itself first: a later flood of unrelated
-              # system-app ANRs must not crowd the original app failure out.
-              primary = [index for index, line in enumerate(lines)
-                         if 'ANR in io.github.pine.emu.diagnostics' in line or
-                         ('am_anr' in line and 'io.github.pine.emu.diagnostics' in line)]
-              print(name + ': exact Pine ANR matches=' + str(len(primary)))
-              for index in primary[:8]:
-                  print('\n'.join(lines[max(0, index - 6):index + 65])[:24000])
-              selected = set()
-              for index, line in enumerate(lines):
-                  if 'io.github.pine.emu.diagnostics' in line:
-                      selected.update(range(max(0, index - 3), min(len(lines), index + 8)))
-              context = '\n'.join(lines[index] for index in sorted(selected))
-              print(name + ': first/last Pine context:\n' + context[:48000] + '\n' + context[-48000:])
-          PY
+          python3 tools/tests/test-android-first-boot.py
+          python3 tools/tests/test-android-startup-probe.py
   adb:
     runs-on: windows-latest
     steps:
@@ -205,6 +166,9 @@ jobs:
                       print('Recent ADB observations:\n' + '\n'.join(commands.read_text(errors='replace').splitlines()[-20:])[-24000:])
           else:
               print('No runtime report was produced; no APK execution result is claimed.')
+          first_boot = root / 'first-boot/first-boot-result.json'
+          if first_boot.is_file():
+              print('first-boot-result.json:\n' + first_boot.read_text(errors='replace')[:12000])
           for name in ('host.txt', 'accel-check.txt'):
               path = root / name
               if path.is_file():
@@ -215,7 +179,7 @@ jobs:
                   print(name + ':\n' + path.read_text(errors='replace')[:48000])
           # Best-effort failure probes may be refused on an official image;
           # preserve those errors without treating them as functional passes.
-          names = ['last-anr.txt', 'last-anr.stderr.txt', 'pine-process-ids.txt', 'pine-process-ids.stderr.txt']
+          names = ['last-anr.txt', 'last-anr.stderr.txt', 'last-anr-traces.txt', 'last-anr-traces.stderr.txt', 'pine-process-ids.txt', 'pine-process-ids.stderr.txt']
           names.extend(path.name for pattern in ('pine-maps-[0-9]*.txt', 'pine-native-backtrace-[0-9]*.txt')
                        for path in sorted(root.glob(pattern)))
           for name in names:

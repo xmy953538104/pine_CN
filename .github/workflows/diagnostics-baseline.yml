@@ -1,0 +1,206 @@
+name: Diagnostics baseline startup comparison
+on:
+  workflow_dispatch:
+    inputs:
+      target_run_id:
+        description: Successful Diagnostics Debug run containing the target APK
+        required: true
+        type: string
+      target_commit:
+        description: Full target APK source commit
+        required: true
+        type: string
+  # One scoped investigation on the authorized development branch. Later
+  # ordinary production/docs changes do not rebuild the fixed main baseline.
+  push:
+    branches: [feat/diagnostics-v1]
+    paths:
+      - .github/workflows/diagnostics-baseline.yml
+      - tools/android-startup-probe.py
+      - tools/tests/test-android-startup-probe.py
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: diagnostics-baseline-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+env:
+  BASELINE_COMMIT: f665512f52fa6c3b7e726299d0c23ff3abe09d8c
+  TARGET_COMMIT: ${{ inputs.target_commit || '199bbccda9517c019ad0984ab5ed8d0718570fc8' }}
+  TARGET_RUN: ${{ inputs.target_run_id || '38966014916' }}
+jobs:
+  baseline-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Startup observer tests
+        run: python3 tools/tests/test-android-startup-probe.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Official build tools
+        run: sdkmanager 'ndk;27.3.13750724' 'cmake;3.22.1' 'platforms;android-35' 'build-tools;35.0.0'
+      # Validate the current official wrapper before obtaining baseline/native
+      # sample wrappers. Build main with the official Gradle 8.6 distribution:
+      # do not modify or execute its historical wrapper JAR.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.6'
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: diagnostics-ndk-27.3
+          max-size: 3Gi
+      - uses: actions/checkout@v4
+        with:
+          ref: f665512f52fa6c3b7e726299d0c23ff3abe09d8c
+          path: baseline
+      - name: Exact unmodified main source and dependencies
+        working-directory: baseline
+        run: |
+          test "$(git rev-parse HEAD)" = "$BASELINE_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git -c url.https://github.com/google/perfetto.insteadOf=https://android.googlesource.com/platform/external/perfetto submodule update --init --recursive --depth 1 --jobs 8
+          git submodule status --recursive > ../baseline-submodules.txt
+          python3 - <<'PY'
+          import pathlib
+          lines = pathlib.Path('../baseline-submodules.txt').read_text().splitlines()
+          assert lines and all(line.startswith(' ') for line in lines), 'Uninitialized or changed submodule revision'
+          PY
+      - name: Build unmodified main Debug
+        working-directory: baseline
+        env:
+          IS_BUILD_SIGNED: 'false'
+          SIGNING_STORE_PATH: unused.jks
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CCACHE_COMPILERCHECK: 'string:27.3.13750724'
+        run: gradle --no-daemon assembleFullDebug --stacktrace
+      - name: Verify baseline binary and clean tracked source
+        run: |
+          apk=baseline/app/build/outputs/apk/full/debug/app-full-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" > baseline-apk-signature.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > baseline-apk-badging.txt
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess, zipfile
+          commit = subprocess.check_output(['git', '-C', 'baseline', 'rev-parse', 'HEAD'], text=True).strip()
+          assert commit == os.environ['BASELINE_COMMIT']
+          assert not subprocess.check_output(['git', '-C', 'baseline', 'status', '--porcelain', '--untracked-files=no']).strip()
+          apk = pathlib.Path('baseline/app/build/outputs/apk/full/debug/app-full-debug.apk')
+          badging = pathlib.Path('baseline-apk-badging.txt').read_text()
+          assert "package: name='io.github.pine.emu' versionCode='2' versionName='2.1.1'" in badging
+          assert "application-debuggable" in badging
+          with zipfile.ZipFile(apk) as archive:
+              names = [name for name in archive.namelist() if name.startswith('lib/') and name.endswith('.so')]
+              assert names and {name.split('/')[1] for name in names} == {'arm64-v8a'}
+              for name in names:
+                  header = archive.read(name)[:20]
+                  assert header[:6] == b'\x7fELF\x02\x01' and header[18:20] == b'\xb7\x00', name
+              native = hashlib.sha256(archive.read('lib/arm64-v8a/libskyline.so')).hexdigest()
+          result = {'schema': 1, 'commit': commit, 'source_tracked_clean': True,
+                    'application_id': 'io.github.pine.emu', 'version_name': '2.1.1', 'version_code': 2,
+                    'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'skyline_elf_sha256': native,
+                    'abi': ['arm64-v8a'], 'build_type': 'debug', 'gradle': '8.6', 'java': '17',
+                    'ndk': '27.3.13750724', 'cmake': '3.22.1',
+                    'provenance': 'Exact CI checkout/build; baseline has no Diagnostics embedded commit field.',
+                    'limits': 'Settings startup comparison only; no Diagnostics functionality or physical ARM64 acceptance.'}
+          pathlib.Path('baseline-build-identity.json').write_text(json.dumps(result, indent=2) + '\n')
+          out = pathlib.Path('baseline-output')
+          out.mkdir()
+          shutil.copyfile(apk, out / 'app-full-debug.apk')
+          for name in ('baseline-build-identity.json', 'baseline-submodules.txt', 'baseline-apk-badging.txt', 'baseline-apk-signature.txt'):
+              shutil.copyfile(name, out / name)
+          print(json.dumps(result, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pine-baseline-debug-${{ github.sha }}
+          path: baseline-output/
+          if-no-files-found: error
+  compare-startup:
+    needs: baseline-apk
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools emulator
+      - name: Official Android image
+        run: sdkmanager 'system-images;android-35;google_apis;x86_64' 'build-tools;35.0.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pine-baseline-debug-${{ github.sha }}
+          path: baseline-apk
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.TARGET_RUN }}
+          name: pine-diagnostics-debug-${{ env.TARGET_COMMIT }}
+          path: target-apk
+      - name: Verify exact target artifact
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify target-apk/app-full-debug.apk
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, zipfile
+          commit = os.environ['TARGET_COMMIT']
+          assert re.fullmatch('[0-9a-f]{40}', commit)
+          assert re.fullmatch('[1-9][0-9]*', os.environ['TARGET_RUN'])
+          baseline_root = pathlib.Path('baseline-apk')
+          baseline_identity = json.loads((baseline_root / 'baseline-build-identity.json').read_text())
+          assert baseline_identity['commit'] == os.environ['BASELINE_COMMIT']
+          assert baseline_identity['apk_sha256'] == hashlib.sha256((baseline_root / 'app-full-debug.apk').read_bytes()).hexdigest()
+          root = pathlib.Path('target-apk')
+          identity = json.loads((root / 'build-identity.json').read_text())
+          apk = root / 'app-full-debug.apk'
+          assert identity['commit'] == commit and identity['application_id'] == 'io.github.pine.emu.diagnostics'
+          assert identity['sha256'] == hashlib.sha256(apk.read_bytes()).hexdigest()
+          with zipfile.ZipFile(apk) as archive:
+              dex = [name for name in archive.namelist() if re.fullmatch(r'classes[0-9]*\.dex', name)]
+              assert any(commit.encode() in archive.read(name) for name in dex)
+              assert identity['skyline_elf_sha256'] == hashlib.sha256(archive.read('lib/arm64-v8a/libskyline.so')).hexdigest()
+          print(json.dumps(identity, sort_keys=True))
+          PY
+      - name: Same fresh AVD, baseline Settings then target Diagnostics
+        run: bash tools/tests/attempt-android-runtime.sh target-apk/app-full-debug.apk "$TARGET_COMMIT" comparison-evidence baseline-apk/app-full-debug.apk
+      - name: Print separate startup and Diagnostics outcomes
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          root = pathlib.Path('comparison-evidence')
+          for relative in ('baseline-startup/startup-report.json', 'runtime-report.json', 'first-boot/first-boot-result.json',
+                           'baseline-startup/lastanr.stdout', 'baseline-startup/settings-launch.stdout',
+                           'baseline-startup/settings-launch.stderr', 'baseline-startup/final-activities.stdout',
+                           'last-anr.txt', 'last-anr-traces.txt'):
+              path = root / relative
+              if path.is_file():
+                  print(relative + ':\n' + path.read_text(errors='replace')[:64000])
+          for path in sorted((root / 'baseline-startup').glob('*.xml'))[-4:]:
+              print(path.name + ':\n' + path.read_text(errors='replace')[:16000])
+          log = root / 'android-install-logcat.txt'
+          if log.is_file():
+              lines = log.read_text(errors='replace').splitlines()
+              for index, line in enumerate(lines):
+                  if 'ANR in io.github.pine.emu' in line:
+                      print('\n'.join(lines[max(0, index - 3):index + 50])[:18000])
+          print('Order is baseline first, target second on the same fresh AVD; shared system warming is a confound.')
+          print('Baseline Settings observations never pass the target Diagnostics checks or physical ARM64/game acceptance.')
+          PY
+      - name: Comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pine-startup-comparison-${{ github.sha }}
+          path: comparison-evidence/

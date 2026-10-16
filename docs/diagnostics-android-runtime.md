@@ -202,6 +202,50 @@ standard free hosts, after both Pine and system-app ANRs occurred at two cores /
 probes. This is not an isolated performance experiment or proof of an ANR cause.
 The earlier attempts and their exact APK identities remain unchanged.
 
+**Exact earlier ANR reason recovered, 2026-10-16 20:58 UTC:** a read-only
+[CI artifact readback](https://github.com/xmy953538104/pine_CN/actions/runs/38966014916/job/117192561683)
+of the `24ff025e` Mac attempt records Pine PID 2415 at 20:43:29.992 with
+`failed to complete startup`. Android reports guest load 30.27 / 15.86 / 7.12,
+CPU-pressure `some avg10=100.00 avg60=97.99`, and other system-app startup ANRs.
+Pine later logs slow Kotlin reflection/fragment verification and repeated failed
+external-files directory checks. These are actual observations, not an isolated
+Pine main-thread stack or proof that pressure caused its ANR. The original
+artifact/report remains authoritative; no failed/blocked historical result was
+rewritten. Temporary artifact-readback workflow steps were removed after recovery.
+
+The subsequent CI fixture passively observes the current system-server PID's
+exact `Finished processing BOOT_COMPLETED for u0` log marker for at most 600
+seconds, retaining raw commands and a separate `observed/blocked` result. It
+always continues to the original APK checks: this marker is neither a runtime
+pass nor a claim of idle CPU/storage. AOSP15 sets `sys.boot_completed` before
+the later [user broadcast callback](https://github.com/aosp-mirror/platform_frameworks_base/blob/android15-release/services/core/java/com/android/server/am/UserController.java#L934).
+The separate `69826dda` Ubuntu attempt illustrates a weaker flag: its original
+120-second gate ended with the package service unavailable, and framework logs
+record package-manager startup completing about three seconds later. Its result
+remains 1 passed / 17 blocked, with no installation or launch.
+
+No broadcast flush or `wait-for-broadcast-idle` command is used; that command
+[changes queue scheduling](https://github.com/aosp-mirror/platform_frameworks_base/blob/android15-release/services/core/java/com/android/server/am/BroadcastQueueModernImpl.java#L1875)
+even without its flush option. On unsuccessful installed runs, a separate
+default-off `--collect-system-last-anr-traces` option is enabled only by the fresh
+CI AVD wrapper. The [platform dump](https://github.com/aosp-mirror/platform_frameworks_base/blob/android15-release/services/core/java/com/android/server/wm/ActivityTaskManagerService.java#L4247)
+reads the **globally newest** ANR file, not a Pine-filtered trace. Match its PID,
+process name and time before attribution; refusals/timeouts cannot hide an app
+failure. Ordinary standalone runs do not collect that broader file by default.
+
+An independent baseline-comparison workflow builds exact, tracked-clean main
+`f665512f52fa6c3b7e726299d0c23ff3abe09d8c` with official Gradle8.6/Java17/NDK27.3,
+leaving its source, original `io.github.pine.emu` package and version unchanged.
+It verifies the signature, APK/ARM64 ELF hashes and all pinned submodules. On one
+fresh official AVD it first probes baseline Settings, then runs the unchanged
+18-check Diagnostics suite against a separately verified target artifact. The
+small startup probe requires own Settings XML, a real Back transition and a
+fresh reopened UI; a successful launch command alone cannot pass. Its outcome
+and source hash are separate from Diagnostics acceptance. Baseline-first order,
+different package/version and shared system warming are confounds. Eleven
+controlled subprocess tests passed; actual baseline execution is still pending
+at this checkpoint. No physical ARM64 or game acceptance follows from it.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

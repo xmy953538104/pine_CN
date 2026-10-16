@@ -63,6 +63,17 @@ static std::string GetTimeZoneName() {
 }
 
 std::string ConvertJStringToString(JNIEnv* env, jstring jStr) {
+    if (!jStr) return "";
+
+    const char* chars = env->GetStringUTFChars(jStr, nullptr);
+    std::string str(chars);
+    env->ReleaseStringUTFChars(jStr, chars);
+    return str;
+}
+
+// Guest diagnostic text needs standard UTF-8, while existing non-diagnostic
+// callers retain their original JNI string handling and limits.
+static std::string ConvertDiagnosticJString(JNIEnv* env, jstring jStr) {
     if (!jStr || env->ExceptionCheck()) return {};
     const auto length{std::min<jsize>(env->GetStringLength(jStr), 4096)};
     std::vector<jchar> units(static_cast<size_t>(length));
@@ -316,10 +327,10 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_c
     skyline::diagnostics::Stop();
     if (!enabled) return false;
     skyline::diagnostics::Config config;
-    config.directory = ConvertJStringToString(env, path);
-    config.sessionId = ConvertJStringToString(env, session);
+    config.directory = ConvertDiagnosticJString(env, path);
+    config.sessionId = ConvertDiagnosticJString(env, session);
     config.verbose = verbose;
-    config.categories = ConvertJStringToString(env, categories);
+    config.categories = ConvertDiagnosticJString(env, categories);
     config.maxFiles = static_cast<size_t>(std::clamp(maxFiles, 2, 8));
     if (env->ExceptionCheck()) return false;
     return skyline::diagnostics::Start(config);
@@ -330,9 +341,9 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitN
     JNIEnv *env, jclass, jstring category, jstring event, jstring detail) {
     try {
     if (!skyline::diagnostics::Enabled()) return;
-    const auto categoryText{ConvertJStringToString(env, category)};
-    const auto eventText{ConvertJStringToString(env, event)};
-    const auto detailText{ConvertJStringToString(env, detail)};
+    const auto categoryText{ConvertDiagnosticJString(env, category)};
+    const auto eventText{ConvertDiagnosticJString(env, event)};
+    const auto detailText{ConvertDiagnosticJString(env, detail)};
     if (!env->ExceptionCheck())
         skyline::diagnostics::Emit(categoryText, eventText, {{"detail", detailText}},
                                    eventText == "ANDROID_UNCAUGHT_EXCEPTION" ? "ERROR" : "INFO");

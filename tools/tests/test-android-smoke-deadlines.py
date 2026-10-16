@@ -21,6 +21,7 @@ PLATFORM_ANR_XML = '''<hierarchy><node package="android" bounds="[48,313][431,51
 <node text="Wait" resource-id="android:id/aerr_wait" package="android"
  class="android.widget.Button" enabled="true" clickable="true" bounds="[64,438][415,486]"/>
 </node></hierarchy>'''
+PINE_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Pine Diagnostics isn't responding")
 
 
 class ObservationDeadlines(unittest.TestCase):
@@ -58,6 +59,16 @@ class ObservationDeadlines(unittest.TestCase):
                 output = '[sys.boot_completed]: [1]\\n[ro.product.cpu.abilist]: [x86_64,arm64-v8a]'
             elif args == ['shell', 'pidof', 'system_server']:
                 operation, output = 'pid', next_result('pid_sequence', '672')
+            elif args == ['shell', 'pidof', 'io.github.pine.emu.diagnostics']:
+                operation, output = 'app-pids', config.get('app_pids', '1234')
+            elif args == ['shell', 'dumpsys', 'activity', 'lastanr']:
+                operation, output = 'lastanr', config.get('lastanr_result', 'ANR in io.github.pine.emu.diagnostics')
+            elif args == ['shell', 'dumpsys', 'activity', 'activities']:
+                operation, output = 'activities', 'Final activity evidence'
+            elif args[:2] == ['logcat', '-b']:
+                operation, output = 'final-logcat', 'Final crash evidence'
+            elif args[:3] == ['shell', 'rm', '-f']:
+                operation, output = 'remove-xml', ''
             elif args == ['shell', 'cmd', 'package', 'path', 'android']:
                 operation, output = 'package', next_result('package_sequence', 'package:/system/framework/framework-res.apk')
             elif args[:2] == ['shell', 'cat'] and args[2].startswith('/proc/'):
@@ -66,6 +77,8 @@ class ObservationDeadlines(unittest.TestCase):
                     code, stderr, output = 1, 'cat: Permission denied', ''
             elif args[:3] == ['shell', 'uiautomator', 'dump']:
                 operation, output = 'dump', 'UI hierarchy dumped'
+            elif args[:3] == ['shell', 'am', 'start']:
+                operation, output = 'start-settings', 'Status: ok'
             elif args[:2] == ['exec-out', 'cat']:
                 operation = 'xml'
                 output = next_result('xml_sequence', '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>')
@@ -79,6 +92,11 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'tap', ''
             elif args[:2] == ['exec-out', 'screencap']:
                 operation, output, binary = 'screenshot', b'\\x89PNG\\r\\n\\x1a\\n', True
+            elif (args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat']
+                  and args[4].startswith('/proc/') and args[4].endswith('/maps')):
+                operation, output = 'maps', config.get('maps_result', 'Fixture library mappings')
+            elif args[:5] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', '/system/bin/debuggerd', '-b']:
+                operation, output = 'backtrace', config.get('backtrace_result', 'Fixture native backtrace')
             elif args[:2] == ['exec-out', 'run-as'] and args[3] == 'ls':
                 operation, output = 'list', 'diagnostics-0.jsonl\\ndiagnostics-1.jsonl'
             elif args[:2] == ['exec-out', 'run-as'] and args[4].endswith('session-id.txt'):
@@ -236,6 +254,96 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.8)
         self.assertTrue(any(row["timed_out"] and "tap" in row["argv"] for row in self.commands(smoke)))
         self.assertEqual(smoke.summary["platform_anr_waits"][0]["status"], "blocked")
+
+    def test_pine_anr_fails_ui_steps_before_predicates_and_never_taps_wait(self):
+        for enabled in (False, True):
+            for observer in ("wait_ui", "seek"):
+                with self.subTest(platform_wait=enabled, observer=observer):
+                    smoke = self.smoke(f"pine-anr-{enabled}-{observer}", {"xml_sequence": [PINE_ANR_XML]},
+                                       allow_platform_anr=enabled)
+                    if observer == "wait_ui":
+                        observe = lambda: smoke.wait_ui("pine-anr", lambda value: True)
+                    else:
+                        observe = lambda: smoke.seek("Wait", "pine-anr", exact=True)
+                    smoke.step("settings_entry", observe)
+                    self.assertEqual(smoke.results["settings_entry"]["status"], "fail")
+                    self.assertIn("Pine application ANR observed", smoke.results["settings_entry"]["reason"])
+                    self.assertEqual(smoke.summary["overall"], "fail")
+                    self.assertIn("Pine Diagnostics isn't responding", (smoke.output / "001-pine-anr.xml").read_text())
+                    self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+                    self.assertEqual(smoke.summary["platform_anr_waits"], [])
+
+    def test_disable_cleanup_cannot_swallow_an_observed_pine_anr(self):
+        smoke = self.smoke("disable-anr", {"xml_sequence": [PINE_ANR_XML]}, allow_platform_anr=True)
+        smoke.ever_enabled = True
+        smoke.step("disable_stop", smoke.disable)
+        self.assertEqual(smoke.results["disable_stop"]["status"], "fail")
+        self.assertIn("Pine application ANR observed", smoke.results["disable_stop"]["reason"])
+        self.assertEqual(smoke.summary["overall"], "fail")
+        self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+        self.assertIn("Pine Diagnostics isn't responding", (smoke.output / "001-settings.xml").read_text())
+
+    def test_pine_anr_identity_does_not_match_other_titles_or_application_text(self):
+        for name, xml in (
+            ("other-title", PINE_ANR_XML.replace("Pine Diagnostics", "Fixture App")),
+            ("application-text", PINE_ANR_XML.replace('package="android"', 'package="io.github.pine.emu.diagnostics"')),
+            ("prefixed-resource", PINE_ANR_XML.replace('resource-id="android:id/alertTitle"',
+                                                     'resource-id="fixture:android:id/alertTitle"')),
+        ):
+            with self.subTest(case=name):
+                smoke = self.smoke(name, {"xml_sequence": [xml]})
+                smoke.step("settings_entry", lambda: {"xml": smoke.wait_ui(name, lambda value: True).xml.name})
+                self.assertEqual(smoke.results["settings_entry"]["status"], "pass")
+                self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_failed_run_collects_bounded_process_evidence_without_overwriting_anr(self):
+        smoke = self.smoke("failure-evidence", {
+            "xml_sequence": [PINE_ANR_XML], "app_pids": "1234 5678 91011",
+            "lastanr_result": {"code": 1, "stderr": "lastanr: denied"},
+            "maps_result": {"code": 1, "stderr": "maps: Permission denied"},
+            "backtrace_result": {"stdout": "Partial native frames", "stderr": "debuggerd: fixture waiting"},
+            "backtrace": 2, "emit_before_delay": "backtrace",
+        })
+        smoke.step("settings_entry", lambda: smoke.wait_ui("pine-anr", lambda value: True))
+        before = json.loads(json.dumps(smoke.results))
+        smoke.installed = True
+        smoke.args.command_timeout = .6
+        started = time.monotonic()
+        smoke.finish()
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(smoke.results, before)
+        self.assertEqual(smoke.summary["overall"], "fail")
+        self.assertEqual(json.loads((smoke.output / "runtime-report.json").read_text())["status"], "failed")
+        commands = self.commands(smoke)
+        backtraces = [row for row in commands if "/system/bin/debuggerd" in row["argv"]]
+        self.assertEqual([row["argv"][-1] for row in backtraces], ["1234", "5678"])
+        self.assertTrue(all(row["timed_out"] for row in backtraces))
+        self.assertEqual((smoke.output / "last-anr.stderr.txt").read_text(), "lastanr: denied\n")
+        for pid in ("1234", "5678"):
+            self.assertEqual((smoke.output / f"pine-maps-{pid}.stderr.txt").read_text(), "maps: Permission denied\n")
+            self.assertIn("Partial native frames", (smoke.output / f"pine-native-backtrace-{pid}.txt").read_text())
+            self.assertIn("fixture waiting", (smoke.output / f"pine-native-backtrace-{pid}.stderr.txt").read_text())
+        self.assertEqual((smoke.output / "pine-process-ids.txt").read_text().strip(), "1234 5678 91011")
+        self.assertTrue((smoke.output / "final-activities.txt").is_file())
+        self.assertTrue((smoke.output / "crash-buffer.txt").is_file())
+        self.assertTrue(any(row["argv"][-3:] == ["rm", "-f", smoke.remote_xml] for row in commands))
+
+    def test_failure_process_probes_reject_untrusted_pids_and_skip_verified_runs(self):
+        for name, pids in (("mixed", "1234 not-a-pid"), ("zero", "0"), ("unicode", "１２３４")):
+            with self.subTest(case=name):
+                smoke = self.smoke(name, {"app_pids": pids})
+                smoke.installed = True
+                smoke.finish()
+                self.assertFalse(any("run-as" in row["argv"] for row in self.commands(smoke)))
+                self.assertEqual(smoke.summary["overall"], "blocked")
+        smoke = self.smoke("verified", {})
+        smoke.installed = True
+        smoke.results.update({name: {"status": "pass"} for name in MODULE["REQUIRED"]})
+        smoke.write_summary()
+        smoke.finish()
+        self.assertFalse(any("pidof" in row["argv"] or "lastanr" in row["argv"] or
+                             "run-as" in row["argv"] for row in self.commands(smoke)))
+        self.assertEqual(smoke.summary["overall"], "pass")
 
     def assert_gate_only(self, smoke, status):
         self.assertEqual(set(smoke.results), {"device_ready"})

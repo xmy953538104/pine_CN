@@ -50,6 +50,10 @@ class Blocked(Exception):
     """An environmental limitation or missing observation, never a pass."""
 
 
+class AppAnr(AssertionError):
+    """An observed app ANR that ordinary UI cleanup must not mask."""
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -322,6 +326,7 @@ class Smoke:
         while time.monotonic() < deadline:
             try:
                 last = self.screen(label, deadline=deadline)
+                self.reject_app_anr(last)
                 if self.wait_known_platform_dialog(last, deadline):
                     self.pause(deadline)
                     continue
@@ -335,6 +340,16 @@ class Smoke:
         self.screenshot(label + "-blocked", deadline=deadline)
         evidence = last.xml.name if last else last_error or "no UI XML"
         raise Blocked(f"UI observation '{label}' not reached within {self.args.ui_timeout}s; last evidence: {evidence}")
+
+    @staticmethod
+    def reject_app_anr(screen):
+        # ANR is a separate app failure from the Java/native crash gate. Match
+        # the actual Android dialog identity, not arbitrary application text.
+        if any(node.get("package") == "android" and
+               node.get("resource-id") == "android:id/alertTitle" and
+               node.get("text") == "Pine Diagnostics isn't responding"
+               for node in screen.root.iter("node")):
+            raise AppAnr(f"Pine application ANR observed: Pine Diagnostics isn't responding; see {screen.xml.name}")
 
     def wait_known_platform_dialog(self, screen, deadline):
         """Opt-in, bounded ordinary Wait on two observed platform titles only.
@@ -386,6 +401,7 @@ class Smoke:
         screen = None
         for _ in range(10):
             screen = self.screen(label, deadline=deadline)
+            self.reject_app_anr(screen)
             if self.wait_known_platform_dialog(screen, deadline):
                 self.pause(deadline)
                 continue
@@ -832,6 +848,8 @@ class Smoke:
         # Recover through the normal exported Settings activity if a picker/dialog blocked later checks.
         try:
             self.open_settings()
+        except AppAnr:
+            raise
         except (Blocked, AssertionError):
             self.adb("shell", "input", "keyevent", "KEYCODE_BACK", check=False)
             self.open_settings()
@@ -876,6 +894,29 @@ class Smoke:
         return {"app_crash_observed": False, "capture": "runtime-logcat.txt",
                 "scope": "Logcat tail started before first application launch; captures PineDiag and Java/native crash tags"}
 
+    def capture_failure_process_evidence(self):
+        # Read-only, best-effort diagnostics for this fresh Debug application.
+        # A refused or timed-out probe cannot replace any functional result.
+        def capture(name, timeout, *arguments):
+            try:
+                return self.adb(*arguments, check=False, timeout=min(timeout, self.args.command_timeout),
+                                save=name + ".txt", save_stderr=name + ".stderr.txt")
+            except (Blocked, OSError) as error:
+                self.summary.setdefault("capture_warnings", []).append({
+                    "label": name, "command_number": self.command_number, "reason": str(error),
+                })
+                return b""
+
+        capture("last-anr", 15, "shell", "dumpsys", "activity", "lastanr")
+        raw = capture("pine-process-ids", 5, "shell", "pidof", PACKAGE)
+        pids = decode(raw).split()
+        if not all(re.fullmatch(r"[1-9][0-9]*", pid) for pid in pids):
+            return
+        for pid in list(dict.fromkeys(pids))[:2]:
+            capture("pine-maps-" + pid, 5, "exec-out", "run-as", PACKAGE, "cat", f"/proc/{pid}/maps")
+            capture("pine-native-backtrace-" + pid, 15, "exec-out", "run-as", PACKAGE,
+                    "/system/bin/debuggerd", "-b", pid)
+
     def finish(self):
         if not self.installed and self.summary.get("device"):
             try:
@@ -886,6 +927,8 @@ class Smoke:
             except Blocked as error:
                 self.summary["final_capture_blocker"] = str(error)
         if self.installed:
+            if self.summary["overall"] != "pass":
+                self.capture_failure_process_evidence()
             try:
                 self.adb("logcat", "-b", "crash", "-d", "-v", "threadtime", save="crash-buffer.txt")
                 self.adb("shell", "dumpsys", "activity", "activities", save="final-activities.txt")

@@ -172,6 +172,30 @@ Persistent ANRs remain blocked after the global two-attempt cap. Controlled host
 tests cover recovery, no-action guards, persistent dialogs and slow-tap deadlines;
 they are not Android execution evidence.
 
+**Separate Pine ANR, observed 2026-10-16 20:46 UTC:** the same `24ff025e`
+[Intel Mac job](https://github.com/xmy953538104/pine_CN/actions/runs/38961409089/job/117179494018)
+installed and verified the exact APK above in 89.084 seconds. Six valid hierarchy
+captures show `Pine Diagnostics isn't responding`; the final window separately
+names `Application Not Responding: io.github.pine.emu.diagnostics`, PID 2415.
+The original immutable report says 5 passed / 13 blocked, and its crash gate only
+means no Java/native crash was captured. It does **not** establish responsiveness
+or explain the Pine ANR. This failure must not be attributed solely to system UI.
+The later `a1799c68` Mac attempt installed its own exact APK, but all hierarchy
+reads failed or timed out; its final window names Pine's Settings activity. That
+is neither a UI/native-log/export pass nor proof that no ANR occurred.
+
+The next observer explicitly fails a UI step when the exact Android Pine ANR
+title is observed, before checking its requested predicate. It never taps Pine's
+Wait button, including during disable/cleanup recovery. On an installed non-pass
+run it also attempts bounded, read-only `dumpsys activity lastanr`, app PID,
+`run-as` maps and `debuggerd -b` captures for at most two numeric app PIDs. Official
+image permission refusals and timeouts are evidence, and cannot replace the
+original functional result or prevent final cleanup. These probes run after the
+acceptance steps and do not change app or device security. Sixteen controlled
+host tests passed, including app-ANR classification and refused/timed-out probes;
+these are not APK execution passes. The fresh AVD still uses the same two cores,
+4 GiB, original UI deadlines and 18 required checks for this evidence-only retry.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

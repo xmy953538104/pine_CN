@@ -23,6 +23,14 @@ PLATFORM_ANR_XML = '''<hierarchy><node package="android" bounds="[48,313][431,51
  class="android.widget.Button" enabled="true" clickable="true" bounds="[64,438][415,486]"/>
 </node></hierarchy>'''
 PINE_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Pine Diagnostics isn't responding")
+BLUETOOTH_CRASH_XML = '''<hierarchy><node package="android" class="android.widget.FrameLayout" bounds="[48,301][431,498]">
+<node text="Bluetooth keeps stopping" resource-id="android:id/alertTitle" class="android.widget.TextView"
+ package="android" enabled="true" bounds="[88,335][391,363]"/>
+<node text="App info" resource-id="android:id/aerr_app_info" class="android.widget.Button"
+ package="android" enabled="true" clickable="true" bounds="[64,378][415,426]"/>
+<node text="Close app" resource-id="android:id/aerr_close" class="android.widget.Button"
+ package="android" enabled="true" clickable="true" bounds="[64,426][415,474]"/>
+</node></hierarchy>'''
 
 
 def ui_xml(*nodes):
@@ -175,7 +183,8 @@ class ObservationDeadlines(unittest.TestCase):
             '''))
         self.fake.chmod(0o755)
 
-    def smoke(self, name, delays, allow_platform_anr=False, collect_system_anr=False, require_storage=False):
+    def smoke(self, name, delays, allow_platform_anr=False, collect_system_anr=False, require_storage=False,
+              dismiss_platform_crash=False):
         self.config.write_text(json.dumps({"session": SESSION, **delays}))
         self.fake.with_suffix('.state.json').unlink(missing_ok=True)
         # Short fixture budgets keep these real subprocess tests fast while
@@ -186,7 +195,7 @@ class ObservationDeadlines(unittest.TestCase):
             expected_commit="a" * 40, output=self.root / name,
             command_timeout=2.5, ui_timeout=1, boot_timeout=2.5, install_timeout=2.5,
             wait_known_platform_anr=allow_platform_anr, collect_system_last_anr_traces=collect_system_anr,
-            require_ready_storage=require_storage))
+            require_ready_storage=require_storage, dismiss_known_platform_crash=dismiss_platform_crash))
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
@@ -417,6 +426,134 @@ class ObservationDeadlines(unittest.TestCase):
         # Even successful helper recovery is no APK/native/export check pass.
         self.assertEqual(smoke.results, {})
         self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_opt_in_bluetooth_close_requires_a_fresh_settings_observation(self):
+        smoke = self.smoke("bluetooth-settings", {"xml_sequence": [BLUETOOTH_CRASH_XML, READY_XML]},
+                           dismiss_platform_crash=True)
+        smoke.args.ui_timeout = 3
+        screen = smoke.wait_ui("settings", lambda value: value.find("Ready") is not None)
+        self.assertEqual(screen.number, 2)
+        attempts = smoke.summary["platform_crash_dismissals"]
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["status"], "close_sent")
+        self.assertEqual(attempts[0]["source_xml"], "001-settings.xml")
+        taps = [row for row in self.commands(smoke) if "tap" in row["argv"]]
+        self.assertEqual(len(taps), 1)
+        self.assertEqual(taps[0]["argv"][-2:], ["239", "450"])
+        self.assertEqual(taps[0]["number"], attempts[0]["command_number"])
+        self.assertEqual(smoke.results, {})
+        self.assertEqual(smoke.summary["overall"], "blocked")
+        report = json.loads((smoke.output / "runtime-report.json").read_text())
+        self.assertTrue(report["platform_crash_dismiss_enabled"])
+        self.assertEqual(report["platform_crash_dismissals"], attempts)
+
+    def test_bluetooth_close_rejects_default_pine_unknown_anr_and_wrong_controls(self):
+        def changed(resource, **attributes):
+            root = ET.fromstring(BLUETOOTH_CRASH_XML)
+            node = next(node for node in root.iter("node") if node.get("resource-id") == resource)
+            for key, value in attributes.items():
+                if value is None:
+                    node.attrib.pop(key, None)
+                else:
+                    node.set(key, value)
+            return ET.tostring(root, encoding="unicode")
+
+        scenarios = (
+            ("default", BLUETOOTH_CRASH_XML, False),
+            ("pine", BLUETOOTH_CRASH_XML.replace("Bluetooth", "Pine Diagnostics"), True),
+            ("unknown", BLUETOOTH_CRASH_XML.replace("Bluetooth", "Fixture App"), True),
+            ("anr", PLATFORM_ANR_XML, True),
+            ("package", changed("android:id/aerr_close", package="fixture.other"), True),
+            ("title-package", changed("android:id/alertTitle", package="fixture.other"), True),
+            ("prefixed-resource", changed("android:id/aerr_close", **{"resource-id": "fixture:android:id/aerr_close"}), True),
+            ("app-info", changed("android:id/aerr_close", text="App info"), True),
+            ("image-button", changed("android:id/aerr_close", **{"class": "android.widget.ImageButton"}), True),
+            ("disabled", changed("android:id/aerr_close", enabled="false"), True),
+            ("missing-enabled", changed("android:id/aerr_close", enabled=None), True),
+            ("unclickable", changed("android:id/aerr_close", clickable="false"), True),
+            ("invalid-bounds", changed("android:id/aerr_close", bounds="[64,426][64,474]"), True),
+        )
+        for name, xml, enabled in scenarios:
+            with self.subTest(case=name):
+                smoke = self.smoke("bluetooth-guard-" + name, {"xml_sequence": [xml]}, dismiss_platform_crash=enabled)
+                screen = smoke.screen("guard", deadline=time.monotonic() + 1)
+                self.assertFalse(smoke.dismiss_known_platform_crash("settings", screen, time.monotonic() + 1))
+                self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+                self.assertEqual(smoke.summary["platform_crash_dismissals"], [])
+        for name in ("separate-container", "ambiguous-title"):
+            root = ET.fromstring(BLUETOOTH_CRASH_XML)
+            close = next(node for node in root.iter("node") if node.get("resource-id") == "android:id/aerr_close")
+            if name == "separate-container":
+                root[0].remove(close)
+                root.append(close)
+            else:
+                ET.SubElement(root, "node", {"resource-id": "android:id/alertTitle", "package": "android",
+                                             "text": "Pine Diagnostics keeps stopping", "bounds": "[0,0][100,100]"})
+            smoke = self.smoke("bluetooth-guard-" + name, {"xml_sequence": [ET.tostring(root, encoding="unicode")]},
+                               dismiss_platform_crash=True)
+            screen = smoke.screen("guard", deadline=time.monotonic() + 1)
+            self.assertFalse(smoke.dismiss_known_platform_crash("settings", screen, time.monotonic() + 1))
+            self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+        for label in ("diagnostics", "category-dialog", "export-preview", "saf-picker"):
+            smoke = self.smoke("bluetooth-other-" + label, {"xml_sequence": [BLUETOOTH_CRASH_XML]},
+                               dismiss_platform_crash=True)
+            smoke.args.ui_timeout = .4
+            with self.assertRaises(Blocked):
+                smoke.wait_ui(label, lambda value: False)
+            self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+            self.assertEqual(smoke.summary["platform_crash_dismissals"], [])
+        smoke = self.smoke("bluetooth-no-seek-close", {"xml_sequence": [BLUETOOTH_CRASH_XML]},
+                           dismiss_platform_crash=True)
+        with self.assertRaises(Blocked):
+            smoke.seek("Ready", "settings")
+        self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+
+    def test_bluetooth_close_is_bounded_and_cleanup_cannot_repeat_or_replace_it(self):
+        smoke = self.smoke("bluetooth-late-close", {"xml_sequence": [BLUETOOTH_CRASH_XML], "tap": 2.5},
+                           dismiss_platform_crash=True)
+        started = time.monotonic()
+        with self.assertRaises(Blocked):
+            smoke.wait_ui("settings", lambda value: False)
+        self.assertLess(time.monotonic() - started, 1.8)
+        self.assertEqual(smoke.summary["platform_crash_dismissals"][0]["status"], "blocked")
+        self.assertTrue(any(row["timed_out"] and "tap" in row["argv"] for row in self.commands(smoke)))
+
+        smoke = self.smoke("bluetooth-persistent", {"xml_sequence": [BLUETOOTH_CRASH_XML]}, dismiss_platform_crash=True)
+        smoke.args.ui_timeout = 3
+        smoke.ever_enabled = True
+        smoke.step("disable_stop", smoke.disable)
+        self.assertEqual(smoke.results["disable_stop"]["status"], "blocked")
+        self.assertEqual(smoke.summary["platform_crash_dismissals"][0]["status"], "close_sent")
+        with self.assertRaises(Blocked):
+            smoke.seek("Ready", "persistent")
+        inputs = [row for row in self.commands(smoke) if "input" in row["argv"]]
+        self.assertEqual(len(inputs), 1)
+        self.assertIn("tap", inputs[0]["argv"])
+        self.assertIn("single ordinary Close app", smoke.summary["platform_crash_dismiss_blocker"]["reason"])
+        self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_bluetooth_recovery_never_masks_pine_anr_or_a_recorded_pine_crash(self):
+        root = ET.fromstring(BLUETOOTH_CRASH_XML)
+        root.extend(ET.fromstring(PINE_ANR_XML))
+        smoke = self.smoke("bluetooth-pine-anr", {"xml_sequence": [ET.tostring(root, encoding="unicode")]},
+                           dismiss_platform_crash=True)
+        smoke.step("settings_entry", lambda: smoke.wait_ui("settings", lambda value: True))
+        self.assertEqual(smoke.results["settings_entry"]["status"], "fail")
+        self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+
+        smoke = self.smoke("bluetooth-pine-crash", {"xml_sequence": [BLUETOOTH_CRASH_XML, READY_XML]},
+                           dismiss_platform_crash=True)
+        smoke.args.ui_timeout = 3
+        smoke.wait_ui("settings", lambda value: value.find("Ready") is not None)
+        log = smoke.output / "runtime-logcat.txt"
+        log.write_text("AndroidRuntime: FATAL EXCEPTION: main\nProcess: " + MODULE["PACKAGE"] + ", PID: 1234\n")
+        smoke.log_stream = log.open("ab")
+        self.addCleanup(smoke.log_stream.close)
+        smoke.logger = type("AliveCapture", (), {"poll": lambda self: None})()
+        smoke.step("app_crash_free", smoke.app_crash_free)
+        self.assertEqual(smoke.results["app_crash_free"]["status"], "fail")
+        self.assertEqual(smoke.summary["overall"], "fail")
+        self.assertEqual(len(smoke.summary["platform_crash_dismissals"]), 1)
 
     def test_platform_wait_never_handles_default_pine_unknown_or_wrong_controls(self):
         scenarios = (

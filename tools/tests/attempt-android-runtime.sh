@@ -157,7 +157,10 @@ fi
 # Storage enumeration requires a responsive service and the internal mounted
 # volume within the existing readiness budget. That built-in volume is a platform
 # stub; this extra observation does not guarantee FUSE or installation readiness.
-if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr --collect-system-last-anr-traces --require-ready-storage; then
+# The fresh AVD may also show its observed Bluetooth crash dialog. Only while
+# seeking Settings, allow one ordinary, recorded Close app on that exact dialog;
+# this changes Bluetooth's lifecycle and is not evidence of platform stability.
+if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr --collect-system-last-anr-traces --require-ready-storage --dismiss-known-platform-crash; then
   smoke_result=0
 else
   smoke_result=$?

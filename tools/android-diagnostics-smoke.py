@@ -58,6 +58,10 @@ class SettingsBackBlocked(Blocked):
     """A bounded Settings recovery that generic cleanup must not repeat."""
 
 
+class PlatformCrashBlocked(Blocked):
+    """A bounded platform-dialog action that cleanup must not repeat."""
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -182,12 +186,17 @@ class Smoke:
             "platform_anr_wait_enabled": bool(getattr(args, "wait_known_platform_anr", False)),
             "platform_anr_wait_limit": 2,
             "platform_anr_waits": [],
+            "platform_crash_dismiss_enabled": bool(getattr(args, "dismiss_known_platform_crash", False)),
+            "platform_crash_dismiss_limit": 1,
+            "platform_crash_dismissals": [],
             "settings_back_recovery_limit": 1,
             "settings_back_recoveries": [],
             "storage_readiness_required": bool(getattr(args, "require_ready_storage", False)),
             "system_last_anr_traces_enabled": bool(getattr(args, "collect_system_last_anr_traces", False)),
             "system_last_anr_traces_scope": "Latest system-wide ANR trace file and all retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated and include other processes.",
         }
+        if self.summary["platform_crash_dismiss_enabled"]:
+            self.summary["limitations"].append("One ordinary Bluetooth crash-dialog close is permitted during settings observation; it does not establish platform stability.")
         runner_source = Path(__file__).read_bytes()
         self.summary["runner_sha256"] = digest(runner_source)
         (self.output / "runner-source.py").write_bytes(runner_source)
@@ -220,6 +229,10 @@ class Smoke:
             "platform_anr_wait_enabled": self.summary["platform_anr_wait_enabled"],
             "platform_anr_wait_limit": self.summary["platform_anr_wait_limit"],
             "platform_anr_waits": self.summary["platform_anr_waits"],
+            "platform_crash_dismiss_enabled": self.summary["platform_crash_dismiss_enabled"],
+            "platform_crash_dismiss_limit": self.summary["platform_crash_dismiss_limit"],
+            "platform_crash_dismissals": self.summary["platform_crash_dismissals"],
+            "platform_crash_dismiss_blocker": self.summary.get("platform_crash_dismiss_blocker"),
             "settings_back_recovery_limit": self.summary["settings_back_recovery_limit"],
             "settings_back_recoveries": self.summary["settings_back_recoveries"],
             "settings_back_recovery_blocker": self.summary.get("settings_back_recovery_blocker"),
@@ -358,6 +371,9 @@ class Smoke:
                 if self.wait_known_platform_dialog(last, deadline):
                     self.pause(deadline)
                     continue
+                if self.dismiss_known_platform_crash(label, last, deadline):
+                    self.pause(deadline)
+                    continue
                 if self.recover_known_search_locations(label, last, deadline):
                     self.pause(deadline)
                     continue
@@ -365,7 +381,7 @@ class Smoke:
                     self.budget(deadline, f"UI observation '{label}'")
                     self.screenshot(label, deadline=deadline)
                     return last
-            except SettingsBackBlocked:
+            except (SettingsBackBlocked, PlatformCrashBlocked):
                 raise
             except Blocked as error:
                 last_error = str(error)
@@ -383,6 +399,56 @@ class Smoke:
                node.get("text") == "Pine Diagnostics isn't responding"
                for node in screen.root.iter("node")):
             raise AppAnr(f"Pine application ANR observed: Pine Diagnostics isn't responding; see {screen.xml.name}")
+
+    def dismiss_known_platform_crash(self, label, screen, deadline):
+        """One opt-in Close app on the exact observed Bluetooth system dialog.
+
+        This is ordinary UI recovery on a fresh CI AVD, not evidence of recovery
+        or platform stability. Subsequent fresh predicates and all checks remain.
+        """
+        if label != "settings" or not self.summary["platform_crash_dismiss_enabled"]:
+            return False
+        titles = [node for node in screen.root.iter("node")
+                  if node.get("resource-id") == "android:id/alertTitle"]
+        if len(titles) != 1:
+            return False
+        title = titles[0]
+        if (title.get("package") != "android" or title.get("class") != "android.widget.TextView" or
+                title.get("enabled") != "true" or title.get("text") != "Bluetooth keeps stopping" or
+                not Screen.bounds(title)):
+            return False
+        container = next((node for node in screen.root.iter() if title in list(node)), None)
+        if container is None or container.get("package") != "android" or not Screen.bounds(container):
+            return False
+        buttons = [node for node in container if node.get("resource-id") == "android:id/aerr_close"]
+        if len(buttons) != 1:
+            return False
+        button = buttons[0]
+        if (button.get("package") != "android" or button.get("class") != "android.widget.Button" or
+                button.get("enabled") != "true" or button.get("clickable") != "true" or
+                button.get("text") != "Close app" or not Screen.bounds(button)):
+            return False
+        attempts = self.summary["platform_crash_dismissals"]
+        if len(attempts) >= self.summary["platform_crash_dismiss_limit"]:
+            reason = "Known Bluetooth crash dialog persists after the single ordinary Close app attempt"
+            self.summary["platform_crash_dismiss_blocker"] = {"source_xml": screen.xml.name, "reason": reason}
+            self.write_summary()
+            raise PlatformCrashBlocked(reason)
+        self.budget(deadline, "Known platform crash Close app")
+        row = {"source_xml": screen.xml.name, "title": title.get("text"),
+               "button_resource": button.get("resource-id"), "bounds": button.get("bounds"),
+               "action": "Close app", "command_number": self.command_number + 1, "status": "attempted"}
+        attempts.append(row)
+        try:
+            self.tap(button, deadline=deadline)
+            self.budget(deadline, "Known platform crash Close app")
+            row["status"] = "close_sent"
+        except Blocked as error:
+            row.update(status="blocked", reason=str(error))
+            raise PlatformCrashBlocked(str(error)) from error
+        finally:
+            self.write_summary()
+        return True
 
     def recover_known_search_locations(self, label, screen, deadline):
         if label != "settings":
@@ -939,10 +1005,10 @@ class Smoke:
         # Recover through the normal exported Settings activity if a picker/dialog blocked later checks.
         try:
             self.open_settings()
-        except (AppAnr, SettingsBackBlocked):
+        except (AppAnr, SettingsBackBlocked, PlatformCrashBlocked):
             raise
         except (Blocked, AssertionError):
-            if self.summary["settings_back_recoveries"]:
+            if self.summary["settings_back_recoveries"] or self.summary["platform_crash_dismissals"]:
                 raise
             self.adb("shell", "input", "keyevent", "KEYCODE_BACK", check=False)
             self.open_settings()
@@ -1090,6 +1156,8 @@ def main():
     parser.add_argument("--install-timeout", type=int, default=300)
     parser.add_argument("--wait-known-platform-anr", action="store_true",
                         help="Fresh owned test devices only: at most two normal Wait taps on exact observed System UI/process-system ANR dialogs; never Close app or a Pine/unknown title")
+    parser.add_argument("--dismiss-known-platform-crash", action="store_true",
+                        help="Fresh job-owned CI AVDs only: during the initial settings observation, at most one ordinary Close app on the exact Android Bluetooth keeps stopping dialog; never Pine, unknown titles, ANRs or App info; does not prove platform stability")
     parser.add_argument("--collect-system-last-anr-traces", action="store_true",
                         help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace and retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated")
     parser.add_argument("--require-ready-storage", action="store_true",

@@ -312,6 +312,40 @@ Mac attempt remains a real Pine ANR failure (5 passed / 12 blocked / 1 failed):
 its `lastanr` said no ANR and `debuggerd` returned text `root is required`, so
 neither is a successful Pine stack capture. No root was requested or attempted.
 
+**Exact `5ff61e81` actual attempts, completed 22:34 UTC:** both
+[Intel Mac](https://github.com/xmy953538104/pine_CN/actions/runs/38972300575/job/117215433866)
+and [Ubuntu](https://github.com/xmy953538104/pine_CN/actions/runs/38972300575/job/117215433822)
+installed APK SHA-256
+`904700db72db05bb32298e9a922ca74199bb6e651d180c844c55ad8edd4accae`
+and independently verified the installed hash. Each original report is
+**5 passed / 13 blocked / 0 failed**. Mac's valid Settings observations all show
+the system `Bluetooth keeps stopping` crash dialog, with App info/Close app and
+no Wait; the strict ANR recovery correctly took no action. Its crash buffer
+identifies `com.google.android.bluetooth` SIGABRT during Bluetooth stack startup.
+Pine's library was mapped, but `debuggerd` required root and yielded no Pine
+stack. The global latest ANR trace belongs to safetyhub. Ubuntu's UIAutomator
+timed out without valid UI XML; no live Pine PID was captured. Its global latest
+ANR trace belongs to `com.android.phone`. These traces are not Pine stacks.
+No Diagnostics/native-file/SAF flow was observed on either run, so this pair
+cannot validate the new single-column listing or rendered-button fixes. Their
+job-level success preserves blocked evidence and is not full APK acceptance.
+The subsequent exact `6fe018a7` build passed native/content, both Windows suites,
+24 JVM tests, ARM64/signature/source identity and all controlled observers;
+its actual APK runtime reports remain separate.
+
+A subsequent default-off `--dismiss-known-platform-crash` option is enabled only
+by the fresh CI AVD wrapper. During the Settings observation it permits at most
+one ordinary Close app tap on the uniquely identified Android `Bluetooth keeps
+stopping` title and its same-container enabled/clickable `android:id/aerr_close`
+Button. Other titles, Pine, ANRs, App info, seek and SAF observations do not qualify.
+The original XML, bounds, command and attempted/close-sent/blocked state are
+retained. A persistent dialog remains blocked; cleanup cannot substitute another
+Back or Close action. Pine ANR classification runs first and recorded Pine
+crashes still fail. This changes Bluetooth's test-environment lifecycle, and a
+snapshot-to-tap UI race remains possible; it does not establish platform stability.
+No force-stop or security-setting command is used. All 31 controlled smoke tests
+passed locally, including the original 27; the actual 18-check APK gate is unchanged.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

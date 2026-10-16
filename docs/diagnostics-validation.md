@@ -17,10 +17,10 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 24/24 passed actual Gradle task: 17 exporter, 4 selection and 3 process/settings tests, including long-line export and private-path tails | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
-| Windows PS5.1/pwsh ADB | Full suite passed at `5ff61e81`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 31/78 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
+| Windows PS5.1/pwsh ADB | Full suite passed at `6fe018a7`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 32/63 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
 | Actual POSIX PTY Ctrl+C, fake ADB and native JSONL replay | Passed | These controlled inputs are not an Android/device run |
 | Preview publication guards | Passed offline tests for rejected commits/jobs, tampered APK/evidence, wrong ABI and extra APK | Test ZIPs are deliberately non-executable fixtures |
-| Android observer safeguards | Local 27 smoke tests passed after the bounded navigation/storage observations; prior CI at `5ff61e81` passed 22 smoke, 4 passive first-boot and 11 startup-probe tests | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
+| Android observer safeguards | CI at `6fe018a7` passed 27 smoke, 4 passive first-boot and 11 startup-probe tests using controlled subprocesses | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
 
 Reproduce independent native checks without the Android SDK:
 

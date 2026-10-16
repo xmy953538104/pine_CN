@@ -13,9 +13,18 @@ mkdir -p "$ANDROID_AVD_HOME"
 "$emulator" -accel-check > "$out/accel-check.txt" 2>&1 && accel=on || accel=off
 uname -a > "$out/host.txt"
 ls -l /dev/kvm /dev/dri >> "$out/host.txt" 2>&1 || true
+python3 - <<'PY' >> "$out/host.txt"
+import json, os, pathlib
+print(json.dumps({'cpu_count': os.cpu_count(), 'affinity': sorted(os.sched_getaffinity(0)), 'guest_memory_mib': 3072}))
+for name in ('/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/memory.max'):
+    path = pathlib.Path(name)
+    if path.is_file():
+        print(name + ': ' + path.read_text().strip())
+print(next(line for line in pathlib.Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:')))
+PY
 # This is a fresh, job-local AVD, never a user's existing device or disk.
-printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-30;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
-"$emulator" -avd PineDiagnosticsCI -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel "$accel" -cores 2 -memory 2048 -skin 480x800 -verbose > "$out/emulator.log" 2>&1 &
+printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-34;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
+"$emulator" -avd PineDiagnosticsCI -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel "$accel" -cores 2 -memory 3072 -skin 480x800 -verbose > "$out/emulator.log" 2>&1 &
 emulator_pid=$!
 cleanup() {
   timeout 20 "$adb" -s emulator-5554 logcat -d -t 2000 -v threadtime > "$out/android-logcat.txt" 2>&1 || true

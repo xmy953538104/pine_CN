@@ -112,7 +112,7 @@ jobs:
         with:
           packages: platform-tools emulator
       - name: Official Android image
-        run: sdkmanager 'system-images;android-30;google_apis;x86_64'
+        run: sdkmanager 'system-images;android-34;google_apis;x86_64'
       - uses: actions/download-artifact@v4
         with:
           name: pine-diagnostics-debug-${{ github.event.pull_request.head.sha || github.sha }}

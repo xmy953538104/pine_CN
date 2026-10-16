@@ -17,7 +17,7 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 21/21 passed actual Gradle task at `00811378` | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
-| Windows PS5.1/pwsh ADB | Earlier suite passed; strengthened EOF fixture exposed a still-open pipe writer in the managed fake | Native Windows fixture investigation is in progress; use final commit CI result, not an older green run |
+| Windows PS5.1/pwsh ADB | Full suite passed at `d859e3b5`, including native EOF, complete shared-file records and cancellation cleanup | Windows physical-keyboard Ctrl+C still needs manual acceptance; actual POSIX PTY Ctrl+C passed separately |
 | Actual POSIX PTY Ctrl+C, fake ADB and native JSONL replay | Passed | These controlled inputs are not an Android/device run |
 | Preview publication guards | Passed offline tests for rejected commits/jobs, tampered APK/evidence, wrong ABI and extra APK | Test ZIPs are deliberately non-executable fixtures |
 

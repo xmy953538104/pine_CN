@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/content.h>
 #include <crypto/aes_cipher.h>
 #include <loader/loader.h>
 
@@ -152,8 +153,10 @@ namespace skyline::vfs {
                 sectionHeader.raw.sectionCtr)};
 
             romFs = std::make_shared<RegionBacking>(bktr, sectionHeader.romfs.ivfc.levels[constant::IvfcMaxLevel - 1].offset, romFsSize);
+            PINE_DIAG_CONTENT("ROMFS_BACKING_OPENED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"path", "BKTR"}, {"source", "base_and_patch"});
         } else {
             romFs = std::move(decryptedBacking);
+            PINE_DIAG_CONTENT("ROMFS_BACKING_OPENED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"path", encrypted && (sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::CTR || sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::BKTR) ? "CTR" : "direct"}, {"source", "nca_section"}, {"bktr_header", sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::BKTR ? "true" : "false"});
         }
     }
 

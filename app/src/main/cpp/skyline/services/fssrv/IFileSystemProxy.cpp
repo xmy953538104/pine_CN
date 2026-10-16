@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/content.h>
 #include <os.h>
 #include <vfs/os_filesystem.h>
 #include <vfs/nca.h>
@@ -113,15 +114,24 @@ namespace skyline::service::fssrv {
         auto dataId{request.Pop<u64>()};
         auto patchManager{std::make_shared<vfs::PatchManager>()};
 
+        PINE_DIAG_CONTENT("DATA_STORAGE_REQUEST", {"data_id", fmt::format("{:016X}", dataId)}, {"storage_id", fmt::format("{}", static_cast<int>(storageId))});
         // Try load DLC first
         for (const auto &dlc : state.dlcLoaders) {
             if (dlc->cnmt->header.id == dataId) {
-                auto romFs{patchManager->PatchRomFS(state, dlc->publicNca, state.loader->programNca->ivfcOffset)};
-                manager.RegisterService(std::make_shared<IStorage>(romFs, state, manager), session, response);
-                return {};
+                PINE_DIAG_CONTENT("DLC_DATA_ID_MATCHED", {"data_id", fmt::format("{:016X}", dataId)});
+                try {
+                    auto romFs{patchManager->PatchRomFS(state, dlc->publicNca, state.loader->programNca->ivfcOffset)};
+                    manager.RegisterService(std::make_shared<IStorage>(romFs, state, manager, dataId), session, response);
+                    PINE_DIAG_CONTENT("DLC_STORAGE_OPENED", {"title_id", fmt::format("{:016X}", dataId)}, {"source", "dlc"});
+                    return {};
+                } catch (const std::exception &e) {
+                    PINE_DIAG_CONTENT_ERROR("DLC_RUNTIME_ERROR", {"title_id", fmt::format("{:016X}", dataId)}, {"operation", "open_storage"}, {"reason", e.what()});
+                    throw;
+                }
             }
         }
 
+        PINE_DIAG_CONTENT("DLC_DATA_ID_UNMATCHED", {"data_id", fmt::format("{:016X}", dataId)}, {"fallback", "system_archives_then_assets"});
         auto systemArchivesFileSystem{std::make_shared<vfs::OsFileSystem>(state.os->publicAppFilesPath + "/switch/nand/system/Contents/registered/")};
         auto systemArchives{systemArchivesFileSystem->OpenDirectory("")};
         auto keyStore{std::make_shared<skyline::crypto::KeyStore>(state.os->privateAppFilesPath + "keys")};

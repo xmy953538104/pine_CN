@@ -67,14 +67,18 @@ namespace skyline::vfs {
          * @param offset The offset to start reading from
          * @return The amount of bytes read
          */
-        size_t Read(span <u8> output, size_t offset = 0) {
+        size_t Read(span <u8> output, size_t offset = 0, size_t *actualRead = nullptr) {
             if (offset > size)
                 throw exception("Offset cannot be past the end of a backing");
 
             if ((size - offset) < output.size())
                 throw exception("Trying to read past the end of a backing: 0x{:X}/0x{:X} (Offset: 0x{:X})", output.size(), size, offset);
 
-            if (ReadUnchecked(output, offset) != output.size())
+            const auto bytesRead{ReadUnchecked(output, offset)};
+            // Optional observation only; keep the historic total-size return and short-read warning.
+            if (actualRead)
+                *actualRead = bytesRead;
+            if (bytesRead != output.size())
                 LOGW("Failed to read the requested size from backing");
 
             return size;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/content.h>
 #include <os.h>
 #include <kernel/types/KProcess.h>
 #include "IAddOnContentManager.h"
@@ -12,6 +13,7 @@ namespace skyline::service::aocsrv {
           addOnContentListChangedEvent(std::make_shared<type::KEvent>(state, false)) {}
 
     Result IAddOnContentManager::CountAddOnContent(type::KSession &session, ipc::IpcRequest &request, ipc::IpcResponse &response) {
+        PINE_DIAG_CONTENT("DLC_AOC_COUNT", {"count", fmt::format("{}", state.dlcLoaders.size())});
         response.Push<u32>(static_cast<u32>(state.dlcLoaders.size()));
         return {};
     }
@@ -38,6 +40,7 @@ namespace skyline::service::aocsrv {
         out.resize(outCount);
 
         request.outputBuf.at(0).copy_from(out);
+        PINE_DIAG_CONTENT("DLC_AOC_LIST", {"offset", fmt::format("{}", params.offset)}, {"requested_count", fmt::format("{}", params.count)}, {"returned_count", fmt::format("{}", outCount)});
         response.Push<u32>(outCount);
         return {};
     }

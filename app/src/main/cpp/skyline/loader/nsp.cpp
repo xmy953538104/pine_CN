@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/content.h>
 #include <kernel/types/KProcess.h>
 #include <vfs/ticket.h>
 #include "nca.h"
@@ -34,21 +35,34 @@ namespace skyline::loader {
             try {
                 auto nca{vfs::NCA(nsp->OpenFile(entry.name), keyStore)};
 
+                PINE_DIAG_CONTENT("NCA_CANDIDATE", {"content_name", entry.name}, {"nca_type", fmt::format("{}", static_cast<int>(nca.contentType))}, {"title_id", fmt::format("{:016X}", nca.header.titleId)});
+                auto select = [&](auto &slot) {
+                    PINE_DIAG_CONTENT(slot ? "NCA_OVERWRITTEN" : "NCA_SELECTED", {"content_name", entry.name}, {"nca_type", fmt::format("{}", static_cast<int>(nca.contentType))}, {"title_id", fmt::format("{:016X}", nca.header.titleId)}, {"policy", "last_eligible_of_type"});
+                    slot = std::move(nca);
+                };
                 if (nca.contentType == vfs::NCAContentType::Program && nca.romFs != nullptr && nca.exeFs != nullptr)
-                    programNca = std::move(nca);
+                    select(programNca);
                 else if (nca.contentType == vfs::NCAContentType::Control && nca.romFs != nullptr)
-                    controlNca = std::move(nca);
+                    select(controlNca);
                 else if (nca.contentType == vfs::NCAContentType::Meta)
-                    metaNca = std::move(nca);
+                    select(metaNca);
                 else if (nca.contentType == vfs::NCAContentType::PublicData)
-                    publicNca = std::move(nca);
+                    select(publicNca);
+                else
+                    PINE_DIAG_CONTENT("NCA_SKIPPED", {"content_name", entry.name}, {"reason", "ineligible_type_or_sections"});
             } catch (const loader_exception &e) {
+                PINE_DIAG_CONTENT_ERROR("NCA_LOAD_FAILED", {"content_name", entry.name}, {"exception", "loader_exception"}, {"error_code", fmt::format("{}", static_cast<int>(e.error))}, {"action", "propagate"});
                 throw loader_exception(e.error);
             } catch (const std::exception &e) {
+                PINE_DIAG_CONTENT_ERROR("NCA_LOAD_FAILED", {"content_name", entry.name}, {"exception", "std_exception"}, {"reason", e.what()}, {"action", "continue"});
                 continue;
             }
         }
 
+        for (const auto *selected : {&programNca, &controlNca, &metaNca, &publicNca}) {
+            if (*selected)
+                PINE_DIAG_CONTENT("NCA_FINAL_SELECTION", {"nca_type", fmt::format("{}", static_cast<int>((*selected)->contentType))}, {"title_id", fmt::format("{:016X}", (*selected)->header.titleId)});
+        }
         if (programNca)
             romFs = programNca->romFs;
 

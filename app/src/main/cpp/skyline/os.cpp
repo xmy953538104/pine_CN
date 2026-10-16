@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/content.h>
 #include "gpu.h"
 #include "common/settings.h"
 #include "nce.h"
@@ -38,21 +39,44 @@ namespace skyline::kernel {
         auto romFile{std::make_shared<vfs::OsBacking>(romFd)};
         keyStore = std::make_shared<crypto::KeyStore>(privateAppFilesPath + "keys/");
 
-        state.loader = GetLoader(romFd, keyStore, romType);
+        PINE_DIAG_CONTENT("CONTENT_LOAD_BEGIN", {"rom_format", fmt::format("{}", static_cast<int>(romType))}, {"update_fd_positive", updateFd > 0 ? "true" : "false"}, {"dlc_count", fmt::format("{}", dlcFds.size())});
+        auto loadContent = [&](int fd, std::string_view source) {
+            PINE_DIAG_CONTENT("LOADER_BEGIN", {"source", source});
+            try {
+                return GetLoader(fd, keyStore, romType);
+            } catch (const std::exception &e) {
+                PINE_DIAG_CONTENT_ERROR("LOADER_FAILED", {"source", source}, {"reason", e.what()}, {"last_stage", diagnostics::LastStage()});
+                throw;
+            }
+        };
+        state.loader = loadContent(romFd, "base");
+        diagnostics::Stage("base_loader_ready");
+        PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"});
 
-        if (updateFd > 0)
-            state.updateLoader = GetLoader(updateFd, keyStore, romType);
+        if (updateFd > 0) {
+            state.updateLoader = loadContent(updateFd, "update");
+            diagnostics::Stage("update_loader_ready");
+            PINE_DIAG_CONTENT("PATCH_SELECTED", {"source", "update"}, {"selection", "provided_fd_gt_zero"}, {"rom_format_source", "base"}, {"title_id", state.updateLoader->cnmt ? state.updateLoader->cnmt->GetTitleId() : "unknown"}, {"version", state.updateLoader->cnmt ? fmt::format("{}", state.updateLoader->cnmt->header.version) : "unknown"});
+        } else {
+            PINE_DIAG_CONTENT("PATCH_SKIPPED", {"reason", "update_fd_not_positive"});
+        }
 
         if (dlcFds.size() > 0)
-            for (int fd : dlcFds)
-                state.dlcLoaders.push_back(GetLoader(fd, keyStore, romType));
+            for (int fd : dlcFds) {
+                PINE_DIAG_CONTENT("DLC_DISCOVERED", {"source", "provided_fd"}, {"rom_format_source", "base"});
+                state.dlcLoaders.push_back(loadContent(fd, "dlc"));
+                auto &dlc = state.dlcLoaders.back();
+                PINE_DIAG_CONTENT("DLC_REGISTERED", {"title_id", dlc->cnmt ? dlc->cnmt->GetTitleId() : "unknown"}, {"parent_title_id", dlc->cnmt ? dlc->cnmt->GetParentTitleId() : "unknown"}, {"cnmt_type", dlc->cnmt ? fmt::format("{}", static_cast<int>(dlc->cnmt->header.contentMetaType)) : "unknown"});
+            }
 
         state.gpu->Initialise();
+        diagnostics::Stage("gpu_initialized");
 
         auto &process{state.process};
         process = std::make_shared<kernel::type::KProcess>(state);
 
         auto entry{state.loader->LoadProcessData(process, state)};
+        diagnostics::Stage("process_data_loaded");
         auto &nacp{state.loader->nacp};
         if (nacp) {
             std::string name{nacp->GetApplicationName(language::ApplicationLanguage::AmericanEnglish)}, publisher{nacp->GetApplicationPublisher(language::ApplicationLanguage::AmericanEnglish)};

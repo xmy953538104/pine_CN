@@ -154,7 +154,10 @@ fi
 # device security nor the APK/guest behavior; all unobserved checks stay blocked.
 # This flag is scoped to this newly created, job-owned AVD. Ordinary users of
 # the smoke runner do not automatically interact with another app's ANR dialog.
-if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr --collect-system-last-anr-traces; then
+# Storage enumeration requires a responsive service and the internal mounted
+# volume within the existing readiness budget. That built-in volume is a platform
+# stub; this extra observation does not guarantee FUSE or installation readiness.
+if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr --collect-system-last-anr-traces --require-ready-storage; then
   smoke_result=0
 else
   smoke_result=$?

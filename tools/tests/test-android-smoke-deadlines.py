@@ -33,6 +33,19 @@ def ui_xml(*nodes):
     return ET.tostring(root, encoding="unicode")
 
 
+SEARCH_LOCATIONS_XML = '''<hierarchy>
+<node resource-id="io.github.pine.emu.diagnostics:id/toolbar_layout" package="io.github.pine.emu.diagnostics"
+ class="android.widget.FrameLayout" content-desc="Search Locations" enabled="true" bounds="[0,0][480,136]">
+ <node package="io.github.pine.emu.diagnostics" class="android.widget.ImageButton" content-desc="Navigate up"
+  clickable="true" enabled="true" bounds="[0,28][56,84]"/>
+</node>
+<node resource-id="io.github.pine.emu.diagnostics:id/locations_list" package="io.github.pine.emu.diagnostics"
+ class="androidx.recyclerview.widget.RecyclerView" enabled="true" bounds="[0,136][480,800]"/>
+<node text="Add" resource-id="io.github.pine.emu.diagnostics:id/add_location_button" package="io.github.pine.emu.diagnostics"
+ class="android.widget.Button" enabled="true" bounds="[344,704][464,760]"/>
+</hierarchy>'''
+
+
 class ObservationDeadlines(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -84,6 +97,8 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'remove-xml', ''
             elif args == ['shell', 'cmd', 'package', 'path', 'android']:
                 operation, output = 'package', next_result('package_sequence', 'package:/system/framework/framework-res.apk')
+            elif args == ['shell', 'sm', 'list-volumes', 'all']:
+                operation, output = 'storage', next_result('storage_sequence', 'private mounted null')
             elif args[:2] == ['shell', 'cat'] and args[2].startswith('/proc/'):
                 operation, output = 'proc-status', 'Name:\\toffline-fixture'
                 if config.get('status_denied'):
@@ -103,6 +118,8 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'swipe', ''
             elif args[:3] == ['shell', 'input', 'tap']:
                 operation, output = 'tap', ''
+            elif args == ['shell', 'input', 'keyevent', 'KEYCODE_BACK']:
+                operation, output = 'back', ''
             elif args[:2] == ['exec-out', 'screencap']:
                 operation, output, binary = 'screenshot', b'\\x89PNG\\r\\n\\x1a\\n', True
             elif (args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat']
@@ -158,7 +175,7 @@ class ObservationDeadlines(unittest.TestCase):
             '''))
         self.fake.chmod(0o755)
 
-    def smoke(self, name, delays, allow_platform_anr=False, collect_system_anr=False):
+    def smoke(self, name, delays, allow_platform_anr=False, collect_system_anr=False, require_storage=False):
         self.config.write_text(json.dumps({"session": SESSION, **delays}))
         self.fake.with_suffix('.state.json').unlink(missing_ok=True)
         # Short fixture budgets keep these real subprocess tests fast while
@@ -168,7 +185,8 @@ class ObservationDeadlines(unittest.TestCase):
             adb=str(self.fake), serial="offline-fixture", apk=self.root / "absent.apk",
             expected_commit="a" * 40, output=self.root / name,
             command_timeout=2.5, ui_timeout=1, boot_timeout=2.5, install_timeout=2.5,
-            wait_known_platform_anr=allow_platform_anr, collect_system_last_anr_traces=collect_system_anr))
+            wait_known_platform_anr=allow_platform_anr, collect_system_last_anr_traces=collect_system_anr,
+            require_ready_storage=require_storage))
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
@@ -258,6 +276,78 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertEqual(len(taps), 1)
         self.assertEqual(smoke.results, {})
         self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_known_search_locations_gets_one_back_then_fresh_settings_and_diagnostics(self):
+        settings = ui_xml({"text": "Developer diagnostics"})
+        diagnostics = ui_xml({"text": "Enable diagnostics"})
+        smoke = self.smoke("settings-back", {"xml_sequence": [SEARCH_LOCATIONS_XML, settings, settings, diagnostics]})
+        smoke.args.ui_timeout = 3
+        smoke.step("settings_entry", smoke.open_settings)
+        self.assertEqual(smoke.results["settings_entry"]["status"], "pass")
+        attempts = smoke.summary["settings_back_recoveries"]
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["source_xml"], "001-settings.xml")
+        self.assertEqual(attempts[0]["status"], "back_sent")
+        commands = self.commands(smoke)
+        backs = [row for row in commands if "KEYCODE_BACK" in row["argv"]]
+        self.assertEqual(len(backs), 1)
+        self.assertEqual(backs[0]["number"], attempts[0]["command_number"])
+        self.assertFalse(any(row["argv"][-2:] == ["404", "732"] for row in commands))
+        self.assertTrue((smoke.output / "004-diagnostics.xml").is_file())
+        report = json.loads((smoke.output / "runtime-report.json").read_text())
+        self.assertEqual(report["settings_back_recoveries"], attempts)
+        self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_search_locations_recovery_rejects_other_labels_pages_controls_and_pine_anr(self):
+        cases = (
+            ("other-label", "diagnostics", SEARCH_LOCATIONS_XML),
+            ("other-package", "settings", SEARCH_LOCATIONS_XML.replace('package="' + MODULE["PACKAGE"] + '"',
+                                                                        'package="fixture.other"')),
+            ("other-title", "settings", SEARCH_LOCATIONS_XML.replace('content-desc="Search Locations"', 'content-desc="Other page"')),
+            ("missing-list", "settings", SEARCH_LOCATIONS_XML.replace(':id/locations_list', ':id/unknown_list')),
+            ("disabled-add", "settings", SEARCH_LOCATIONS_XML.replace('class="android.widget.Button" enabled="true"',
+                                                                       'class="android.widget.Button" enabled="false"')),
+            ("wrong-up-control", "settings", SEARCH_LOCATIONS_XML.replace('class="android.widget.ImageButton"',
+                                                                           'class="android.widget.TextView"')),
+            ("unclickable-up", "settings", SEARCH_LOCATIONS_XML.replace('clickable="true"', 'clickable="false"')),
+        )
+        for name, label, xml in cases:
+            with self.subTest(case=name):
+                smoke = self.smoke("search-" + name, {"xml_sequence": [xml]})
+                smoke.args.ui_timeout = .5
+                with self.assertRaises(Blocked):
+                    smoke.wait_ui(label, lambda value: False)
+                self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+                self.assertEqual(smoke.summary["settings_back_recoveries"], [])
+        root = ET.fromstring(SEARCH_LOCATIONS_XML)
+        root.extend(ET.fromstring(PINE_ANR_XML))
+        smoke = self.smoke("search-pine-anr", {"xml_sequence": [ET.tostring(root, encoding="unicode")]},
+                           allow_platform_anr=True)
+        smoke.step("settings_entry", lambda: smoke.wait_ui("settings", lambda value: True))
+        self.assertEqual(smoke.results["settings_entry"]["status"], "fail")
+        self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+        self.assertEqual(smoke.summary["settings_back_recoveries"], [])
+
+    def test_search_locations_back_respects_deadline_and_cleanup_cannot_repeat_it(self):
+        smoke = self.smoke("search-late-back", {"xml_sequence": [SEARCH_LOCATIONS_XML], "back": 2.5})
+        started = time.monotonic()
+        with self.assertRaises(Blocked):
+            smoke.wait_ui("settings", lambda value: False)
+        self.assertLess(time.monotonic() - started, 1.8)
+        self.assertEqual(smoke.summary["settings_back_recoveries"][0]["status"], "blocked")
+        self.assertTrue(any(row["timed_out"] and "KEYCODE_BACK" in row["argv"] for row in self.commands(smoke)))
+
+        smoke = self.smoke("search-persistent", {"xml_sequence": [SEARCH_LOCATIONS_XML]})
+        smoke.args.ui_timeout = 3
+        smoke.ever_enabled = True
+        smoke.step("disable_stop", smoke.disable)
+        self.assertEqual(smoke.results["disable_stop"]["status"], "blocked")
+        self.assertEqual(len([row for row in self.commands(smoke) if "KEYCODE_BACK" in row["argv"]]), 1)
+        self.assertEqual(smoke.summary["settings_back_recoveries"][0]["status"], "back_sent")
+        self.assertIn("single Settings Back attempt", smoke.summary["settings_back_recovery_blocker"]["reason"])
+        smoke.step("settings_entry", smoke.open_settings)
+        self.assertEqual(smoke.results["settings_entry"]["status"], "blocked")
+        self.assertEqual(len([row for row in self.commands(smoke) if "KEYCODE_BACK" in row["argv"]]), 1)
 
     def test_late_ui_marker_and_native_observations_cannot_pass(self):
         scenarios = (
@@ -518,9 +608,54 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertEqual(smoke.results["device_ready"]["status"], status)
         self.assertEqual(smoke.summary["overall"], "blocked")
         self.assertFalse(any("install" in row["argv"] for row in self.commands(smoke)))
+        if not smoke.summary["storage_readiness_required"]:
+            self.assertFalse(any("sm" in row["argv"] for row in self.commands(smoke)))
         rows = [json.loads(line) for line in (smoke.output / "readiness-observations.jsonl").read_text().splitlines()]
         self.assertEqual(rows, smoke.summary["android_readiness"]["observations"])
         return rows
+
+    def test_optional_storage_readiness_retries_unmounted_then_confirms_pid_stability(self):
+        smoke = self.smoke("storage-transient", {"storage_sequence": [
+            "emulated;0 mounted null\nprivate unmounted null", "private mounted null\nemulated;0 mounted null"]},
+                           require_storage=True)
+        smoke.args.boot_timeout = 6
+        smoke.step("device_ready", smoke.device_ready)
+        rows = self.assert_gate_only(smoke, "pass")
+        self.assertEqual([row["status"] for row in rows], ["retry", "pass"])
+        self.assertFalse(rows[0]["storage_internal_mounted"])
+        self.assertEqual(rows[0]["storage_volumes_raw"], "emulated;0 mounted null\nprivate unmounted null\n")
+        self.assertTrue(rows[1]["storage_internal_mounted"])
+        self.assertEqual(rows[1]["storage_internal_volume_line"], "private mounted null")
+        self.assertEqual(rows[1]["system_server_before_pids"], rows[1]["system_server_after_pids"])
+        self.assertGreaterEqual(rows[1]["continuity_seconds"], 2)
+        self.assertTrue(smoke.summary["storage_readiness_required"])
+        self.assertTrue(json.loads((smoke.output / "runtime-report.json").read_text())["storage_readiness_required"])
+        for row in rows:
+            self.assertTrue(any(name.endswith("storage-volumes.txt") for name in row["evidence"]))
+
+    def test_optional_storage_readiness_missing_denied_and_late_observations_cannot_pass(self):
+        cases = (
+            ("unmounted", {"storage_sequence": ["private unmounted null"]}),
+            ("adopted-only", {"storage_sequence": ["private:179,65 mounted uuid\nemulated;0 mounted null"]}),
+            ("read-only", {"storage_sequence": ["private mounted_ro null"]}),
+            ("denied", {"storage_sequence": [{"stdout": "private mounted null", "code": 1, "stderr": "Storage permission denied"}]}),
+            ("late", {"storage_sequence": ["private mounted null"], "storage": 2, "emit_before_delay": "storage"}),
+        )
+        for name, config in cases:
+            with self.subTest(case=name):
+                smoke = self.smoke("storage-" + name, config, require_storage=True)
+                smoke.args.boot_timeout = .8
+                started = time.monotonic()
+                smoke.step("device_ready", smoke.device_ready)
+                self.assertLess(time.monotonic() - started, 1.6)
+                rows = self.assert_gate_only(smoke, "blocked")
+                self.assertNotIn("accepted_attempt", smoke.summary["android_readiness"])
+                self.assertTrue(all(row.get("storage_internal_mounted") is not True for row in rows))
+                self.assertIsNotNone(rows[0]["storage_volumes_raw"])
+                if name == "denied":
+                    self.assertIn("permission denied", rows[0]["command_errors"]["storage-volumes"])
+                if name == "late":
+                    self.assertTrue(any(row["timed_out"] and "sm" in row["argv"] for row in self.commands(smoke)))
 
     def test_readiness_retries_missing_multiple_and_failed_package_observations(self):
         smoke = self.smoke("readiness-transient", {

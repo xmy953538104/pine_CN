@@ -54,6 +54,10 @@ class AppAnr(AssertionError):
     """An observed app ANR that ordinary UI cleanup must not mask."""
 
 
+class SettingsBackBlocked(Blocked):
+    """A bounded Settings recovery that generic cleanup must not repeat."""
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -178,6 +182,9 @@ class Smoke:
             "platform_anr_wait_enabled": bool(getattr(args, "wait_known_platform_anr", False)),
             "platform_anr_wait_limit": 2,
             "platform_anr_waits": [],
+            "settings_back_recovery_limit": 1,
+            "settings_back_recoveries": [],
+            "storage_readiness_required": bool(getattr(args, "require_ready_storage", False)),
             "system_last_anr_traces_enabled": bool(getattr(args, "collect_system_last_anr_traces", False)),
             "system_last_anr_traces_scope": "Latest system-wide ANR trace file and all retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated and include other processes.",
         }
@@ -213,6 +220,10 @@ class Smoke:
             "platform_anr_wait_enabled": self.summary["platform_anr_wait_enabled"],
             "platform_anr_wait_limit": self.summary["platform_anr_wait_limit"],
             "platform_anr_waits": self.summary["platform_anr_waits"],
+            "settings_back_recovery_limit": self.summary["settings_back_recovery_limit"],
+            "settings_back_recoveries": self.summary["settings_back_recoveries"],
+            "settings_back_recovery_blocker": self.summary.get("settings_back_recovery_blocker"),
+            "storage_readiness_required": self.summary["storage_readiness_required"],
             "system_last_anr_traces_enabled": self.summary["system_last_anr_traces_enabled"],
             "system_last_anr_traces_scope": self.summary["system_last_anr_traces_scope"],
             "possible_platform_cause": self.summary.get("possible_platform_cause", []),
@@ -347,10 +358,15 @@ class Smoke:
                 if self.wait_known_platform_dialog(last, deadline):
                     self.pause(deadline)
                     continue
+                if self.recover_known_search_locations(label, last, deadline):
+                    self.pause(deadline)
+                    continue
                 if predicate(last):
                     self.budget(deadline, f"UI observation '{label}'")
                     self.screenshot(label, deadline=deadline)
                     return last
+            except SettingsBackBlocked:
+                raise
             except Blocked as error:
                 last_error = str(error)
             self.pause(deadline)
@@ -367,6 +383,47 @@ class Smoke:
                node.get("text") == "Pine Diagnostics isn't responding"
                for node in screen.root.iter("node")):
             raise AppAnr(f"Pine application ANR observed: Pine Diagnostics isn't responding; see {screen.xml.name}")
+
+    def recover_known_search_locations(self, label, screen, deadline):
+        if label != "settings":
+            return False
+
+        def own(nodes, **attributes):
+            return next((node for node in nodes if Screen.bounds(node) and
+                         node.get("package") == PACKAGE and node.get("enabled") == "true" and
+                         all(node.get(key) == value for key, value in attributes.items())), None)
+
+        toolbar = own(screen.root.iter("node"), **{"resource-id": PACKAGE + ":id/toolbar_layout",
+                                                  "content-desc": "Search Locations"})
+        if toolbar is None:
+            return False
+        locations = own(screen.root.iter("node"), **{"resource-id": PACKAGE + ":id/locations_list"})
+        add = own(screen.root.iter("node"), **{"resource-id": PACKAGE + ":id/add_location_button",
+                                              "class": "android.widget.Button"})
+        navigate = own(toolbar.iter("node"), **{"class": "android.widget.ImageButton", "content-desc": "Navigate up",
+                                                "clickable": "true"})
+        if any(node is None for node in (locations, add, navigate)):
+            return False
+        attempts = self.summary["settings_back_recoveries"]
+        if len(attempts) >= self.summary["settings_back_recovery_limit"]:
+            reason = "Known Search Locations page persists after the single Settings Back attempt"
+            self.summary["settings_back_recovery_blocker"] = {"source_xml": screen.xml.name, "reason": reason}
+            self.write_summary()
+            raise SettingsBackBlocked(reason)
+        self.budget(deadline, "Settings Back recovery")
+        row = {"source_xml": screen.xml.name, "action": "KEYCODE_BACK",
+               "command_number": self.command_number + 1, "status": "attempted"}
+        attempts.append(row)
+        try:
+            self.adb("shell", "input", "keyevent", "KEYCODE_BACK", timeout=self.budget(deadline, "Settings Back recovery"))
+            self.budget(deadline, "Settings Back recovery")
+            row["status"] = "back_sent"
+        except Blocked as error:
+            row.update(status="blocked", reason=str(error))
+            raise SettingsBackBlocked(str(error)) from error
+        finally:
+            self.write_summary()
+        return True
 
     def wait_known_platform_dialog(self, screen, deadline):
         """Opt-in, bounded ordinary Wait on two observed platform titles only.
@@ -520,8 +577,12 @@ class Smoke:
     def device_ready(self):
         deadline = time.monotonic() + self.args.boot_timeout
         observations = []
+        storage_required = self.summary["storage_readiness_required"]
         readiness = {"preinstall_ui_required": False, "continuity_window_seconds": 2,
+                     "storage_readiness_required": storage_required,
                      "observations": observations}
+        if storage_required:
+            readiness["storage_probe_scope"] = "The internal private volume is a mount-service stub; mounted does not prove FUSE or installation readiness."
         self.summary["android_readiness"] = readiness
         sampled_multiple = False
         last_reason = "No readiness observation completed"
@@ -595,6 +656,14 @@ class Smoke:
                 if not any(re.fullmatch(r"package:/\S+\.apk", line) for line in package.splitlines()):
                     raise Blocked("Android package manager did not answer its real package query with an APK path")
                 row["package_query_answered"] = True
+                if storage_required:
+                    volumes = observe("storage-volumes", "shell", "sm", "list-volumes", "all")
+                    mounted = next((line for line in volumes.splitlines()
+                                    if re.fullmatch(r"private[ \t]+mounted[ \t]+\S+", line)), None)
+                    row["storage_internal_mounted"] = mounted is not None
+                    row["storage_internal_volume_line"] = mounted
+                    if mounted is None:
+                        raise Blocked("Storage service did not report the internal private volume mounted")
                 if deadline - time.monotonic() <= 2:
                     raise Blocked("Readiness budget cannot fit the full two-second continuity window")
                 time.sleep(2)
@@ -605,6 +674,8 @@ class Smoke:
                     raise Blocked(f"Android system_server changed during package/PID observation: {before} -> {after}")
                 accepted = {"system_server_before": before, "system_server_after": after,
                             "package_query_answered": True, "preinstall_ui_required": False}
+                if storage_required:
+                    accepted["storage_internal_mounted"] = True
                 row.update(status="pass", reason="One identical PID across the package query and full two-second window")
             except Blocked as error:
                 last_reason = str(error)
@@ -613,6 +684,9 @@ class Smoke:
                 row.update(status="error", reason=f"{type(error).__name__}: {error}")
                 raise
             finally:
+                storage_file = self.output / files["storage-volumes"] if "storage-volumes" in files else None
+                row["storage_volumes_raw"] = (storage_file.read_text(encoding="utf-8", errors="replace")
+                                               if storage_file and storage_file.is_file() else None)
                 for name, position in (("system-server-before", "before"), ("system-server-after", "after")):
                     path = self.output / files[name] if name in files else None
                     raw = path.read_text(encoding="utf-8", errors="replace") if path and path.is_file() else None
@@ -865,9 +939,11 @@ class Smoke:
         # Recover through the normal exported Settings activity if a picker/dialog blocked later checks.
         try:
             self.open_settings()
-        except AppAnr:
+        except (AppAnr, SettingsBackBlocked):
             raise
         except (Blocked, AssertionError):
+            if self.summary["settings_back_recoveries"]:
+                raise
             self.adb("shell", "input", "keyevent", "KEYCODE_BACK", check=False)
             self.open_settings()
         _, node = self.seek("Enable diagnostics", "disable", direction="up")
@@ -1016,6 +1092,8 @@ def main():
                         help="Fresh owned test devices only: at most two normal Wait taps on exact observed System UI/process-system ANR dialogs; never Close app or a Pine/unknown title")
     parser.add_argument("--collect-system-last-anr-traces", action="store_true",
                         help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace and retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated")
+    parser.add_argument("--require-ready-storage", action="store_true",
+                        help="Fresh job-owned AVDs only: require sm list-volumes all to report internal private mounted within the original readiness deadline; this does not prove FUSE or install readiness")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_commit):
         parser.error("--expected-commit must be a full lowercase 40-character Git commit")

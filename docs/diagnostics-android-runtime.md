@@ -282,6 +282,27 @@ Generic text, ANR identities, JSON/schema, boolean and ZIP checks remain strict.
 Twenty-two controlled subprocess tests passed, including real method paths for
 multi-column listings, all-caps actions and negative button identities.
 
+The next observer additionally recognizes the exact own-package Search Locations
+toolbar/list/Add/navigation controls before sending at most one ordinary Back
+while waiting for Settings. It records the source XML and command; a persistent
+page or late/failed Back remains blocked. Pine ANR classification still runs
+first, and cleanup cannot silently send another recovery Back. No Add/picker
+action is taken. This addresses a page observed in an earlier real Ubuntu run;
+the reason that page was entered remains unproved.
+
+A default-off `--require-ready-storage` option is enabled only by the fresh CI
+wrapper. It requires the ordinary
+[`sm list-volumes all` enumeration](https://github.com/aosp-mirror/platform_frameworks_base/blob/android15-release/cmds/sm/src/com/android/commands/sm/Sm.java#L126-L148)
+to report the internal private volume mounted, within the original readiness
+deadline and before the unchanged PID continuity check. Raw responses, refusals
+and late results are retained. The platform
+[`getVolumes` method](https://github.com/aosp-mirror/platform_frameworks_base/blob/android15-release/services/core/java/com/android/server/StorageManagerService.java#L4051-L4059)
+copies its existing volume table. Its
+[internal volume is a mounted stub](https://github.com/aosp-mirror/platform_frameworks_base/blob/android15-release/services/core/java/com/android/server/StorageManagerService.java#L1068-L1075),
+so this proves service response, not FUSE or installation readiness. No mount,
+format, root or security command is used. Twenty-seven controlled smoke tests
+passed locally after these changes; actual APK checks remain separate.
+
 The default-off broader failure-evidence flag additionally attempts a bounded
 `dumpsys dropbox --print data_app_anr`. This prints retained entries of that tag,
 not a Pine package filter; entries may be old, missing or truncated. It requests

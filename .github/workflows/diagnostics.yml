@@ -91,3 +91,35 @@ jobs:
         with:
           name: diagnostics-jvm-reports
           path: app/build/reports/tests/
+
+  android-runtime:
+    name: Android runtime attempt
+    needs: debug-apk
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools emulator
+      - name: Official Android image
+        run: sdkmanager 'system-images;android-30;google_apis;x86_64'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pine-diagnostics-debug-${{ github.event.pull_request.head.sha || github.sha }}
+          path: runtime-apk
+      - name: Attempt actual ARM64 APK through official Android native translation
+        run: bash tools/tests/attempt-android-runtime.sh runtime-apk/app-full-debug.apk '${{ github.event.pull_request.head.sha || github.sha }}' runtime-evidence
+      - name: Runtime evidence (includes blocked attempts)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pine-android-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: runtime-evidence/

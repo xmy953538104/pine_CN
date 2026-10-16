@@ -32,7 +32,82 @@ function Expect-Failure([string]$mode, [string]$expected, [string]$selectedSeria
     }
     Assert $caught "Expected failure for $mode containing $expected"
 }
+function Show-WindowsClosedOutputProbe {
+    # Distinguish a live pipe writer from a reader task that missed native EOF.
+    # This supplements, and does not replace, the collector's EOF assertions.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PineAdbPipeProbe {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool PeekNamedPipe(IntPtr pipe, IntPtr buffer, uint size,
+        IntPtr bytesRead, out uint available, IntPtr bytesLeft);
+}
+'@
+    $savedPid = $env:PINE_FAKE_ADB_PID
+    $savedClosed = $env:PINE_FAKE_ADB_CLOSED
+    $env:PINE_FAKE_ADB_PID = Join-Path $temp 'probe-pid.txt'
+    $env:PINE_FAKE_ADB_CLOSED = Join-Path $temp 'probe-closed.txt'
+    $env:PINE_FAKE_ADB_MODE = 'closed-output'
+    $probe = New-Object System.Diagnostics.Process
+    try {
+        $probe.StartInfo.FileName = $fake
+        $probe.StartInfo.Arguments = '-s test-device logcat -v raw PineDiag:V *:S'
+        $probe.StartInfo.UseShellExecute = $false
+        $probe.StartInfo.CreateNoWindow = $true
+        $probe.StartInfo.RedirectStandardOutput = $true
+        $probe.StartInfo.RedirectStandardError = $true
+        $probe.StartInfo.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $probe.StartInfo.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
+        [void]$probe.Start()
+        # Expose the read handle before starting async reads, avoiding any
+        # FileStream flush/position synchronization while a read is pending.
+        $readHandle = $probe.StandardOutput.BaseStream.SafeFileHandle.DangerousGetHandle()
+        $errors = $probe.StandardError.ReadToEndAsync()
+        $limit = [DateTime]::UtcNow.AddSeconds(8)
+        $lastFixtureLineSeen = $false
+        $received = 0
+        $read = $null
+        while ([DateTime]::UtcNow -lt $limit) {
+            $read = $probe.StandardOutput.ReadLineAsync()
+            while (-not $read.IsCompleted -and [DateTime]::UtcNow -lt $limit) { Start-Sleep -Milliseconds 50 }
+            if (-not $read.IsCompleted -or $null -eq $read.Result) { break }
+            $received++
+            if ($read.Result -ceq $fixtureLines[$fixtureLines.Length - 1]) { $lastFixtureLineSeen = $true; break }
+        }
+        while (-not (Test-Path $env:PINE_FAKE_ADB_CLOSED) -and -not $probe.HasExited -and [DateTime]::UtcNow -lt $limit) { Start-Sleep -Milliseconds 50 }
+        [uint32]$available = 0
+        $peek = $false
+        $peekError = -1
+        if ($lastFixtureLineSeen) {
+            # Peek can block behind a pending synchronous ReadFile. All previous
+            # line tasks are complete here; inspect the pipe before asking for EOF.
+            $peek = [PineAdbPipeProbe]::PeekNamedPipe($readHandle, [IntPtr]::Zero, 0, [IntPtr]::Zero, [ref]$available, [IntPtr]::Zero)
+            $peekError = if ($peek) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
+            $read = $probe.StandardOutput.ReadLineAsync()
+            Start-Sleep -Milliseconds 200
+        }
+        $marker = if (Test-Path $env:PINE_FAKE_ADB_CLOSED) { [IO.File]::ReadAllText($env:PINE_FAKE_ADB_CLOSED) } else { '' }
+        $hasResult = $read -and $read.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion
+        $diagnostic = [ordered]@{
+            powershell = $PSVersionTable.PSVersion.ToString(); clr = [Environment]::Version.ToString()
+            pid = $probe.Id; marker = $marker; exited = $probe.HasExited
+            receivedLines = $received; lastFixtureLineSeen = $lastFixtureLineSeen
+            stdoutTask = [string]$read.Status; stderrTask = [string]$errors.Status
+            stdoutResultIsNull = if ($hasResult) { $null -eq $read.Result } else { $null }
+            stdoutResultType = if ($hasResult -and $null -ne $read.Result) { $read.Result.GetType().FullName } else { '' }
+            peekSucceeded = $peek; peekError = $peekError; available = $available
+        }
+        Write-Host ('WINDOWS CLOSED-OUTPUT PROBE ' + ($diagnostic | ConvertTo-Json -Compress))
+    } finally {
+        try { if (-not $probe.HasExited) { $probe.Kill(); [void]$probe.WaitForExit(2000) } } catch { }
+        $probe.Dispose()
+        $env:PINE_FAKE_ADB_PID = $savedPid
+        $env:PINE_FAKE_ADB_CLOSED = $savedClosed
+    }
+}
 try {
+    if ($isWindowsHost) { Show-WindowsClosedOutputProbe }
     $env:PINE_FAKE_ADB_MODE = 'multiple'
     $listOutput = Join-Path $temp 'list-only'
     & $collector -AdbPath $fake -ListDevices -NonInteractive -OutputDirectory $listOutput | Out-Null

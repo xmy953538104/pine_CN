@@ -2,6 +2,7 @@
 package emu.skyline.diagnostics
 
 import android.app.Application
+import emu.skyline.R
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -9,11 +10,30 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowApplication
+import org.xmlpull.v1.XmlPullParser
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, manifest = Config.NONE, sdk = [29])
 class DiagnosticsProcessTest {
+    @Test fun settingsSearchCanTraverseDiagnosticsEntryAsCategory() {
+        // SettingsActivity's search traverses every root item as a category.
+        // A standalone diagnostic Preference here used to crash that search.
+        val parser = RuntimeEnvironment.getApplication().resources.getXml(R.xml.app_preferences)
+        var foundEntry = false
+        parser.use {
+            while (it.next() != XmlPullParser.END_DOCUMENT) {
+                if (it.eventType != XmlPullParser.START_TAG) continue
+                if (it.depth == 2) assertEquals("PreferenceCategory", it.name)
+                if (it.getAttributeValue("http://schemas.android.com/apk/res/android", "key") == "developer_diagnostics") {
+                    assertEquals(3, it.depth)
+                    foundEntry = true
+                }
+            }
+        }
+        assertTrue("Diagnostics entry must be reachable by settings search", foundEntry)
+    }
+
     @Test fun androidProcessNamesUseSeparateFixedWriterDirectories() {
         val context = RuntimeEnvironment.getApplication()
         ShadowApplication.setProcessName("io.github.pine.emu")

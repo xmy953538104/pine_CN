@@ -60,6 +60,8 @@ jobs:
           ln -s /usr/bin/ninja .
 
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install CMake & Android NDK
         run: sdkmanager "cmake;${{ env.CMAKE_VERSION }}" "ndk;${{ env.NDK_VERSION }}" "platforms;android-35"

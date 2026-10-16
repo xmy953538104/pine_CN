@@ -24,11 +24,16 @@ if ($isWindowsHost) {
     $setup = Join-Path $visualStudio 'VC/Auxiliary/Build/vcvars64.bat'
     $source = Join-Path $PSScriptRoot 'fake-adb-closed-output.c'
     $object = Join-Path $temp 'fake-adb-closed-output.obj'
+    $ctrlcConsole = Join-Path $temp 'ctrlc-console.exe'
+    $ctrlcSource = Join-Path $PSScriptRoot 'ctrlc-console.c'
+    $ctrlcObject = Join-Path $temp 'ctrlc-console.obj'
     $buildBatch = Join-Path $temp 'build-native.cmd'
     [IO.File]::WriteAllLines($buildBatch, @(
         '@echo off', '@chcp 65001 >nul', ('call "{0}" >nul' -f $setup),
         'if errorlevel 1 exit /b %errorlevel%',
         ('cl.exe /nologo /Od /W4 /WX /GS- /Zl /TC /Fo"{0}" "{1}" /link /NODEFAULTLIB /ENTRY:FakeAdbMain /SUBSYSTEM:CONSOLE /OUT:"{2}" kernel32.lib' -f $object, $source, $closedOutputAdb),
+        'if errorlevel 1 exit /b %errorlevel%',
+        ('cl.exe /nologo /Od /W4 /WX /GS- /Zl /TC /Fo"{0}" "{1}" /link /NODEFAULTLIB /ENTRY:CtrlCTestMain /SUBSYSTEM:WINDOWS /OUT:"{2}" kernel32.lib' -f $ctrlcObject, $ctrlcSource, $ctrlcConsole),
         'exit /b %errorlevel%'
     ), (New-Object System.Text.UTF8Encoding($false)))
     $buildProcess = New-Object System.Diagnostics.Process
@@ -42,11 +47,11 @@ if ($isWindowsHost) {
         [void]$buildProcess.Start()
         $buildOutput = $buildProcess.StandardOutput.ReadToEndAsync()
         $buildError = $buildProcess.StandardError.ReadToEndAsync()
-        if (-not $buildProcess.WaitForExit(60000)) { throw 'Native fake ADB compilation timed out' }
+        if (-not $buildProcess.WaitForExit(60000)) { throw 'Native ADB test helper compilation timed out' }
         if ($buildProcess.ExitCode -ne 0) {
             $outputText = if ($buildOutput.Wait(2000)) { $buildOutput.Result } else { '[compiler stdout did not close]' }
             $errorText = if ($buildError.Wait(2000)) { $buildError.Result } else { '[compiler stderr did not close]' }
-            throw ('Native fake ADB compilation failed: ' + $outputText + $errorText)
+            throw ('Native ADB test helper compilation failed: ' + $outputText + $errorText)
         }
     } finally {
         try { if (-not $buildProcess.HasExited) { $buildProcess.Kill(); [void]$buildProcess.WaitForExit(2000) } } catch { }
@@ -59,6 +64,88 @@ if ($isWindowsHost) {
     $closedOutputAdb = $fake
 }
 function Assert([bool]$condition, [string]$message) { if (-not $condition) { throw $message } }
+function Read-SharedText([string]$Path, [IO.FileShare]$Share = [IO.FileShare]::ReadWrite) {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $Share)
+    $reader = $null
+    try {
+        # Strict UTF8, without BOM detection silently changing the encoding.
+        $reader = New-Object System.IO.StreamReader($stream, (New-Object System.Text.UTF8Encoding($false, $true)), $false)
+        return $reader.ReadToEnd()
+    } finally {
+        if ($reader) { $reader.Dispose() } else { $stream.Dispose() }
+    }
+}
+function Test-WindowsConsoleCtrlC {
+    $consoleOutput = Join-Path $temp 'console-ctrlc'
+    $consolePid = Join-Path $temp 'console-adb-pid.txt'
+    $ready = Join-Path $temp 'console-ready.txt'
+    $report = Join-Path $temp 'console-report.txt'
+    $powershellExecutable = (Get-Process -Id $PID).Path
+    $helper = New-Object System.Diagnostics.Process
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $helper.StartInfo.FileName = $ctrlcConsole
+        $helper.StartInfo.UseShellExecute = $false
+        # The GUI subsystem helper has no inherited console. It creates its own
+        # PowerShell console; the native membership check guards the broadcast.
+        $helper.StartInfo.EnvironmentVariables['PINE_CTRLC_EXE'] = $powershellExecutable
+        $helper.StartInfo.EnvironmentVariables['PINE_CTRLC_COMMAND'] = '"{0}" -NoLogo -NoProfile -File "{1}" -AdbPath "{2}" -NonInteractive -OutputDirectory "{3}"' -f $powershellExecutable, [IO.Path]::GetFullPath($collector), $fake, $consoleOutput
+        $helper.StartInfo.EnvironmentVariables['PINE_CTRLC_READY'] = $ready
+        $helper.StartInfo.EnvironmentVariables['PINE_CTRLC_REPORT'] = $report
+        $helper.StartInfo.EnvironmentVariables['PINE_FAKE_ADB_MODE'] = 'normal'
+        $helper.StartInfo.EnvironmentVariables['PINE_FAKE_ADB_PID'] = $consolePid
+        $helper.StartInfo.EnvironmentVariables['PINE_FAKE_ADB_ARGS'] = Join-Path $temp 'console-adb-args.txt'
+        Write-Host ('WINDOWS CTRL_C HOST executable={0}; powershell={1}; clr={2}' -f $powershellExecutable, $PSVersionTable.PSVersion, [Environment]::Version)
+        [void]$helper.Start()
+        do {
+            $files = @(Get-ChildItem $consoleOutput -Filter '*.jsonl' -ErrorAction SilentlyContinue)
+            $records = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            foreach ($file in $files) {
+                try {
+                    foreach ($line in ((Read-SharedText $file.FullName) -split '\r?\n')) {
+                        if ($fixtureLines -ccontains $line) { [void]$records.Add($line) }
+                    }
+                } catch [IO.IOException], [Text.DecoderFallbackException] { }
+            }
+            if ((Test-Path $consolePid) -and $files.Count -eq 3 -and $records.Count -eq $fixtureLines.Length) { break }
+            if ($helper.HasExited) { break }
+            Start-Sleep -Milliseconds 50
+        } while ($elapsed.Elapsed.TotalSeconds -lt 15)
+        Assert ((Test-Path $consolePid) -and $files.Count -eq 3 -and $records.Count -eq $fixtureLines.Length -and -not $helper.HasExited) ('Console Ctrl+C fixture not ready: files={0}; completeRecords={1}/{2}; helperExited={3}' -f $files.Count, $records.Count, $fixtureLines.Length, $helper.HasExited)
+        $fakePid = [int][IO.File]::ReadAllText($consolePid)
+        Write-Host ('WINDOWS CTRL_C READY files={0}; completeRecords={1}/{2}; fakeAdbPid={3}' -f $files.Count, $records.Count, $fixtureLines.Length, $fakePid)
+        # Atomic marker: only this suite authorizes the single signal, after
+        # reading every original sink record from all still-open session files.
+        [IO.File]::WriteAllText(($ready + '.tmp'), [string]$fakePid, (New-Object System.Text.UTF8Encoding($false)))
+        [IO.File]::Move(($ready + '.tmp'), $ready)
+        $remaining = [Math]::Max(1, 35000 - [int]$elapsed.Elapsed.TotalMilliseconds)
+        Assert ($helper.WaitForExit($remaining)) 'Console Ctrl+C helper exceeded the 35-second overall bound'
+        $nativeReport = Read-SharedText $report
+        Assert ($helper.ExitCode -eq 0 -and $nativeReport -match '(?m)^result=PASS\r?$') 'Native console Ctrl+C delivery, isolation or process cleanup failed'
+        $files = @(Get-ChildItem $consoleOutput -Filter '*.jsonl')
+        Assert ($files.Count -eq 3) 'Console Ctrl+C changed the native session file count'
+        $lines = @($files | ForEach-Object {
+            # Exclusive access also checks that no surviving writer retains a file.
+            (Read-SharedText $_.FullName ([IO.FileShare]::None)) -split '\r?\n' | Where-Object { $_.Length -gt 0 }
+        })
+        Assert ($lines.Count -eq $fixtureLines.Length) 'Console Ctrl+C lost or duplicated a native sink record'
+        $distinct = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($line in $lines) {
+            Assert ($fixtureLines -ccontains $line) 'Console Ctrl+C altered native UTF8 JSONL or added a BOM'
+            [void]$distinct.Add($line)
+        }
+        Assert ($distinct.Count -eq $fixtureLines.Length) 'Console Ctrl+C did not retain every native sink record'
+        $events = @($lines | ForEach-Object { $_ | ConvertFrom-Json })
+        Assert (@($events | Where-Object { $_.fields.message -eq $expectedUnicode }).Count -eq 1) 'Console Ctrl+C did not preserve the complete Unicode event'
+        Write-Host 'PASS: Windows CTRL_C_EVENT=0 in an isolated console, PowerShell exit within 10s, original fake ADB handle reaped before Job closure, complete UTF8 JSONL and exclusive output access'
+    } finally {
+        # Killing the helper closes only its private Job. This is failure cleanup
+        # and can never turn the failed assertion into a passing test.
+        try { if (-not $helper.HasExited) { $helper.Kill(); [void]$helper.WaitForExit(2000) } } catch { }
+        if (Test-Path $report) { Write-Host ("WINDOWS CTRL_C CONSOLE PROBE`n" + (Read-SharedText $report)) }
+        $helper.Dispose()
+    }
+}
 function Expect-Failure([string]$mode, [string]$expected, [string]$selectedSerial = '', [string]$failureAdbPath = $fake) {
     $env:PINE_FAKE_ADB_MODE = $mode
     $caught = $false
@@ -285,6 +372,8 @@ try {
     Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Cancellation leaked ADB'
     $cancelEvents = @(Get-ChildItem $cancelOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName, [Text.Encoding]::UTF8) } | ForEach-Object { $_ | ConvertFrom-Json })
     Assert (@($cancelEvents | Where-Object { $_.fields.message -eq $expectedUnicode }).Count -eq 1) 'Cancellation did not preserve a complete UTF8 event'
+    if ($isWindowsHost) { Test-WindowsConsoleCtrlC }
+    else { Write-Host 'SKIP: Windows CTRL_C_EVENT console delivery requires Windows console APIs; pipeline cancellation was tested separately' }
     Write-Host 'PASS: actual native sink JSONL replay, discovery/devices/errors, base-title and unknown-context fallback filters, UTF8/BOM, session grouping/overflow, deadline and cancellation cleanup'
 } finally {
     Remove-Item $temp -Recurse -Force

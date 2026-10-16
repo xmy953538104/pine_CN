@@ -13,10 +13,34 @@ concurrency:
 jobs:
   native:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Temporary readback of the exact failed APK attempt while the cloud host
+      # cannot materialize the artifact transfer URL. Remove after diagnosis.
+      - name: Recover prior Android crash evidence
+        if: github.event.pull_request.number == 2
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 38939148938
+          name: pine-android-runtime-bdbe5036b480e568f95a95c5236f33abf1a5def2
+          path: prior-runtime
+      - name: Print prior APK crash trace
+        if: github.event.pull_request.number == 2
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          for name in ('runtime-logcat.txt', 'crash-buffer.txt', 'settings-launch.txt'):
+              path = pathlib.Path('prior-runtime', name)
+              if path.is_file():
+                  text = path.read_text(errors='replace')
+                  print(name + ':\n' + text[:64000])
+          PY
       - name: Native diagnostic tests
         run: |
           bash tools/tests/run-native-diagnostics.sh
@@ -99,7 +123,7 @@ jobs:
     needs: debug-apk
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
         with:
@@ -134,6 +158,10 @@ jobs:
               path = root / name
               if path.is_file():
                   print(name + ': ' + path.read_text(errors='replace')[-4096:])
+          for name in ('runtime-logcat.txt', 'crash-buffer.txt'):
+              path = root / name
+              if path.is_file():
+                  print(name + ':\n' + path.read_text(errors='replace')[:48000])
           for name in ('android-framework-logcat.txt', 'android-logcat.txt'):
               path = root / name
               if path.is_file():

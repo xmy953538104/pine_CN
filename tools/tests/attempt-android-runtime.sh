@@ -33,7 +33,9 @@ cleanup() {
 trap cleanup EXIT
 ready=false
 started=$SECONDS
-while (( SECONDS - started < 1200 )); do
+# An observed official API34 first boot spent over 18 minutes in system package
+# initialization under software acceleration, without a framework restart.
+while (( SECONDS - started < 1800 )); do
   if ! kill -0 "$emulator_pid" 2>/dev/null; then break; fi
   boot=$(timeout 12 "$adb" -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') || boot=''
   if [[ "$boot" == 1 ]]; then ready=true; break; fi
@@ -45,7 +47,7 @@ import hashlib,json,pathlib,sys
 apk,commit,out,accel=sys.argv[1:]
 with open(apk,'rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
 report={'schema':1,'commit':commit,'apk_sha256':digest,'status':'environment_blocked','physical_arm64_verified':False,
-        'reason':'Official Android emulator did not complete boot within 1200s. No Pine installation or UI success is claimed.',
+        'reason':'Official Android emulator did not complete boot within 1800s. No Pine installation or UI success is claimed.',
         'acceleration':accel,'evidence':['emulator.log','host.txt','accel-check.txt','android-logcat.txt']}
 pathlib.Path(out,'runtime-report.json').write_text(json.dumps(report,indent=2)+'\n')
 PY

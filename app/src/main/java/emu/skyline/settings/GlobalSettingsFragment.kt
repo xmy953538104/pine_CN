@@ -47,6 +47,11 @@ class GlobalSettingsFragment : PreferenceFragmentCompat() {
         addPreferencesFromResource(R.xml.input_preferences)
         addPreferencesFromResource(R.xml.credits_preferences)
 
+        findPreference<Preference>("developer_diagnostics")?.setOnPreferenceClickListener {
+            startActivity(Intent(requireContext(), emu.skyline.diagnostics.DiagnosticsActivity::class.java))
+            true
+        }
+
         // Re-launch the app if Material You is toggled
         findPreference<Preference>("use_material_you")?.setOnPreferenceChangeListener { _, newValue ->
             val isMaterialYouEnabled = newValue as Boolean

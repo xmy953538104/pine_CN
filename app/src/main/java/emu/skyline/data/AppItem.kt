@@ -27,7 +27,9 @@ class AppItem(meta : AppEntry, private val updates : List<BaseAppItem>, private 
     }
 
     fun getEnabledUpdate() : BaseAppItem? {
-        return updates.firstOrNull { it.enabled }
+        val selected = updates.firstOrNull { it.enabled }
+        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED") { "entry=AppItem policy=first_enabled title_id=$titleId candidates=${updates.size} enabled=${updates.count { it.enabled }} selected_title_id=${selected?.titleId} version=${selected?.titleVersion}" }
+        return selected
     }
 
     fun getVersion() : String? {

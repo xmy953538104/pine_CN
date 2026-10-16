@@ -271,6 +271,7 @@ class MainActivity : AppCompatActivity() {
                     if ((appEntry as AppEntry).romType == RomType.DLC) dlcs.add(BaseAppItem(appEntry as AppEntry, true))
                     if ((appEntry as AppEntry).romType == RomType.Update) updates.add(BaseAppItem(appEntry as AppEntry, true))
                 }
+                emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_ASSOCIATION") { "title_id=${entry.titleId} update_count=${updates.size} dlc_count=${dlcs.size} policy=all_enabled_first_update" }
                 add(AppItem(entry, updates, dlcs).toViewItem())
             }
         }

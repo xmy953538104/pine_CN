@@ -316,6 +316,7 @@ class AppDialog : BottomSheetDialogFragment() {
 
             val currentContents = contents.loadContents().toMutableList()
             val isDuplicate = currentContents.any { (it as AppEntry).uri == newContent.appEntry.uri }
+            emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_IMPORT_RESULT") { "title_id=${newContent.appEntry.titleId} parent_title_id=${newContent.appEntry.parentTitleId} version=${newContent.appEntry.version} type=${newContent.appEntry.romType} result=${newContent.result} duplicate=$isDuplicate expected=$expectedContentType parent_match=${newContent.appEntry.parentTitleId == item.titleId}" }
             if (!isDuplicate && newContent.result == LoaderResult.Success && newContent.appEntry.romType == expectedContentType && newContent.appEntry.parentTitleId == item.titleId) {
                 currentContents.add(newContent.appEntry)
                 contents.saveContents(currentContents)

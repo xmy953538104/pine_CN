@@ -290,6 +290,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         shouldFinish = true
         returnToMain = intent.getBooleanExtra(ReturnToMainTag, false)
 
+        emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED") { "title_id=${item.titleId} format=${item.format}" }
         val rom = item.uri
         val romType = item.format.ordinal
 
@@ -306,6 +307,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             updateFd = contentResolver.openFileDescriptor(updateUri, "r")!!.detachFd()
         }
 
+        emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED") { "title_id=${item.titleId} update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
         GpuDriverHelper.ensureFileRedirectDir(this)
         emulationThread = Thread {
             executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets)
@@ -333,17 +335,23 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         val romFile = RomFile(this, romFormat, uri, EmulationSettings.global.systemLanguage)
 
         item = AppItem(romFile.takeIf { it.valid }!!.appEntry, emptyList(), emptyList())
-        
+
         val contents = ContentsHelper(this@EmulationActivity)
 
+        var selectedUpdateTitle: String? = null
         contents.loadContents().filter { appEntry ->
             (appEntry as AppEntry).parentTitleId == item.titleId
         }.forEach { appEntry ->
             (appEntry as AppEntry).uri?.let { uri: Uri ->
                 if ((appEntry as AppEntry).romType == RomType.DLC) dlcUris.add(uri)
-                if ((appEntry as AppEntry).romType == RomType.Update) updateUri = uri            
+                if ((appEntry as AppEntry).romType == RomType.Update) {
+                    emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_CANDIDATE") { "entry=uri_fallback policy=last_match title_id=${appEntry.titleId} overwrites=${updateUri != Uri.EMPTY}" }
+                    selectedUpdateTitle = appEntry.titleId
+                    updateUri = uri
+                }
             }
         }
+        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED") { "entry=uri_fallback policy=last_match base_title_id=${item.titleId} selected_title_id=$selectedUpdateTitle selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
     }
 
     @SuppressLint("SetTextI18n", "ClickableViewAccessibility")
@@ -358,9 +366,9 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         window.attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         inputHandler = InputHandler(inputManager, emulationSettings)
         setContentView(binding.root)
-        
+
         binding.drawerLayout.setScrimColor(Color.TRANSPARENT)
-        
+
         builtinVibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
             vibratorManager.defaultVibrator
@@ -429,7 +437,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         if (emulationSettings.perfStats) enablePerfStats(true)
         enableThermalIndicator(emulationSettings.perfStats)
         enableDynamicResolution(emulationSettings.enableDynamicResolution)
-        
+
         window.setSustainedPerformanceMode(emulationSettings.enableSustainedPerf)
         force60HzRefreshRate(!emulationSettings.maxRefreshRate)
         getSystemService<DisplayManager>()?.registerDisplayListener(this, null)
@@ -785,7 +793,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         val temperature = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
         return temperature / 10.0f  // 系统给的是0.1°C，除10转成正常°C，如48.0
     }
-    
+
     private fun updateStatsDisplay() {
     binding.perfStats.apply {
         if (isStatsRunnableExist) {

@@ -1,5 +1,6 @@
 <androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
+    <Preference android:key="developer_diagnostics" android:title="Developer diagnostics / 开发者诊断" android:summary="Sessions, structured logs and safe export" />
     <PreferenceCategory
         android:key="category_content"
         android:title="@string/content">

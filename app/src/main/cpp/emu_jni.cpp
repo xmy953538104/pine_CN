@@ -2,6 +2,9 @@
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <string>
+#include <algorithm>
+#include "skyline/diagnostics/diagnostics.h"
+#include "skyline/nce.h"
 #include <csignal>
 #include <pthread.h>
 #include <android/asset_manager_jni.h>
@@ -110,6 +113,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     perfetto::Tracing::Initialize(args);
     perfetto::TrackEvent::Register();
 
+    skyline::diagnostics::Stage("JNI_ENTERED");
     try {
         skyline::JniString nativeLibraryPath(env, nativeLibraryPathJstring);
         skyline::JniString privateAppFilesPath{env, privateAppFilesPathJstring};
@@ -125,6 +129,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
             GetTimeZoneName(),
             std::make_shared<skyline::vfs::AndroidAssetFileSystem>(AAssetManager_fromJava(env, assetManager))
         )};
+        skyline::diagnostics::Stage("OS_INITIALIZED");
         OsWeak = os;
         GpuWeak = os->state.gpu;
         AudioWeak = os->state.audio;
@@ -136,10 +141,15 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
 
         os->Execute(romFd, dlcFdsVector, updateFd, static_cast<skyline::loader::RomFormat>(romType));
     } catch (std::exception &e) {
+        if (!dynamic_cast<const skyline::nce::NCE::ExitException *>(&e))
+            skyline::diagnostics::Emit("exception", "UNHANDLED_CPP_EXCEPTION", {{"message", e.what()}}, "ERROR");
         LOGENF("An uncaught exception has occurred: {}", e.what());
     } catch (const skyline::signal::SignalException &e) {
+        if (e.signal != SIGINT)
+            skyline::diagnostics::Emit("exception", "NATIVE_SIGNAL_EXCEPTION", {{"message", e.what()}}, "ERROR");
         LOGENF("An uncaught signal exception has occurred: {}", e.what());
     } catch (...) {
+        skyline::diagnostics::Emit("exception", "UNKNOWN_EXCEPTION", {}, "ERROR");
         LOGENF("An unknown uncaught exception has occurred");
     }
 
@@ -294,4 +304,37 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_EmulationActivity_setAudioSin
 
 extern "C" JNIEXPORT void JNICALL Java_emu_skyline_EmulationActivity_setAnisotropicFilter(JNIEnv *env, jobject obj, jfloat jAnisotropy) {
     skyline::gpu::interconnect::preferredAnisotropy = static_cast<float>(jAnisotropy);
+}
+
+// Diagnostics lifecycle calls run only on normal Java threads, never signal handlers.
+extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_configureNative(
+    JNIEnv *env, jclass, jstring path, jboolean enabled, jboolean verbose, jint maxFiles, jstring session, jstring categories) {
+    try {
+    skyline::diagnostics::Stop();
+    if (!enabled) return false;
+    skyline::diagnostics::Config config;
+    config.directory = ConvertJStringToString(env, path);
+    config.sessionId = ConvertJStringToString(env, session);
+    config.verbose = verbose;
+    config.categories = ConvertJStringToString(env, categories);
+    config.maxFiles = static_cast<size_t>(std::clamp(maxFiles, 2, 8));
+    return skyline::diagnostics::Start(config);
+    } catch (...) { return false; }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitNative(
+    JNIEnv *env, jclass, jstring category, jstring event, jstring detail) {
+    try {
+    if (!skyline::diagnostics::Enabled()) return;
+    skyline::diagnostics::Emit(ConvertJStringToString(env, category), ConvertJStringToString(env, event),
+                               {{"detail", ConvertJStringToString(env, detail)}});
+    } catch (...) { /* Diagnostics must never change guest error propagation. */ }
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL Java_emu_skyline_diagnostics_Diagnostics_statusNative(JNIEnv *env, jclass) {
+    const auto stats = skyline::diagnostics::Stats();
+    const jlong values[] = {skyline::diagnostics::Enabled() ? 1 : 0, static_cast<jlong>(stats.written), static_cast<jlong>(stats.dropped), static_cast<jlong>(stats.diskErrors)};
+    auto result = env->NewLongArray(4);
+    if (result) env->SetLongArrayRegion(result, 0, 4, values);
+    return result;
 }

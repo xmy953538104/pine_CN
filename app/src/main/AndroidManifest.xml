@@ -25,6 +25,8 @@
         android:theme="@style/AppTheme"
         tools:ignore="GoogleAppIndexingWarning,UnusedAttribute">
 
+        <activity android:name=".diagnostics.DiagnosticsActivity" android:exported="false" />
+
         <profileable android:shell="true" />
 
         <activity

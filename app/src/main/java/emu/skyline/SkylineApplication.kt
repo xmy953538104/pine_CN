@@ -105,5 +105,7 @@ class SkylineApplication : Application() {
         super.onCreate()
         instance = this
         System.loadLibrary("skyline")
+        emu.skyline.diagnostics.Diagnostics.apply(this)
+        emu.skyline.diagnostics.Diagnostics.installExceptionObserver()
     }
 }

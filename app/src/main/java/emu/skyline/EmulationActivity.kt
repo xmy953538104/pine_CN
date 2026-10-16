@@ -263,9 +263,16 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             runOnUiThread {
                 if (shouldFinish) {
                     shouldFinish = false
-                    if (returnToMain)
-                        startActivity(Intent(applicationContext, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
-                    Process.killProcess(Process.myPid())
+                    lifecycleScope.launch {
+                        // Drain on an ordinary background thread before Android's
+                        // immediate process kill, which does not run C++ destructors.
+                        withContext(Dispatchers.IO) {
+                            emu.skyline.diagnostics.Diagnostics.finishSession()
+                        }
+                        if (returnToMain)
+                            startActivity(Intent(applicationContext, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
+                        Process.killProcess(Process.myPid())
+                    }
                 }
             }
         }
@@ -287,6 +294,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             }
         }
 
+        emu.skyline.diagnostics.Diagnostics.apply(this)
         shouldFinish = true
         returnToMain = intent.getBooleanExtra(ReturnToMainTag, false)
 
@@ -310,6 +318,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED") { "title_id=${item.titleId} update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
         GpuDriverHelper.ensureFileRedirectDir(this)
         emulationThread = Thread {
+            emu.skyline.diagnostics.Diagnostics.apply(this)
             executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets)
             returnFromEmulation()
         }
@@ -338,25 +347,16 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
         val contents = ContentsHelper(this@EmulationActivity)
 
-        var selectedUpdateTitle: String? = null
-        contents.loadContents().filter { appEntry ->
-            (appEntry as AppEntry).parentTitleId == item.titleId
-        }.forEach { appEntry ->
-            (appEntry as AppEntry).uri?.let { uri: Uri ->
-                if ((appEntry as AppEntry).romType == RomType.DLC) dlcUris.add(uri)
-                if ((appEntry as AppEntry).romType == RomType.Update) {
-                    emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_CANDIDATE") { "entry=uri_fallback policy=last_match title_id=${appEntry.titleId} overwrites=${updateUri != Uri.EMPTY}" }
-                    selectedUpdateTitle = appEntry.titleId
-                    updateUri = uri
-                }
-            }
-        }
-        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED") { "entry=uri_fallback policy=last_match base_title_id=${item.titleId} selected_title_id=$selectedUpdateTitle selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
+        val selection = emu.skyline.data.selectUriContent(item.titleId, contents.loadContents())
+        updateUri = selection.updateUri
+        dlcUris.addAll(selection.dlcUris)
+        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED") { "entry=uri_fallback policy=last_match base_title_id=${item.titleId} selected_title_id=${selection.updateTitleId} selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
     }
 
     @SuppressLint("SetTextI18n", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState : Bundle?) {
         super.onCreate(savedInstanceState)
+        emu.skyline.diagnostics.Diagnostics.apply(this)
         populateAppItem()
         emulationSettings = EmulationSettings.forEmulation(item.titleId ?: item.key())
 

@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include "skyline/diagnostics/diagnostics.h"
+#include "skyline/diagnostics/utf16.h"
 #include "skyline/nce.h"
 #include <csignal>
 #include <pthread.h>
@@ -62,12 +63,12 @@ static std::string GetTimeZoneName() {
 }
 
 std::string ConvertJStringToString(JNIEnv* env, jstring jStr) {
-    if (!jStr) return "";
-
-    const char* chars = env->GetStringUTFChars(jStr, nullptr);
-    std::string str(chars);
-    env->ReleaseStringUTFChars(jStr, chars);
-    return str;
+    if (!jStr || env->ExceptionCheck()) return {};
+    const auto length{std::min<jsize>(env->GetStringLength(jStr), 4096)};
+    std::vector<jchar> units(static_cast<size_t>(length));
+    if (length) env->GetStringRegion(jStr, 0, length, units.data());
+    if (env->ExceptionCheck()) return {};
+    return skyline::diagnostics::Utf16ToUtf8(units);
 }
 
 extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
@@ -160,6 +161,8 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     auto end{std::chrono::steady_clock::now()};
     LOGINF("Emulation has ended in {}ms", std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
 
+    skyline::diagnostics::Stage("EMULATION_ENDED");
+    skyline::diagnostics::Stop();
     skyline::AsyncLogger::Finalize(true);
     close(romFd);
 
@@ -318,6 +321,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_c
     config.verbose = verbose;
     config.categories = ConvertJStringToString(env, categories);
     config.maxFiles = static_cast<size_t>(std::clamp(maxFiles, 2, 8));
+    if (env->ExceptionCheck()) return false;
     return skyline::diagnostics::Start(config);
     } catch (...) { return false; }
 }
@@ -326,8 +330,12 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitN
     JNIEnv *env, jclass, jstring category, jstring event, jstring detail) {
     try {
     if (!skyline::diagnostics::Enabled()) return;
-    skyline::diagnostics::Emit(ConvertJStringToString(env, category), ConvertJStringToString(env, event),
-                               {{"detail", ConvertJStringToString(env, detail)}});
+    const auto categoryText{ConvertJStringToString(env, category)};
+    const auto eventText{ConvertJStringToString(env, event)};
+    const auto detailText{ConvertJStringToString(env, detail)};
+    if (!env->ExceptionCheck())
+        skyline::diagnostics::Emit(categoryText, eventText, {{"detail", detailText}},
+                                   eventText == "ANDROID_UNCAUGHT_EXCEPTION" ? "ERROR" : "INFO");
     } catch (...) { /* Diagnostics must never change guest error propagation. */ }
 }
 
@@ -337,4 +345,12 @@ extern "C" JNIEXPORT jlongArray JNICALL Java_emu_skyline_diagnostics_Diagnostics
     auto result = env->NewLongArray(4);
     if (result) env->SetLongArrayRegion(result, 0, 4, values);
     return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_flushNative(JNIEnv *, jclass) {
+    return skyline::diagnostics::Flush(250);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_stopNative(JNIEnv *, jclass) {
+    skyline::diagnostics::Stop();
 }

@@ -22,6 +22,7 @@ jobs:
           bash tools/tests/run-native-diagnostics.sh
           bash tools/tests/run-content-diagnostics.sh
           python3 tools/tests/test-preview-gates.py
+          python3 tools/tests/test-android-smoke-deadlines.py
   adb:
     runs-on: windows-latest
     steps:
@@ -95,15 +96,25 @@ jobs:
           path: app/build/reports/tests/
 
   android-runtime:
-    name: Android runtime attempt
+    name: Android runtime attempt (${{ matrix.runner }})
     needs: debug-apk
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # Standard runners are free for this public repository. Intel macOS offers
+    # an independent official Hypervisor.Framework probe without changing KVM
+    # permissions on Linux. ARM macOS hosted runners do not support nesting.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -127,7 +138,22 @@ jobs:
           root = pathlib.Path('runtime-evidence')
           report = root / 'runtime-report.json'
           if report.is_file():
-              print(json.dumps(json.loads(report.read_text()), ensure_ascii=False, sort_keys=True))
+              result = json.loads(report.read_text())
+              print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+              # Keep failed UI observations reviewable even when an artifact
+              # cannot be transferred from this execution environment.
+              if result.get('status') != 'verified':
+                  xml_names = []
+                  for check in result.get('checks', {}).values():
+                      if check.get('status') != 'pass':
+                          xml_names.extend(name for name in check.get('evidence', []) if name.endswith('.xml'))
+                  for name in list(dict.fromkeys(xml_names))[-6:]:
+                      path = root / name
+                      if path.is_file() and path.parent == root:
+                          print(name + ':\n' + path.read_text(errors='replace')[:16000])
+                  commands = root / 'commands.jsonl'
+                  if commands.is_file():
+                      print('Recent ADB observations:\n' + '\n'.join(commands.read_text(errors='replace').splitlines()[-20:])[-24000:])
           else:
               print('No runtime report was produced; no APK execution result is claimed.')
           for name in ('host.txt', 'accel-check.txt'):
@@ -138,7 +164,7 @@ jobs:
               path = root / name
               if path.is_file():
                   print(name + ':\n' + path.read_text(errors='replace')[:48000])
-          for name in ('android-framework-logcat.txt', 'android-logcat.txt'):
+          for name in ('android-framework-logcat.txt', 'android-install-logcat.txt', 'android-logcat.txt'):
               path = root / name
               if path.is_file():
                   lines = path.read_text(errors='replace').splitlines()
@@ -149,5 +175,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pine-android-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          name: pine-android-runtime-${{ runner.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: runtime-evidence/

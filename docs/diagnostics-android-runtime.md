@@ -14,11 +14,36 @@ different bridge. Its downloaded ZIP matched Google's manifest SHA1
 `fbadc774c989534a567e6af8fd16d2c00727b1f1d9cc778bf538d6b59ed9776d`.
 All three inspected decoder engines explicitly support `CNTFRQ_EL0`, supplying
 10,485,760 Hz. This removes the specific static rejection seen on Android30/34,
-so CI now attempts the unchanged ARM64 APK on Android36. This is a justified next
-runtime candidate, not an installation or UI pass. The exact new runtime report
-is authoritative. Image/CRC/ELF provenance is recorded under
+and justified attempting the unchanged ARM64 APK on Android36. Static instruction
+support is not an installation or UI pass. Each exact runtime report is
+authoritative. Image/CRC/ELF provenance is recorded under
 `/workspace/android-build/newer-bridge-evaluation`; independent instruction and
 decoder evidence is under `/workspace/android-build/evidence/cntfrq-translation`.
+
+**CI Android36 checkpoint, 2026-10-16 18:41 UTC:** source
+`bf34b9afb5c0e86c3fbdc1c8a7f54a2de1c97f30`, APK SHA256
+`4e8e3dd0a427d7791f9226aca670c590a9b443010d9b7cac7f1ae5e775f03c9f`,
+[run 38945644929 / runtime job 117126639270](https://github.com/xmy953538104/pine_CN/actions/runs/38945644929/job/117126639270).
+The official image booted in about 15 minutes. ABI/boot/package-manager checks
+passed with system-server PID 1846 stable during the short readiness observation.
+Actual `adb install` then exhausted its 300-second command budget (302.912 seconds
+including the preceding absence query). Its report is `environment_blocked`:
+2 checks passed, 16 blocked; no App launch, Settings, native-log or export pass.
+The [runtime artifact](https://github.com/xmy953538104/pine_CN/actions/runs/38945644929/artifacts/12066918720)
+preserves that outcome. A green Actions conclusion does not change it. The
+runner had `/dev/kvm`, but the official probe reported permission denied; software
+acceleration was used without modifying group, device or security permissions.
+Framework logs during installation show repeated other-system-app ANRs/restarts
+and slow service handling; these do not establish a Pine failure or a single
+installation root cause.
+
+The next workflow retains a finite 900-second CI installation budget and full
+installation-interval logcat. It also tries the same exact APK on standard
+`macos-15-intel`, using the official emulator's own acceleration probe. GitHub
+[documents this standard Intel runner as free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
+this repository is public. Hosted ARM macOS does not support nested virtualization,
+so it is not used. This alternative does not change Linux KVM permissions and is
+not assumed to succeed before its actual runtime report exists.
 
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
@@ -247,5 +272,12 @@ syntax, and an absent-APK failure-path check. That check produced exit 2,
 `environment_blocked`, 18 blocked checks and **zero ADB commands**. It is not an
 APK/UI test. The subsequent actual Android 30 installation attempts are recorded
 in the latest checkpoint above; Android 34 testing is a separate attempt.
+
+The offline `tools/tests/test-android-smoke-deadlines.py` regression also passed
+three tests covering five real controlled subprocess scenarios. It rejects late
+UI/session/native observations, bounds scrolling, and keeps a slow screenshot
+from replacing an already observed result. All five scenarios reject the old
+runner. These are fake-ADB deadline tests; they pass none of the 18 Android APK
+acceptance checks.
 
 Cleanup checkpoint, **2026-10-16 18:08 UTC**: only the verified owned Android 34 QEMU PID 45401 and full-logcat PID 46096 were stopped with SIGTERM; both reached exited/zombie state and emulator output records normal configuration/render-thread shutdown. The AVD and userdata remain intact, with no wipe or additional installation. Final properties and log tail were preserved before stopping. Those late properties reported `sys.boot_completed=1` and system-server start count 6; this later flag does not replace the earlier blocked strict report or establish any Pine UI/native pass. The last successful target-package absence query remains the one recorded at 17:59:04. Shutdown evidence is `/workspace/android-runtime/api34-final-shutdown.json`, `api34-final-shutdown-getprop.txt`, `api34-pre-shutdown-logcat-tail.txt`, and the final unfiltered `api34-final-stopped-logcat.txt` (8,517,713 bytes, SHA256 `aa552828aaa848ccb5dd6f19dc77ad6d18b76336f8d2ffe2a563a3fd96fe52fc`).

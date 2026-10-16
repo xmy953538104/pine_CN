@@ -14,7 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Native diagnostic tests
-        run: bash tools/tests/run-native-diagnostics.sh
+        run: |
+          bash tools/tests/run-native-diagnostics.sh
+          bash tools/tests/run-content-diagnostics.sh
   adb:
     runs-on: windows-latest
     steps:

@@ -2,6 +2,7 @@
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <cxxabi.h>
+#include <diagnostics/exception.h>
 #include <unistd.h>
 #include <common/signal.h>
 #include <common/trace.h>
@@ -107,6 +108,8 @@ namespace skyline::kernel::type {
                 Run();
             }
         } catch (const std::exception &e) {
+            if (!dynamic_cast<const nce::NCE::ExitException *>(&e))
+                diagnostics::Emit("exception", "CPP_EXCEPTION", {{"message", e.what()}, {"location", "KThread::ThreadEntrypoint"}}, "ERROR");
             LOGE("{}", e.what());
             if (id) {
                 signal::BlockSignal({SIGINT});
@@ -116,6 +119,7 @@ namespace skyline::kernel::type {
             std::longjmp(originalCtx, true);
         } catch (const signal::SignalException &e) {
             if (e.signal != SIGINT) {
+                diagnostics::SignalException(e.signal, "KThread::ThreadEntrypoint");
                 LOGE("{}", e.what());
                 if (id) {
                     signal::BlockSignal({SIGINT});

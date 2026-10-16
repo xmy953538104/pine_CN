@@ -2,6 +2,7 @@
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <fstream>
+#include <diagnostics/exception.h>
 #include <cxxabi.h>
 #include <linux/elf.h>
 #include "common/signal.h"
@@ -42,6 +43,7 @@ namespace skyline::nce {
             }
         } catch (const signal::SignalException &e) {
             if (e.signal != SIGINT) {
+                diagnostics::SignalException(e.signal, "NCE::SvcHandler", svc ? svc.name : "unimplemented");
                 LOGENF("{} (SVC: {})\nStack Trace:{}", e.what(), svc.name, state.loader->GetStackTrace(e.frames));
 
                 if (state.thread->id) {
@@ -61,6 +63,7 @@ namespace skyline::nce {
             abi::__cxa_end_catch();
             std::longjmp(state.thread->originalCtx, true);
         } catch (const exception &e) {
+            diagnostics::Emit("exception", "SVC_EXCEPTION", {{"message", e.what()}, {"location", "NCE::SvcHandler"}, {"svc", svc ? svc.name : "unimplemented"}}, "ERROR");
             LOGENF("{}\nStack Trace:{}", e.what(), state.loader->GetStackTrace(e.frames));
 
             if (state.thread->id) {
@@ -71,6 +74,8 @@ namespace skyline::nce {
             abi::__cxa_end_catch();
             std::longjmp(state.thread->originalCtx, true);
         } catch (const std::exception &e) {
+            if (!dynamic_cast<const ExitException *>(&e))
+                diagnostics::Emit("exception", "CPP_EXCEPTION", {{"message", e.what()}, {"location", "NCE::SvcHandler"}, {"svc", svc ? svc.name : "unimplemented"}}, "ERROR");
             if (svc)
                 LOGENF("{} (SVC: {})\nStack Trace:{}", e.what(), svc.name, state.loader->GetStackTrace());
             else
@@ -119,6 +124,7 @@ namespace skyline::nce {
             }
         } catch (const signal::SignalException &e) {
             if (e.signal != SIGINT) {
+                diagnostics::SignalException(e.signal, "NCE::HookHandler", hookedSymbol.prettyName);
                 LOGENF("{} (Hook: {})\nStack Trace:{}", e.what(), hookedSymbol.prettyName, state.loader->GetStackTrace(e.frames));
 
                 if (state.thread->id) {
@@ -130,6 +136,7 @@ namespace skyline::nce {
             abi::__cxa_end_catch();
             std::longjmp(state.thread->originalCtx, true);
         } catch (const exception &e) {
+            diagnostics::Emit("exception", "HOOK_EXCEPTION", {{"message", e.what()}, {"location", "NCE::HookHandler"}, {"hook", hookedSymbol.prettyName}}, "ERROR");
             LOGENF("{}\nStack Trace:{}", e.what(), state.loader->GetStackTrace(e.frames));
 
             if (state.thread->id) {
@@ -140,6 +147,8 @@ namespace skyline::nce {
             abi::__cxa_end_catch();
             std::longjmp(state.thread->originalCtx, true);
         } catch (const std::exception &e) {
+            if (!dynamic_cast<const ExitException *>(&e))
+                diagnostics::Emit("exception", "CPP_EXCEPTION", {{"message", e.what()}, {"location", "NCE::HookHandler"}, {"hook", hookedSymbol.prettyName}}, "ERROR");
             LOGENF("{} (Hook: {})\nStack Trace:{}", e.what(), hookedSymbol.prettyName, state.loader->GetStackTrace());
         }
     }

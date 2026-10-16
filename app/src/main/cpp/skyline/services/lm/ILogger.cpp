@@ -2,6 +2,8 @@
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <sstream>
+#include <charconv>
+#include <diagnostics/guest.h>
 #include "ILogger.h"
 #include "logger/logger.h"
 
@@ -99,6 +101,16 @@ namespace skyline::service::lm {
                     return AsyncLogger::LogLevel::Error;
             }
         }()};
+
+        if (diagnostics::Enabled()) {
+            char line[16]{};
+            const auto converted{std::to_chars(line, line + sizeof(line), logMessage.line)};
+            const auto level{data.level == LogLevel::Error || data.level == LogLevel::Critical ? "ERROR" :
+                             data.level == LogLevel::Warning ? "WARN" : data.level == LogLevel::Trace ? "DEBUG" : "INFO"};
+            diagnostics::GuestMessage(logMessage.message, "LogManager", level, logMessage.filename,
+                                      logMessage.line ? std::string_view(line, converted.ptr - line) : std::string_view{},
+                                      logMessage.function, logMessage.thread);
+        }
 
         std::ostringstream message;
         if (!logMessage.filename.empty())

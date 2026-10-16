@@ -2,6 +2,7 @@
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <os.h>
+#include <diagnostics/guest.h>
 #include <nce.h>
 #include <kernel/types/KProcess.h>
 #include <common/trace.h>
@@ -921,9 +922,10 @@ namespace skyline::kernel::svc {
     void OutputDebugString(const DeviceState &state, SvcContext &ctx) {
         auto string{span(reinterpret_cast<char *>(ctx.x0), ctx.x1).as_string()};
 
-        if (string.back() == '\n')
+        if (!string.empty() && string.back() == '\n')
             string.remove_suffix(1);
 
+        diagnostics::GuestMessage(string, "OutputDebugString");
         LOGI("{}", string);
         ctx.w0 = Result{};
     }

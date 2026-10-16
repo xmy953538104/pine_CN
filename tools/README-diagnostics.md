@@ -1,0 +1,56 @@
+# Pine diagnostics over ADB
+
+Use official Android SDK Platform-Tools. Enable USB debugging and authorize the
+computer on the unlocked device, or use Android's normal wireless debugging
+pair/connect flow. No root is needed. Enable Diagnostics in Pine first.
+
+Run from Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+.\tools\pine-diag.ps1 -ListDevices
+.\tools\pine-diag.ps1 -Serial YOUR_SERIAL
+.\tools\pine-diag.ps1 -Serial YOUR_SERIAL -SessionId SESSION_ID
+.\tools\pine-diag.ps1 -Serial YOUR_SERIAL -TitleId 0100751007ADA000
+```
+
+Use `-AdbPath C:\Android\platform-tools\adb.exe` if adb is not on PATH.
+Multiple devices prompt for a serial; `-NonInteractive` requires `-Serial` when
+multiple devices are present. Unauthorized/offline devices fail with an actionable
+message. Disconnects fail visibly; reconnect the device and rerun the collector.
+It never clears device logs or copies ADB credentials.
+
+The collector displays JSONL and writes UTF-8 files under `pine-diagnostics/`,
+named by UTC collection date/time and event session. `-OutputDirectory` selects
+another folder. Existing buffered logcat messages may be included; use a session
+filter to isolate a run. A Title ID filter excludes events without `title_id`,
+including session-level events. Session IDs are sanitized for filenames. After 32
+session files, additional sessions share an overflow file to bound open handles.
+
+Press Ctrl+C to flush/close files and stop the ADB child. `-DurationSeconds 60`
+provides a bounded capture. These workstation capture files are not rotated;
+choose a bounded capture duration when leaving the collector unattended.
+
+## Tests (no Android hardware or game content)
+
+```powershell
+powershell -NoProfile -File .\tools\tests\pine-diag.Tests.ps1
+pwsh -NoProfile -File .\tools\tests\pine-diag.Tests.ps1
+```
+
+Windows tests compile a small fake ADB with the OS .NET Framework compiler. On
+Linux, the test uses Python 3 for fake ADB. Tests cover multiple/no devices,
+unauthorized/offline devices, disconnects, filters, UTF-8 round-trip, retaining
+logs, finite capture cleanup and PowerShell pipeline cancellation. Cancellation
+exercises the engine's Ctrl+C stop/finally path, not Windows keyboard delivery.
+
+A POSIX pseudo-terminal test sends an actual Ctrl+C character, checks flushed
+UTF-8 and verifies the child exited:
+
+```sh
+python3 tools/tests/test-ctrlc.py
+# Set PINE_PWSH to an absolute pwsh path if needed.
+```
+
+For Windows keyboard acceptance, run the collector with a device, wait for an
+event, press Ctrl+C, verify the JSONL parses and no collector adb logcat process
+remains. Fake ADB tests do not demonstrate a real Android connection or APK launch.

@@ -40,7 +40,7 @@ object Diagnostics {
             }
         }
         active = runCatching {
-            configureNative(directory(context).absolutePath, enabled, prefs.getBoolean("verbose", false), prefs.getInt("files", 4), sessionId, categories)
+            configureNative(if (enabled) directory(context).absolutePath else "", enabled, prefs.getBoolean("verbose", false), prefs.getInt("files", 4), sessionId, categories)
         }.getOrDefault(false)
         signature = if (enabled && !active) "" else nextSignature
         if (active) event("lifecycle", "SESSION_METADATA") {

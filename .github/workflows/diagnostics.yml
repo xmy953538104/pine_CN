@@ -13,40 +13,10 @@ concurrency:
 jobs:
   native:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      # Temporary readback of the exact failed APK attempt while the cloud host
-      # cannot materialize the artifact transfer URL. Remove after diagnosis.
-      - name: Recover prior Android crash evidence
-        if: github.event.pull_request.number == 2
-        uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 38939148938
-          name: pine-android-runtime-bdbe5036b480e568f95a95c5236f33abf1a5def2
-          path: prior-runtime
-      - name: Print prior APK crash trace
-        if: github.event.pull_request.number == 2
-        run: |
-          python3 - <<'PY'
-          import pathlib
-          for name in ('runtime-logcat.txt', 'crash-buffer.txt', 'settings-launch.txt'):
-              path = pathlib.Path('prior-runtime', name)
-              if path.is_file():
-                  text = path.read_text(errors='replace')
-                  print(name + ':\n' + text[:64000])
-          path = pathlib.Path('prior-runtime/android-logcat.txt')
-          if path.is_file():
-              lines = path.read_text(errors='replace').splitlines()
-              for index, line in enumerate(lines):
-                  if any(word in line.lower() for word in ('ndk_translation', 'undefined instruction', 'nativebridge', 'adrenotools', 'libskyline')):
-                      print('prior platform context:\n' + '\n'.join(lines[max(0, index-3):index+5]))
-          PY
       - name: Native diagnostic tests
         run: |
           bash tools/tests/run-native-diagnostics.sh
@@ -142,7 +112,7 @@ jobs:
         with:
           packages: platform-tools emulator
       - name: Official Android image
-        run: sdkmanager 'system-images;android-34;google_apis;x86_64'
+        run: sdkmanager 'system-images;android-36;google_apis;x86_64'
       - uses: actions/download-artifact@v4
         with:
           name: pine-diagnostics-debug-${{ github.event.pull_request.head.sha || github.sha }}
@@ -172,7 +142,7 @@ jobs:
               path = root / name
               if path.is_file():
                   lines = path.read_text(errors='replace').splitlines()
-                  relevant = [line for line in lines if any(word in line for word in ('WATCHDOG', 'Watchdog', 'SystemServer', 'system_server', 'DeadSystemException', 'FATAL EXCEPTION IN SYSTEM PROCESS', 'Lost network stack', 'ConnectivityModuleConnector', 'Failure calling service package'))]
+                  relevant = [line for line in lines if any(word in line for word in ('WATCHDOG', 'Watchdog', 'SystemServer', 'system_server', 'DeadSystemException', 'FATAL EXCEPTION IN SYSTEM PROCESS', 'Lost network stack', 'ConnectivityModuleConnector', 'Failure calling service package', 'ndk_translation', 'Undefined instruction'))]
                   print(name + ':\n' + '\n'.join(relevant[-30:])[-12000:])
           PY
       - name: Runtime evidence (includes blocked attempts)

@@ -23,7 +23,7 @@ for name in ('/sys/fs/cgroup/cpu.max', '/sys/fs/cgroup/memory.max'):
 print(next(line for line in pathlib.Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:')))
 PY
 # This is a fresh, job-local AVD, never a user's existing device or disk.
-printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-34;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
+printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-36;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
 "$emulator" -avd PineDiagnosticsCI -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -accel "$accel" -cores 2 -memory 3072 -skin 480x800 -verbose > "$out/emulator.log" 2>&1 &
 emulator_pid=$!
 cleanup() {

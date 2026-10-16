@@ -15,27 +15,65 @@ if ($isWindowsHost) {
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     & $compiler /nologo /target:exe /codepage:65001 "/out:$fake" (Join-Path $PSScriptRoot 'fake-adb.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Fake ADB compilation failed' }
+    # On Windows, closing the managed fake's GetStdHandle leaves the pipe open.
+    # Use a CRT/CLR-free executable to exercise actual native EOF while alive.
+    $closedOutputAdb = Join-Path $temp 'adb-closed-output.exe'
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    $visualStudio = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if ($LASTEXITCODE -ne 0 -or -not $visualStudio) { throw 'Visual Studio C++ tools are required for the native EOF fixture' }
+    $setup = Join-Path $visualStudio 'VC/Auxiliary/Build/vcvars64.bat'
+    $source = Join-Path $PSScriptRoot 'fake-adb-closed-output.c'
+    $object = Join-Path $temp 'fake-adb-closed-output.obj'
+    $buildBatch = Join-Path $temp 'build-native.cmd'
+    [IO.File]::WriteAllLines($buildBatch, @(
+        '@echo off', '@chcp 65001 >nul', ('call "{0}" >nul' -f $setup),
+        'if errorlevel 1 exit /b %errorlevel%',
+        ('cl.exe /nologo /Od /W4 /WX /GS- /Zl /TC /Fo"{0}" "{1}" /link /NODEFAULTLIB /ENTRY:FakeAdbMain /SUBSYSTEM:CONSOLE /OUT:"{2}" kernel32.lib' -f $object, $source, $closedOutputAdb),
+        'exit /b %errorlevel%'
+    ), (New-Object System.Text.UTF8Encoding($false)))
+    $buildProcess = New-Object System.Diagnostics.Process
+    try {
+        $buildProcess.StartInfo.FileName = $env:ComSpec
+        $buildProcess.StartInfo.Arguments = '/d /s /c ""' + $buildBatch + '""'
+        $buildProcess.StartInfo.UseShellExecute = $false
+        $buildProcess.StartInfo.CreateNoWindow = $true
+        $buildProcess.StartInfo.RedirectStandardOutput = $true
+        $buildProcess.StartInfo.RedirectStandardError = $true
+        [void]$buildProcess.Start()
+        $buildOutput = $buildProcess.StandardOutput.ReadToEndAsync()
+        $buildError = $buildProcess.StandardError.ReadToEndAsync()
+        if (-not $buildProcess.WaitForExit(60000)) { throw 'Native fake ADB compilation timed out' }
+        if ($buildProcess.ExitCode -ne 0) {
+            $outputText = if ($buildOutput.Wait(2000)) { $buildOutput.Result } else { '[compiler stdout did not close]' }
+            $errorText = if ($buildError.Wait(2000)) { $buildError.Result } else { '[compiler stderr did not close]' }
+            throw ('Native fake ADB compilation failed: ' + $outputText + $errorText)
+        }
+    } finally {
+        try { if (-not $buildProcess.HasExited) { $buildProcess.Kill(); [void]$buildProcess.WaitForExit(2000) } } catch { }
+        $buildProcess.Dispose()
+    }
 } else {
     $fake = Join-Path $temp 'adb'
     Copy-Item (Join-Path $PSScriptRoot 'fake-adb.py') $fake
     & chmod +x $fake
+    $closedOutputAdb = $fake
 }
 function Assert([bool]$condition, [string]$message) { if (-not $condition) { throw $message } }
-function Expect-Failure([string]$mode, [string]$expected, [string]$selectedSerial = '') {
+function Expect-Failure([string]$mode, [string]$expected, [string]$selectedSerial = '', [string]$failureAdbPath = $fake) {
     $env:PINE_FAKE_ADB_MODE = $mode
     $caught = $false
     # Give Windows .NET startup/EOF time to finish; this is not a deadline test.
-    try { & $collector -AdbPath $fake -Serial $selectedSerial -NonInteractive -OutputDirectory $temp -DurationSeconds 15 | Out-Null }
+    try { & $collector -AdbPath $failureAdbPath -Serial $selectedSerial -NonInteractive -OutputDirectory $temp -DurationSeconds 15 | Out-Null }
     catch {
         $caught = $_.ToString().Contains($expected)
         if (-not $caught) { throw }
     }
     Assert $caught "Expected failure for $mode containing $expected"
 }
-function Show-WindowsClosedOutputProbe {
+function Show-WindowsClosedOutputProbe([string]$Executable, [string]$Label) {
     # Distinguish a live pipe writer from a reader task that missed native EOF.
     # This supplements, and does not replace, the collector's EOF assertions.
-    Add-Type -TypeDefinition @'
+    if (-not ('PineAdbPipeProbe' -as [type])) { Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class PineAdbPipeProbe {
@@ -43,15 +81,15 @@ public static class PineAdbPipeProbe {
     public static extern bool PeekNamedPipe(IntPtr pipe, IntPtr buffer, uint size,
         IntPtr bytesRead, out uint available, IntPtr bytesLeft);
 }
-'@
+'@ }
     $savedPid = $env:PINE_FAKE_ADB_PID
     $savedClosed = $env:PINE_FAKE_ADB_CLOSED
-    $env:PINE_FAKE_ADB_PID = Join-Path $temp 'probe-pid.txt'
-    $env:PINE_FAKE_ADB_CLOSED = Join-Path $temp 'probe-closed.txt'
+    $env:PINE_FAKE_ADB_PID = Join-Path $temp ('probe-pid-' + $Label + '.txt')
+    $env:PINE_FAKE_ADB_CLOSED = Join-Path $temp ('probe-closed-' + $Label + '.txt')
     $env:PINE_FAKE_ADB_MODE = 'closed-output'
     $probe = New-Object System.Diagnostics.Process
     try {
-        $probe.StartInfo.FileName = $fake
+        $probe.StartInfo.FileName = $Executable
         $probe.StartInfo.Arguments = '-s test-device logcat -v raw PineDiag:V *:S'
         $probe.StartInfo.UseShellExecute = $false
         $probe.StartInfo.CreateNoWindow = $true
@@ -85,11 +123,13 @@ public static class PineAdbPipeProbe {
             $peek = [PineAdbPipeProbe]::PeekNamedPipe($readHandle, [IntPtr]::Zero, 0, [IntPtr]::Zero, [ref]$available, [IntPtr]::Zero)
             $peekError = if ($peek) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
             $read = $probe.StandardOutput.ReadLineAsync()
-            Start-Sleep -Milliseconds 200
+            if ($Label -eq 'native') { [void]$read.Wait(2000) }
+            else { Start-Sleep -Milliseconds 200 }
         }
         $marker = if (Test-Path $env:PINE_FAKE_ADB_CLOSED) { [IO.File]::ReadAllText($env:PINE_FAKE_ADB_CLOSED) } else { '' }
         $hasResult = $read -and $read.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion
         $diagnostic = [ordered]@{
+            fixture = $Label
             powershell = $PSVersionTable.PSVersion.ToString(); clr = [Environment]::Version.ToString()
             pid = $probe.Id; marker = $marker; exited = $probe.HasExited
             receivedLines = $received; lastFixtureLineSeen = $lastFixtureLineSeen
@@ -99,6 +139,11 @@ public static class PineAdbPipeProbe {
             peekSucceeded = $peek; peekError = $peekError; available = $available
         }
         Write-Host ('WINDOWS CLOSED-OUTPUT PROBE ' + ($diagnostic | ConvertTo-Json -Compress))
+        if ($Label -eq 'native') {
+            Assert ($lastFixtureLineSeen -and $marker -eq [string]$probe.Id -and -not $probe.HasExited) 'Native EOF fixture must publish its marker and remain alive after all fixture records'
+            Assert (-not $peek -and $peekError -eq 109) 'Native EOF fixture must produce kernel ERROR_BROKEN_PIPE, not an empty connected pipe'
+            Assert ($hasResult -and $null -eq $read.Result) 'Native EOF fixture must complete ReadLineAsync with null while the process is alive'
+        }
     } finally {
         try { if (-not $probe.HasExited) { $probe.Kill(); [void]$probe.WaitForExit(2000) } } catch { }
         $probe.Dispose()
@@ -107,7 +152,10 @@ public static class PineAdbPipeProbe {
     }
 }
 try {
-    if ($isWindowsHost) { Show-WindowsClosedOutputProbe }
+    if ($isWindowsHost) {
+        Show-WindowsClosedOutputProbe $fake 'managed'
+        Show-WindowsClosedOutputProbe $closedOutputAdb 'native'
+    }
     $env:PINE_FAKE_ADB_MODE = 'multiple'
     $listOutput = Join-Path $temp 'list-only'
     & $collector -AdbPath $fake -ListDevices -NonInteractive -OutputDirectory $listOutput | Out-Null
@@ -121,7 +169,7 @@ try {
     Expect-Failure 'discovery-error' 'ADB discovery failed'
     Expect-Failure 'disconnect' 'stream ended'
     $closedOutput = [Diagnostics.Stopwatch]::StartNew()
-    try { Expect-Failure 'closed-output' 'stream ended' }
+    try { Expect-Failure 'closed-output' 'stream ended' '' $closedOutputAdb }
     finally { Assert (Test-Path $env:PINE_FAKE_ADB_CLOSED) 'Closed-output fixture did not confirm native stdout closure' }
     Assert ($closedOutput.Elapsed.TotalSeconds -lt 12) 'Closed stdout must not wait forever for stderr/process exit'
     $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)

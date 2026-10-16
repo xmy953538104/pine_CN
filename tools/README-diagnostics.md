@@ -43,8 +43,12 @@ powershell -NoProfile -File .\tools\tests\pine-diag.Tests.ps1
 pwsh -NoProfile -File .\tools\tests\pine-diag.Tests.ps1
 ```
 
-Windows tests compile a small fake ADB with the OS .NET Framework compiler. On
-Linux, the test uses Python 3 for fake ADB. Tests cover multiple/no devices,
+Windows tests use the OS .NET Framework compiler for fake ADB and Visual Studio
+C++ Build Tools (discovered through `vswhere`) with a Windows SDK to build a small
+native EOF fixture.
+The latter links only Kernel32, with no CLR or CRT startup, and remains alive
+after closing stdout. A pipe probe distinguishes native EOF from an empty pipe
+that still has a writer. On Linux, tests use Python 3 for fake ADB. Tests cover multiple/no devices,
 unauthorized/offline devices, USB permission and discovery failures, closed or
 disconnected streams, production-sink title/session filters, UTF-8 round-trip without
 a BOM, collision-free session grouping, bounded overflow, retaining logs,

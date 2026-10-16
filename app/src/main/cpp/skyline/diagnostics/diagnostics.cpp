@@ -216,23 +216,95 @@ void Enqueue(Sink &s, std::string_view category, std::string_view event,
 }
 }
 std::string Sanitize(std::string_view input, size_t limit) {
-    // Bound first; replace private URI/path tokens, preserving guest relative source names.
-    std::string out(input.substr(0, limit));
-    for (std::string_view prefix : {"content://", "file://", "/storage/", "/sdcard/", "/data/", "/mnt/", "/cache/"}) {
-        size_t pos{};
-        while (pos < out.size()) {
-            auto found = std::search(out.begin() + pos, out.end(), prefix.begin(), prefix.end(), [](unsigned char a, unsigned char b) {
-                return (a >= 'A' && a <= 'Z' ? a + ('a' - 'A') : a) == b;
-            });
-            if (found == out.end()) break;
-            pos = static_cast<size_t>(found - out.begin());
-            if (prefix.front() == '/' && pos && std::string_view(" \t\r\n\"'=([{:<>").find(out[pos - 1]) == std::string_view::npos) {
-                ++pos; continue; // Relative guest names such as scripts/data/a.lua.
+    // Scan only the bounded input. Spaces/quotes are legal filename bytes, so a
+    // recognized location consumes its line tail, preserving context and line endings.
+    const auto text = input.substr(0, limit);
+    auto lower = [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; };
+    auto alpha = [&](unsigned char c) { return lower(c) >= 'a' && lower(c) <= 'z'; };
+    auto digit = [](unsigned char c) { return c >= '0' && c <= '9'; };
+    auto whitespace = [](unsigned char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    auto schemeChar = [&](unsigned char c) { return alpha(c) || digit(c) || c == '+' || c == '.' || c == '-'; };
+    auto pathChar = [&](unsigned char c) { return alpha(c) || digit(c) || c == '_' || c == '.' || c == '/' || c == '\\' || c == '-'; };
+    auto matches = [&](size_t pos, std::string_view prefix) {
+        if (prefix.size() > text.size() - pos) return false;
+        for (size_t i{}; i < prefix.size(); ++i)
+            if (lower(text[pos + i]) != lower(prefix[i])) return false;
+        return true;
+    };
+    auto guestMount = [&](size_t pos, size_t lineStart) {
+        for (std::string_view mount : {"rom:", "romfs:", "sdmc:"}) {
+            if (pos - lineStart < mount.size()) continue;
+            const auto start = pos - mount.size();
+            if (matches(start, mount) && (start == lineStart ||
+                (!schemeChar(text[start - 1]) && text[start - 1] != '_'))) return true;
+        }
+        return false;
+    };
+    auto unixBoundary = [&](size_t pos, size_t lineStart) {
+        if (pos == lineStart) return true;
+        const auto previous = static_cast<unsigned char>(text[pos - 1]);
+        if (previous < 0x80) return !pathChar(previous);
+        // Keep UTF-8 relative guest names, while accepting common Unicode log
+        // punctuation/spacing such as the full-width colon immediately before a path.
+        size_t first = pos - 1;
+        while (first > lineStart && (static_cast<unsigned char>(text[first]) & 0xc0) == 0x80) --first;
+        const auto lead = static_cast<unsigned char>(text[first]);
+        const size_t count = lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+        if (!count || pos - first != count) return true;
+        uint32_t code = lead & (0x7f >> count);
+        for (size_t i = first + 1; i < pos; ++i) code = (code << 6) | (static_cast<unsigned char>(text[i]) & 0x3f);
+        if ((count == 3 && code < 0x800) || (count == 4 && code < 0x10000) ||
+            (code >= 0xd800 && code <= 0xdfff) || code > 0x10ffff) return true;
+        return code == 0xa0 || code == 0x1680 || (code >= 0x2000 && code <= 0x206f) ||
+            (code >= 0x3000 && code <= 0x303f) || (code >= 0xff01 && code <= 0xff0f) ||
+            (code >= 0xff1a && code <= 0xff20) || (code >= 0xff3b && code <= 0xff40) ||
+            (code >= 0xff5b && code <= 0xff65);
+    };
+    std::string out;
+    out.reserve(text.size());
+    size_t schemeEnd{}, lineStart{};
+    // Every recognized location contains a slash or backslash. Numeric IDs,
+    // enum values and field names can skip location scanning, but still repair UTF-8.
+    if (text.find_first_of("/\\") == std::string_view::npos) {
+        out.assign(text);
+    } else {
+        for (size_t pos{}; pos < text.size();) {
+            if (text[pos] == '\r' || text[pos] == '\n') {
+                out += text[pos++]; lineStart = pos; continue;
             }
-            // A quoted path can contain spaces; keep the surrounding quotes.
-            auto end = pos && (out[pos - 1] == '\'' || out[pos - 1] == '"')
-                ? out.find(out[pos - 1], pos) : out.find_first_of(" \t\r\n\"'", pos);
-            out.replace(pos, (end == std::string::npos ? out.size() : end) - pos, "[REDACTED]"); pos += 10;
+            bool location{};
+            if (alpha(text[pos])) {
+                // Cache each ASCII scheme run's end; a long plain word must not
+                // trigger a fresh suffix scan at every byte.
+                if (pos >= schemeEnd) {
+                    schemeEnd = pos;
+                    while (schemeEnd < text.size() && schemeChar(text[schemeEnd])) ++schemeEnd;
+                }
+                location = matches(schemeEnd, "://");
+                for (std::string_view prefix : {"file:", "content:"}) {
+                    if (!matches(pos, prefix)) continue;
+                    const auto next = pos + prefix.size();
+                    location = location || (next < text.size() && text[next] == '/') ||
+                        (next + 2 < text.size() && alpha(text[next]) && text[next + 1] == ':' &&
+                         (text[next + 2] == '/' || text[next + 2] == '\\'));
+                }
+            }
+            const bool windowsBoundary = pos == lineStart || !pathChar(text[pos - 1]);
+            location = location || (windowsBoundary && pos + 2 < text.size() &&
+                ((alpha(text[pos]) && text[pos + 1] == ':' && (text[pos + 2] == '/' || text[pos + 2] == '\\')) ||
+                 (text[pos] == '\\' && text[pos + 1] == '\\' && !whitespace(text[pos + 2]) && text[pos + 2] != '\\')));
+            if (!location && text[pos] == '/' && unixBoundary(pos, lineStart) && !guestMount(pos, lineStart)) {
+                for (std::string_view prefix : {"/storage", "/sdcard", "/data", "/mnt", "/cache", "/home", "/Users"}) {
+                    if (!matches(pos, prefix)) continue;
+                    const auto next = pos + prefix.size();
+                    location = next == text.size() || std::string_view("/\\ \t\r\n\"'<>").find(text[next]) != std::string_view::npos;
+                    if (location) break;
+                }
+            }
+            if (location) {
+                out += "[REDACTED]";
+                while (pos < text.size() && text[pos] != '\r' && text[pos] != '\n') ++pos;
+            } else out += text[pos++];
         }
     }
     // Repair invalid/truncated UTF-8, rather than writing invalid JSON strings.

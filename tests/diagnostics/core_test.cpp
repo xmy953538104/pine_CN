@@ -36,8 +36,43 @@ void CheckSummary(const std::filesystem::path &root) {
     assert(last.find("\"accepted\":\"" + std::to_string(stats.accepted) + "\"") != std::string::npos);
     assert(last.find("\"written\":\"" + std::to_string(stats.written) + "\"") != std::string::npos);
 }
+void CheckLocationRedaction() {
+    for (std::string_view location : {
+            "/storage/emulated/0/Alice Smith/秘密 \"save\".nsp",
+            "/data/user/0/app/Private Name/O'Connor 秘密.nsp",
+            "/cache/Private Name/秘密.nsp", "/home/Alice Smith/秘密.nsp",
+            "C:\\Users\\Alice Smith\\秘密 \"save\".nsp",
+            "D:/Private Name/O'Connor 秘密.nsp",
+            "\\\\network\\Private Share\\Alice Smith.nsp",
+            "\\\\research\\Private Share\\Alice Smith.nsp",
+            "content://provider/Private Name/秘密 \"save\".nsp",
+            "https://provider/Private Name/秘密.nsp",
+            "FILE:///storage/emulated/0/Private Name/秘密.nsp",
+            "file:/storage/emulated/0/Private Name/秘密.nsp",
+            "file:C:\\Users\\Private Name\\秘密.nsp"}) {
+        for (std::string_view prefix : {"failed: ", "读取失败：", "path=(", "path='", "path=\"", "path:", "std::filesystem::path:", "ns::"}) {
+            assert(Sanitize(std::string(prefix) + std::string(location) + "'\" trailing detail") == std::string(prefix) + "[REDACTED]");
+        }
+        if (location.front() != '/') assert(Sanitize("正在打开" + std::string(location)) == "正在打开[REDACTED]");
+    }
+    const std::string relative = "scripts/data/a.lua ./data/a.lua ../data/a.lua 脚本/data/a.lua scripts/storage/a.lua /database/a.lua /datafile/a.lua rom:/data/a.lua romfs:/storage/a.lua sdmc:/data/a.lua ns::rom:/data/a.lua";
+    assert(Sanitize(relative) == relative);
+    const std::string lines = "世界 open /data/user/0/Alice Smith/秘密\nscripts/data/a.lua\r\n读取失败：file:/private/Alice Smith\r尾行 世界";
+    assert(Sanitize(lines) == "世界 open [REDACTED]\nscripts/data/a.lua\r\n读取失败：[REDACTED]\r尾行 世界");
+    assert(Sanitize(std::string("\xff\n", 2) + "path:/data/user/0/Alice Smith") == "\xef\xbf\xbd\npath:[REDACTED]");
+    for (const std::string invalid : {"\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80"}) {
+        const auto safe = Sanitize(invalid + "/data/user/0/Alice Smith");
+        assert(safe.ends_with("[REDACTED]") && safe.find("Alice") == std::string::npos);
+    }
+    assert(Sanitize(std::string(10000, 'a'), 32) == std::string(32, 'a'));
+    assert(Sanitize("/data/user/0/Alice Smith", 0).empty());
+    assert(Sanitize("\xe4\xb8\x96", 2) == "\xef\xbf\xbd\xef\xbf\xbd");
+    assert(Sanitize("failed '/data/user_de/0/app/My Secret.nsp' next") == "failed '[REDACTED]");
+    assert(Sanitize("FILE:///mnt/private/secret CONTENT://provider/token") == "[REDACTED]");
+}
 int main(int argc, char **argv) {
     assert(argc == 2);
+    CheckLocationRedaction();
     std::filesystem::path root(argv[1]);
     std::filesystem::remove_all(root);
     Config c{root.string(), "native-test", 1024, 65536, 3, true, {}};
@@ -48,6 +83,11 @@ int main(int argc, char **argv) {
     Accepted([&] { Emit("test", "OWNED", {{"message", owned}}); });
     owned = "MUTATED";
     Accepted([] { Emit("test", "INVALID_UTF8", {{"message", std::string("\xff\xed\xa0\x80", 4)}}); });
+    Accepted([] { Emit("test", "SOURCE_LOCATION_REDACTION", {
+        {"message", "open /data/user/0/Alice Smith/秘密 \"save\".nsp\nnext 世界"},
+        {"windows", "正在打开\\\\network\\Alice Smith\\private file"},
+        {"invalid_before_path", std::string("\xed\xa0\x80", 3) + "/data/user/0/Alice Smith"},
+        {"relative", "scripts/data/a.lua rom:/data/a.lua"}}); });
     SetTitleId("0100000000001000");
     Accepted([] { Emit("guest", "TITLE_CONTEXT", {{"title_id", "separate-dlc-id"}}); });
     char originalName[16]{};
@@ -68,15 +108,15 @@ int main(int argc, char **argv) {
     assert(data.find("[REDACTED]") != std::string::npos);
     assert(data.find("secret") == std::string::npos);
     assert(data.find("hidden") == std::string::npos);
+    assert(data.find("Alice") == std::string::npos && data.find("Smith") == std::string::npos);
+    assert(data.find("SOURCE_LOCATION_REDACTION") != std::string::npos);
+    assert(data.find("open [REDACTED]\\u000anext 世界") != std::string::npos);
+    assert(data.find("scripts/data/a.lua rom:/data/a.lua") != std::string::npos);
     assert(data.find("\\u000a\\\"") != std::string::npos);
     assert(data.find("\"last_stage\":\"ready\"") != std::string::npos);
     assert(data.find("\"title_id\":\"0100000000001000\"") != std::string::npos);
     assert(data.find("\"title_id\":\"separate-dlc-id\"") != std::string::npos);
     CheckSummary(root);
-    assert(Sanitize("scripts/data/loader.lua") == "scripts/data/loader.lua");
-    assert(Sanitize("scripts/storage/guest.lua") == "scripts/storage/guest.lua");
-    assert(Sanitize("failed '/data/user_de/0/app/My Secret.nsp' next") == "failed '[REDACTED]' next");
-    assert(Sanitize("FILE:///mnt/private/secret CONTENT://provider/token") == "[REDACTED] [REDACTED]");
     std::filesystem::copy_file(root / "diagnostics-0.jsonl", root / "encoding.jsonl");
     c.queueCapacity = 1;
     assert(Start(c));

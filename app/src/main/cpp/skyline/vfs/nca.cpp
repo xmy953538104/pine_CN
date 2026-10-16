@@ -153,10 +153,14 @@ namespace skyline::vfs {
                 sectionHeader.raw.sectionCtr)};
 
             romFs = std::make_shared<RegionBacking>(bktr, sectionHeader.romfs.ivfc.levels[constant::IvfcMaxLevel - 1].offset, romFsSize);
-            PINE_DIAG_CONTENT("ROMFS_BACKING_OPENED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"path", "BKTR"}, {"source", "base_and_patch"});
+            PINE_DIAG_CONTENT("ROMFS_BACKING_OPENED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"path", "BKTR"}, {"source", "base_and_patch"}, {"status", "ok"}, {"bktr_header", "true"});
         } else {
             romFs = std::move(decryptedBacking);
-            PINE_DIAG_CONTENT("ROMFS_BACKING_OPENED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"path", encrypted && (sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::CTR || sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::BKTR) ? "CTR" : "direct"}, {"source", "nca_section"}, {"bktr_header", sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::BKTR ? "true" : "false"});
+            if (romFs) {
+                PINE_DIAG_CONTENT("ROMFS_BACKING_OPENED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"path", encrypted && (sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::CTR || sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::BKTR) ? "CTR" : "direct"}, {"source", "nca_section"}, {"status", "ok"}, {"bktr_header", sectionHeader.raw.header.encryptionType == NcaSectionEncryptionType::BKTR ? "true" : "false"});
+            } else {
+                PINE_DIAG_CONTENT_ERROR("ROMFS_BACKING_FAILED", {"title_id", fmt::format("{:016X}", header.titleId)}, {"source", "nca_section"}, {"status", "missing"}, {"encryption_type", std::to_string(static_cast<int>(sectionHeader.raw.header.encryptionType))});
+            }
         }
     }
 

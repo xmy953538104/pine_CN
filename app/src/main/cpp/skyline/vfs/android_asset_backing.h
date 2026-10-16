@@ -21,6 +21,8 @@ namespace skyline::vfs {
         size_t ReadImpl(span<u8> output, size_t offset) override;
 
       public:
+        bool HasReliableReadByteCount() const noexcept override { return true; }
+
         AndroidAssetBacking(AAsset *asset, Mode mode = {true, false, false});
 
         virtual ~AndroidAssetBacking();

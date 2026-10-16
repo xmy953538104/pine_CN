@@ -6,6 +6,7 @@
 #include <vfs/ticket.h>
 #include "nca.h"
 #include "nsp.h"
+#include "nsp_content.h"
 #include "vfs/patch_manager.h"
 
 namespace skyline::loader {
@@ -32,31 +33,8 @@ namespace skyline::loader {
             if (entry.name.substr(entry.name.find_last_of('.') + 1) != "nca")
                 continue;
 
-            try {
-                auto nca{vfs::NCA(nsp->OpenFile(entry.name), keyStore)};
-
-                PINE_DIAG_CONTENT("NCA_CANDIDATE", {"content_name", entry.name}, {"nca_type", fmt::format("{}", static_cast<int>(nca.contentType))}, {"title_id", fmt::format("{:016X}", nca.header.titleId)});
-                auto select = [&](auto &slot) {
-                    PINE_DIAG_CONTENT(slot ? "NCA_OVERWRITTEN" : "NCA_SELECTED", {"content_name", entry.name}, {"nca_type", fmt::format("{}", static_cast<int>(nca.contentType))}, {"title_id", fmt::format("{:016X}", nca.header.titleId)}, {"policy", "last_eligible_of_type"});
-                    slot = std::move(nca);
-                };
-                if (nca.contentType == vfs::NCAContentType::Program && nca.romFs != nullptr && nca.exeFs != nullptr)
-                    select(programNca);
-                else if (nca.contentType == vfs::NCAContentType::Control && nca.romFs != nullptr)
-                    select(controlNca);
-                else if (nca.contentType == vfs::NCAContentType::Meta)
-                    select(metaNca);
-                else if (nca.contentType == vfs::NCAContentType::PublicData)
-                    select(publicNca);
-                else
-                    PINE_DIAG_CONTENT("NCA_SKIPPED", {"content_name", entry.name}, {"reason", "ineligible_type_or_sections"});
-            } catch (const loader_exception &e) {
-                PINE_DIAG_CONTENT_ERROR("NCA_LOAD_FAILED", {"content_name", entry.name}, {"exception", "loader_exception"}, {"error_code", fmt::format("{}", static_cast<int>(e.error))}, {"action", "propagate"});
-                throw loader_exception(e.error);
-            } catch (const std::exception &e) {
-                PINE_DIAG_CONTENT_ERROR("NCA_LOAD_FAILED", {"content_name", entry.name}, {"exception", "std_exception"}, {"reason", e.what()}, {"action", "continue"});
-                continue;
-            }
+            LoadNspContent<loader_exception>(entry.name, [&] { return vfs::NCA(nsp->OpenFile(entry.name), keyStore); },
+                programNca, controlNca, metaNca, publicNca);
         }
 
         for (const auto *selected : {&programNca, &controlNca, &metaNca, &publicNca}) {

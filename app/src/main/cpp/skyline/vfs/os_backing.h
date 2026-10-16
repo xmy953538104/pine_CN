@@ -22,6 +22,8 @@ namespace skyline::vfs {
         void ResizeImpl(size_t size) override;
 
       public:
+        bool HasReliableReadByteCount() const noexcept override { return true; }
+
         /**
          * @param fd The file descriptor of the backing
          */

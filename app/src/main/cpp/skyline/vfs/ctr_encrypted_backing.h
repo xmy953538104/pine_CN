@@ -28,6 +28,10 @@ namespace skyline::vfs {
         size_t ReadImpl(span<u8> output, size_t offset) override;
 
       public:
+        bool HasReliableReadByteCount() const noexcept override {
+            return backing->HasReliableReadByteCount();
+        }
+
         CtrEncryptedBacking(crypto::KeyStore::Key128 ctr, crypto::KeyStore::Key128 key, std::shared_ptr<Backing> backing, size_t baseOffset);
     };
 }

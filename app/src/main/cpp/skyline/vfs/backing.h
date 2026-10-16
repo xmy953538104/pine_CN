@@ -4,9 +4,15 @@
 #pragma once
 
 #include <concepts>
+#include <optional>
 #include <common.h>
 
 namespace skyline::vfs {
+    struct ReadObservation {
+        // Empty when a compound backing cannot prove an exact output-byte count.
+        std::optional<size_t> bytes;
+    };
+
     /**
      * @brief The Backing class provides abstract access to a storage device, all access can be done without using a specific backing
      */
@@ -48,6 +54,10 @@ namespace skyline::vfs {
 
         virtual ~Backing() = default;
 
+        // Diagnostic capability only. An unfamiliar backing must not turn its
+        // legacy ReadImpl return into evidence of bytes actually read.
+        virtual bool HasReliableReadByteCount() const noexcept { return false; }
+
         /**
          * @brief Read bytes from the backing at a particular offset to a buffer
          * @param output The object to write the data read to
@@ -67,7 +77,7 @@ namespace skyline::vfs {
          * @param offset The offset to start reading from
          * @return The amount of bytes read
          */
-        size_t Read(span <u8> output, size_t offset = 0, size_t *actualRead = nullptr) {
+        size_t Read(span <u8> output, size_t offset = 0, ReadObservation *observation = nullptr) {
             if (offset > size)
                 throw exception("Offset cannot be past the end of a backing");
 
@@ -76,8 +86,8 @@ namespace skyline::vfs {
 
             const auto bytesRead{ReadUnchecked(output, offset)};
             // Optional observation only; keep the historic total-size return and short-read warning.
-            if (actualRead)
-                *actualRead = bytesRead;
+            if (observation)
+                observation->bytes = HasReliableReadByteCount() ? std::optional<size_t>(bytesRead) : std::nullopt;
             if (bytesRead != output.size())
                 LOGW("Failed to read the requested size from backing");
 

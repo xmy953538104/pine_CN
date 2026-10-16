@@ -96,14 +96,19 @@ namespace skyline::service::fssrv {
     Result IFileSystemProxy::OpenDataStorageByCurrentProcess(type::KSession &session, ipc::IpcRequest &request, ipc::IpcResponse &response) {
 
         if (state.updateLoader) {
+            diagnostics::ContentScope scope("update");
             auto patchManager{std::make_shared<vfs::PatchManager>()};
             auto romFs{patchManager->PatchRomFS(state, state.updateLoader->programNca, state.loader->programNca->ivfcOffset)};
             manager.RegisterService(std::make_shared<IStorage>(romFs, state, manager), session, response);
+            PINE_DIAG_STORAGE_LEVEL(romFs ? "INFO" : "ERROR", romFs ? "PATCH_STORAGE_OPENED" : "PATCH_STORAGE_FAILED", {"source", "update"}, {"status", romFs ? "ok" : "missing"});
         } else {
-            if (!state.loader->romFs)
+            if (!state.loader->romFs) {
+                PINE_DIAG_STORAGE_ERROR("BASE_STORAGE_FAILED", {"source", "base"}, {"status", "missing"}, {"result", "NoRomFsAvailable"});
                 return result::NoRomFsAvailable;
+            }
 
             manager.RegisterService(std::make_shared<IStorage>(state.loader->romFs, state, manager), session, response);
+            PINE_DIAG_STORAGE("BASE_STORAGE_OPENED", {"source", "base"});
         }
         return {};
     }
@@ -114,24 +119,28 @@ namespace skyline::service::fssrv {
         auto dataId{request.Pop<u64>()};
         auto patchManager{std::make_shared<vfs::PatchManager>()};
 
-        PINE_DIAG_CONTENT("DATA_STORAGE_REQUEST", {"data_id", fmt::format("{:016X}", dataId)}, {"storage_id", fmt::format("{}", static_cast<int>(storageId))});
+        PINE_DIAG_STORAGE("DATA_STORAGE_REQUEST", {"data_id", fmt::format("{:016X}", dataId)}, {"storage_id", fmt::format("{}", static_cast<int>(storageId))});
         // Try load DLC first
+        size_t dlcIndex{};
         for (const auto &dlc : state.dlcLoaders) {
             if (dlc->cnmt->header.id == dataId) {
-                PINE_DIAG_CONTENT("DLC_DATA_ID_MATCHED", {"data_id", fmt::format("{:016X}", dataId)});
+                diagnostics::ContentScope scope("dlc", dlcIndex);
+                PINE_DIAG_STORAGE("DLC_DATA_ID_MATCHED", {"data_id", fmt::format("{:016X}", dataId)});
                 try {
                     auto romFs{patchManager->PatchRomFS(state, dlc->publicNca, state.loader->programNca->ivfcOffset)};
                     manager.RegisterService(std::make_shared<IStorage>(romFs, state, manager, dataId), session, response);
-                    PINE_DIAG_CONTENT("DLC_STORAGE_OPENED", {"title_id", fmt::format("{:016X}", dataId)}, {"source", "dlc"});
+                    PINE_DIAG_STORAGE_LEVEL(romFs ? "INFO" : "ERROR", romFs ? "DLC_STORAGE_OPENED" : "DLC_RUNTIME_ERROR",
+                        {"title_id", fmt::format("{:016X}", dataId)}, {"source", "dlc"}, {"operation", "open_storage"}, {"status", romFs ? "ok" : "missing"});
                     return {};
                 } catch (const std::exception &e) {
-                    PINE_DIAG_CONTENT_ERROR("DLC_RUNTIME_ERROR", {"title_id", fmt::format("{:016X}", dataId)}, {"operation", "open_storage"}, {"reason", e.what()});
+                    PINE_DIAG_STORAGE_ERROR("DLC_RUNTIME_ERROR", {"title_id", fmt::format("{:016X}", dataId)}, {"operation", "open_storage"}, {"reason", e.what()}, {"status", "exception"});
                     throw;
                 }
             }
+            ++dlcIndex;
         }
 
-        PINE_DIAG_CONTENT("DLC_DATA_ID_UNMATCHED", {"data_id", fmt::format("{:016X}", dataId)}, {"fallback", "system_archives_then_assets"});
+        PINE_DIAG_STORAGE("DLC_DATA_ID_UNMATCHED", {"data_id", fmt::format("{:016X}", dataId)}, {"fallback", "system_archives_then_assets"});
         auto systemArchivesFileSystem{std::make_shared<vfs::OsFileSystem>(state.os->publicAppFilesPath + "/switch/nand/system/Contents/registered/")};
         auto systemArchives{systemArchivesFileSystem->OpenDirectory("")};
         auto keyStore{std::make_shared<skyline::crypto::KeyStore>(state.os->privateAppFilesPath + "keys")};
@@ -142,6 +151,7 @@ namespace skyline::service::fssrv {
 
             if (nca.header.titleId == dataId && nca.romFs != nullptr) {
                 manager.RegisterService(std::make_shared<IStorage>(nca.romFs, state, manager), session, response);
+                PINE_DIAG_STORAGE("SYSTEM_STORAGE_OPENED", {"data_id", fmt::format("{:016X}", dataId)}, {"source", "system_archive"});
                 return {};
             }
         }
@@ -149,6 +159,7 @@ namespace skyline::service::fssrv {
         auto romFs{std::make_shared<IStorage>(state.os->assetFileSystem->OpenFile(fmt::format("romfs/{:016X}", dataId)), state, manager)};
 
         manager.RegisterService(romFs, session, response);
+        PINE_DIAG_STORAGE("ASSET_STORAGE_OPENED", {"data_id", fmt::format("{:016X}", dataId)}, {"source", "asset"});
         return {};
     }
 

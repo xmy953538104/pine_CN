@@ -37,6 +37,9 @@ namespace skyline::vfs {
         std::array<u8, 16> GetCipherIV(SubsectionEntry subsectionEntry, u64 sectionOffset);
 
       public:
+        // Nested legacy Backing::Read returns can conceal a short source read.
+        // Keep those guest-visible values unchanged; diagnostics must say unknown.
+        bool HasReliableReadByteCount() const noexcept override { return false; }
 
         BKTR(std::shared_ptr<vfs::Backing> pBaseRomfs, std::shared_ptr<vfs::Backing> pBktrRomfs, RelocationBlock pRelocation,
              std::vector<RelocationBucket> pRelocationBuckets, SubsectionBlock pSubsection,

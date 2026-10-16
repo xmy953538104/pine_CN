@@ -40,33 +40,59 @@ namespace skyline::kernel {
         keyStore = std::make_shared<crypto::KeyStore>(privateAppFilesPath + "keys/");
 
         PINE_DIAG_CONTENT("CONTENT_LOAD_BEGIN", {"rom_format", fmt::format("{}", static_cast<int>(romType))}, {"update_fd_positive", updateFd > 0 ? "true" : "false"}, {"dlc_count", fmt::format("{}", dlcFds.size())});
-        auto loadContent = [&](int fd, std::string_view source) {
+        auto loadContent = [&](int fd, std::string_view source, size_t index = 0) {
+            diagnostics::ContentScope scope(source, index);
             PINE_DIAG_CONTENT("LOADER_BEGIN", {"source", source});
             try {
-                return GetLoader(fd, keyStore, romType);
+                auto loader{GetLoader(fd, keyStore, romType)};
+                PINE_DIAG_CONTENT("LOADER_READY", {"source", source},
+                    {"title_id", loader->cnmt ? loader->cnmt->GetTitleId() : "unknown"},
+                    {"cnmt_version", loader->cnmt ? std::to_string(loader->cnmt->header.version) : "unknown"},
+                    {"display_version", loader->nacp ? loader->nacp->GetApplicationVersion() : "unknown"},
+                    {"cnmt_type", loader->cnmt ? std::to_string(static_cast<int>(loader->cnmt->header.contentMetaType)) : "unknown"});
+                return loader;
             } catch (const std::exception &e) {
                 PINE_DIAG_CONTENT_ERROR("LOADER_FAILED", {"source", source}, {"reason", e.what()}, {"last_stage", diagnostics::LastStage()});
                 throw;
             }
         };
         state.loader = loadContent(romFd, "base");
+        if (diagnostics::Enabled()) {
+            try {
+                if (state.loader->cnmt)
+                    diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->cnmt->header.id));
+                else if (state.loader->programNca)
+                    diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->programNca->header.titleId));
+            } catch (...) {}
+        }
         diagnostics::Stage("base_loader_ready");
-        PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"});
+        PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"},
+            {"cnmt_version", state.loader->cnmt ? std::to_string(state.loader->cnmt->header.version) : "unknown"},
+            {"display_version", state.loader->nacp ? state.loader->nacp->GetApplicationVersion() : "unknown"});
 
         if (updateFd > 0) {
             state.updateLoader = loadContent(updateFd, "update");
             diagnostics::Stage("update_loader_ready");
-            PINE_DIAG_CONTENT("PATCH_SELECTED", {"source", "update"}, {"selection", "provided_fd_gt_zero"}, {"rom_format_source", "base"}, {"title_id", state.updateLoader->cnmt ? state.updateLoader->cnmt->GetTitleId() : "unknown"}, {"version", state.updateLoader->cnmt ? fmt::format("{}", state.updateLoader->cnmt->header.version) : "unknown"});
+            PINE_DIAG_CONTENT("PATCH_SELECTED", {"source", "update"}, {"selection", "provided_fd_gt_zero"}, {"rom_format_source", "base"},
+                {"title_id", state.updateLoader->cnmt ? state.updateLoader->cnmt->GetTitleId() : "unknown"},
+                {"parent_title_id", state.updateLoader->cnmt && state.updateLoader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch ? state.updateLoader->cnmt->GetParentTitleId() : "unknown"},
+                {"cnmt_version", state.updateLoader->cnmt ? std::to_string(state.updateLoader->cnmt->header.version) : "unknown"},
+                {"display_version", state.updateLoader->nacp ? state.updateLoader->nacp->GetApplicationVersion() : "unknown"});
         } else {
             PINE_DIAG_CONTENT("PATCH_SKIPPED", {"reason", "update_fd_not_positive"});
         }
 
         if (dlcFds.size() > 0)
             for (int fd : dlcFds) {
+                auto index{state.dlcLoaders.size()};
+                diagnostics::ContentScope scope("dlc", index);
                 PINE_DIAG_CONTENT("DLC_DISCOVERED", {"source", "provided_fd"}, {"rom_format_source", "base"});
-                state.dlcLoaders.push_back(loadContent(fd, "dlc"));
+                state.dlcLoaders.push_back(loadContent(fd, "dlc", index));
                 auto &dlc = state.dlcLoaders.back();
-                PINE_DIAG_CONTENT("DLC_REGISTERED", {"title_id", dlc->cnmt ? dlc->cnmt->GetTitleId() : "unknown"}, {"parent_title_id", dlc->cnmt ? dlc->cnmt->GetParentTitleId() : "unknown"}, {"cnmt_type", dlc->cnmt ? fmt::format("{}", static_cast<int>(dlc->cnmt->header.contentMetaType)) : "unknown"});
+                PINE_DIAG_CONTENT("DLC_REGISTERED", {"source", "dlc"}, {"title_id", dlc->cnmt ? dlc->cnmt->GetTitleId() : "unknown"},
+                    {"parent_title_id", dlc->cnmt && dlc->cnmt->GetContentMetaType() == vfs::ContentMetaType::AddOnContent ? dlc->cnmt->GetParentTitleId() : "unknown"},
+                    {"cnmt_type", dlc->cnmt ? std::to_string(static_cast<int>(dlc->cnmt->header.contentMetaType)) : "unknown"},
+                    {"cnmt_version", dlc->cnmt ? std::to_string(dlc->cnmt->header.version) : "unknown"});
             }
 
         state.gpu->Initialise();
@@ -84,6 +110,12 @@ namespace skyline::kernel {
                 name = nacp->GetApplicationName(nacp->GetFirstSupportedTitleLanguage());
             if (publisher.empty())
                 publisher = nacp->GetApplicationPublisher(nacp->GetFirstSupportedTitleLanguage());
+
+            PINE_DIAG_CONTENT("APPLICATION_METADATA", {"source", "base_control"}, {"title_name", name},
+                {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"},
+                {"save_data_owner_id", nacp->GetSaveDataOwnerId()},
+                {"base_display_version", nacp->GetApplicationVersion()},
+                {"update_display_version", state.updateLoader && state.updateLoader->nacp ? state.updateLoader->nacp->GetApplicationVersion() : "unknown"});
 
             if (state.updateLoader)
                 LOGINF("Applied update v{}", state.updateLoader->nacp->GetApplicationVersion());

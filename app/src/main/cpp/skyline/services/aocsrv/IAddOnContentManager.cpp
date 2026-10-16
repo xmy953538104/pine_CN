@@ -13,8 +13,8 @@ namespace skyline::service::aocsrv {
           addOnContentListChangedEvent(std::make_shared<type::KEvent>(state, false)) {}
 
     Result IAddOnContentManager::CountAddOnContent(type::KSession &session, ipc::IpcRequest &request, ipc::IpcResponse &response) {
-        PINE_DIAG_CONTENT("DLC_AOC_COUNT", {"count", fmt::format("{}", state.dlcLoaders.size())});
         response.Push<u32>(static_cast<u32>(state.dlcLoaders.size()));
+        PINE_DIAG_CONTENT("DLC_AOC_COUNT", {"count", fmt::format("{}", state.dlcLoaders.size())});
         return {};
     }
 
@@ -40,13 +40,14 @@ namespace skyline::service::aocsrv {
         out.resize(outCount);
 
         request.outputBuf.at(0).copy_from(out);
-        PINE_DIAG_CONTENT("DLC_AOC_LIST", {"offset", fmt::format("{}", params.offset)}, {"requested_count", fmt::format("{}", params.count)}, {"returned_count", fmt::format("{}", outCount)});
         response.Push<u32>(outCount);
+        PINE_DIAG_CONTENT("DLC_AOC_LIST", {"offset", fmt::format("{}", params.offset)}, {"requested_count", fmt::format("{}", params.count)}, {"returned_count", fmt::format("{}", outCount)});
         return {};
     }
 
     Result IAddOnContentManager::GetAddOnContentBaseId(type::KSession &session, ipc::IpcRequest &request, ipc::IpcResponse &response) {
         response.Push<u64>(state.loader->nacp->nacpContents.addOnContentBaseId);
+        PINE_DIAG_CONTENT("DLC_AOC_BASE_ID", {"data_id", diagnostics::ContentTitleId(state.loader->nacp->nacpContents.addOnContentBaseId)});
         return {};
     }
 

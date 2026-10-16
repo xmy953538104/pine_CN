@@ -20,6 +20,10 @@ namespace skyline::vfs {
         }
 
       public:
+        bool HasReliableReadByteCount() const noexcept override {
+            return backing->HasReliableReadByteCount();
+        }
+
         /**
          * @param file The backing to create the RegionBacking from
          * @param offset The offset of the region start within the parent backing

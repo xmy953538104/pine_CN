@@ -6,7 +6,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: diagnostics-${{ github.ref }}
+  # Keep the evidence from an already-running APK attempt when a later test fix
+  # is pushed; duplicate runs for the same source commit still cancel.
+  group: diagnostics-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 jobs:
   native:

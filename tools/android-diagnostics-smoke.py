@@ -156,6 +156,9 @@ class Smoke:
                 "Retention/category checks verify configuration and native session restart, not load or rotation stress.",
             ],
         }
+        runner_source = Path(__file__).read_bytes()
+        self.summary["runner_sha256"] = digest(runner_source)
+        (self.output / "runner-source.py").write_bytes(runner_source)
         self.write_summary()
 
     def write_summary(self):
@@ -174,11 +177,14 @@ class Smoke:
             "commit": self.args.expected_commit,
             "apk_sha256": self.summary.get("apk_sha256"),
             "application_id": PACKAGE, "serial": self.args.serial,
+            "runner_sha256": self.summary["runner_sha256"],
             "physical_arm64_verified": False,
             "checks": self.results,
             "blockers": {name: row.get("reason", "") for name, row in self.results.items() if row["status"] == "blocked"},
             "failed_checks": {name: row.get("reason", "") for name, row in self.results.items() if row["status"] == "fail"},
             "device": self.summary.get("device", {}),
+            "android_readiness": self.summary.get("android_readiness", {}),
+            "capture_warnings": self.summary.get("capture_warnings", []),
             "possible_platform_cause": self.summary.get("possible_platform_cause", []),
             "limitations": self.summary["limitations"],
             "evidence": sorted(p.name for p in self.output.iterdir() if p.is_file() and not p.name.endswith(".tmp")),
@@ -247,14 +253,25 @@ class Smoke:
         data = self.adb("exec-out", "screencap", "-p", binary=True, check=False,
                         save=f"{self.screen_number:03d}-{label}.png")
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            self.summary.setdefault("capture_warnings", []).append({
+                "label": label, "command_number": self.command_number,
+                "reason": "screencap did not produce a PNG; UI XML remains the UI observation",
+            })
             (self.output / f"{self.screen_number:03d}-{label}-screenshot-error.txt").write_text(
                 "screencap did not produce a PNG; see commands.jsonl\n", encoding="utf-8")
 
-    def screen(self, label):
+    def screen(self, label, deadline=None):
+        def budget():
+            if deadline is None:
+                return self.args.command_timeout
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Blocked("Android readiness deadline expired while reading UIAutomator hierarchy")
+            return min(self.args.command_timeout, remaining)
         self.screen_number += 1
-        self.adb("shell", "uiautomator", "dump", "--compressed", self.remote_xml)
+        self.adb("shell", "uiautomator", "dump", "--compressed", self.remote_xml, timeout=budget())
         path = self.output / f"{self.screen_number:03d}-{label}.xml"
-        data = self.adb("exec-out", "cat", self.remote_xml, save=path.name)
+        data = self.adb("exec-out", "cat", self.remote_xml, save=path.name, timeout=budget())
         try:
             return Screen(ET.fromstring(data), path, self.screen_number)
         except ET.ParseError as error:
@@ -372,24 +389,48 @@ class Smoke:
                 "commit_check": "packaged DEX presence; native SESSION_METADATA and exporter metadata are checked separately"}
 
     def device_ready(self):
-        state = decode(self.adb("get-state")).strip()
+        deadline = time.monotonic() + self.args.boot_timeout
+        def budget():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Blocked("Bounded Android boot/readiness gate expired before installation")
+            return min(self.args.command_timeout, remaining)
+        state = decode(self.adb("get-state", timeout=budget())).strip()
         if state != "device":
             raise Blocked("ADB device is not authorized/online: " + state)
-        deadline = time.monotonic() + self.args.boot_timeout
         while True:
-            data = self.adb("shell", "getprop", save="device-properties.txt")
+            data = self.adb("shell", "getprop", save="device-properties.txt", timeout=budget())
             properties = dict(re.findall(r"^\[([^]]+)\]: \[([^]]*)\]$", decode(data), re.MULTILINE))
             if properties.get("sys.boot_completed") == "1":
                 break
             if time.monotonic() >= deadline:
                 raise Blocked("sys.boot_completed did not become 1; Android boot is not complete")
-            time.sleep(5)
-        require("arm64-v8a" in properties.get("ro.product.cpu.abilist", "").split(","),
-                "Guest does not advertise the APK's arm64-v8a ABI")
+            time.sleep(min(5, max(0, deadline - time.monotonic())))
+        if "arm64-v8a" not in properties.get("ro.product.cpu.abilist", "").split(","):
+            raise Blocked("Guest does not advertise the APK's arm64-v8a ABI")
         self.summary["device"] = {key: properties.get(key, "") for key in (
             "ro.build.fingerprint", "ro.build.version.sdk", "ro.product.cpu.abi",
             "ro.product.cpu.abilist", "ro.dalvik.vm.native.bridge", "ro.kernel.qemu", "sys.boot_completed")}
-        return self.summary["device"]
+        # sys.boot_completed can remain 1 across system_server watchdog restarts.
+        # Observe a real package query and short system_server continuity before
+        # first installation. UI success is tested against the installed app;
+        # an unresponsive preflight hierarchy must not prevent that actual attempt.
+        before = decode(self.adb("shell", "pidof", "system_server", timeout=budget(),
+                                 save="readiness-system-server-before.txt")).strip()
+        if not re.fullmatch(r"[0-9]+", before):
+            raise Blocked("No single running Android system_server before UI readiness observation")
+        package = decode(self.adb("shell", "cmd", "package", "path", "android", timeout=budget(),
+                                  save="readiness-package-query.txt"))
+        if not any(line.startswith("package:") for line in package.splitlines()):
+            raise Blocked("Android package manager did not answer its real package query")
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
+        after = decode(self.adb("shell", "pidof", "system_server", timeout=budget(),
+                                save="readiness-system-server-after.txt")).strip()
+        self.summary["android_readiness"] = {"system_server_before": before, "system_server_after": after,
+                                              "package_query_answered": True, "preinstall_ui_required": False}
+        if before != after:
+            raise Blocked("Android system_server restarted during package/PID readiness observation; no APK installation attempted")
+        return {**self.summary["device"], **self.summary["android_readiness"]}
 
     def fresh_install(self):
         existing = decode(self.adb("shell", "cmd", "package", "path", PACKAGE, check=False)).strip()
@@ -658,6 +699,14 @@ class Smoke:
                 "scope": "Logcat tail started before first application launch; captures PineDiag and Java/native crash tags"}
 
     def finish(self):
+        if not self.installed and self.summary.get("device"):
+            try:
+                self.adb("logcat", "-b", "system", "-b", "crash", "-d", "-t", "1000", "-v", "threadtime",
+                         "Watchdog:V", "SystemServer:V", "ActivityManager:E", "AndroidRuntime:E", "*:S",
+                         save="android-framework-logcat.txt", timeout=20)
+                self.adb("shell", "rm", "-f", self.remote_xml, check=False, timeout=10)
+            except Blocked as error:
+                self.summary["final_capture_blocker"] = str(error)
         if self.installed:
             try:
                 self.adb("logcat", "-b", "crash", "-d", "-v", "threadtime", save="crash-buffer.txt")
@@ -718,7 +767,7 @@ def main():
     parser.add_argument("--output", required=True, type=Path, help="New evidence directory, preserved even on failure")
     parser.add_argument("--command-timeout", type=int, default=60)
     parser.add_argument("--ui-timeout", type=int, default=120)
-    parser.add_argument("--boot-timeout", type=int, default=300)
+    parser.add_argument("--boot-timeout", type=int, default=120, help="Total pre-install Android boot/readiness gate budget")
     parser.add_argument("--install-timeout", type=int, default=300)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_commit):

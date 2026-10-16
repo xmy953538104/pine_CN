@@ -14,6 +14,13 @@ RUNNER = Path(__file__).resolve().parents[1] / "android-diagnostics-smoke.py"
 MODULE = runpy.run_path(str(RUNNER))
 Smoke, Blocked = MODULE["Smoke"], MODULE["Blocked"]
 SESSION = "11111111-2222-3333-4444-555555555555"
+READY_XML = '<hierarchy><node text="Ready" enabled="true" bounds="[0,0][100,100]"/></hierarchy>'
+PLATFORM_ANR_XML = '''<hierarchy><node package="android" bounds="[48,313][431,510]">
+<node text="System UI isn't responding" resource-id="android:id/alertTitle" package="android"
+ class="android.widget.TextView" enabled="true" bounds="[88,335][391,363]"/>
+<node text="Wait" resource-id="android:id/aerr_wait" package="android"
+ class="android.widget.Button" enabled="true" clickable="true" bounds="[64,438][415,486]"/>
+</node></hierarchy>'''
 
 
 class ObservationDeadlines(unittest.TestCase):
@@ -61,13 +68,15 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'dump', 'UI hierarchy dumped'
             elif args[:2] == ['exec-out', 'cat']:
                 operation = 'xml'
-                output = '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>'
+                output = next_result('xml_sequence', '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>')
                 if config.get('shared_storage_unavailable') and args[2].startswith('/sdcard/'):
                     # Android exec-out can report success while cat's error is
                     # returned as stdout. This must never become a UI success.
                     output = 'cat: ' + args[2] + ': Transport endpoint is not connected'
             elif args[:3] == ['shell', 'input', 'swipe']:
                 operation, output = 'swipe', ''
+            elif args[:3] == ['shell', 'input', 'tap']:
+                operation, output = 'tap', ''
             elif args[:2] == ['exec-out', 'screencap']:
                 operation, output, binary = 'screenshot', b'\\x89PNG\\r\\n\\x1a\\n', True
             elif args[:2] == ['exec-out', 'run-as'] and args[3] == 'ls':
@@ -101,7 +110,7 @@ class ObservationDeadlines(unittest.TestCase):
             '''))
         self.fake.chmod(0o755)
 
-    def smoke(self, name, delays):
+    def smoke(self, name, delays, allow_platform_anr=False):
         self.config.write_text(json.dumps({"session": SESSION, **delays}))
         self.fake.with_suffix('.state.json').unlink(missing_ok=True)
         # Short fixture budgets keep these real subprocess tests fast while
@@ -110,7 +119,8 @@ class ObservationDeadlines(unittest.TestCase):
         return Smoke(argparse.Namespace(
             adb=str(self.fake), serial="offline-fixture", apk=self.root / "absent.apk",
             expected_commit="a" * 40, output=self.root / name,
-            command_timeout=2.5, ui_timeout=1, boot_timeout=2.5, install_timeout=2.5))
+            command_timeout=2.5, ui_timeout=1, boot_timeout=2.5, install_timeout=2.5,
+            wait_known_platform_anr=allow_platform_anr))
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
@@ -166,6 +176,66 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertIn("Transport endpoint is not connected",
                       (smoke.output / "002-broken-fuse.xml").read_text())
         self.assertEqual(smoke.results, {})
+
+    def test_opt_in_platform_wait_requires_a_fresh_observation_after_the_tap(self):
+        smoke = self.smoke("platform-recovery", {"xml_sequence": [PLATFORM_ANR_XML, READY_XML]},
+                           allow_platform_anr=True)
+        smoke.args.ui_timeout = 3
+        screen = smoke.wait_ui("recovery", lambda value: value.find("Ready") is not None)
+        self.assertEqual(screen.number, 2)
+        attempts = smoke.summary["platform_anr_waits"]
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["status"], "tap_sent")
+        self.assertEqual(attempts[0]["source_xml"], "001-recovery.xml")
+        taps = [row for row in self.commands(smoke) if "tap" in row["argv"]]
+        self.assertEqual(len(taps), 1)
+        self.assertEqual(taps[0]["argv"][-2:], ["239", "462"])
+        # Even successful helper recovery is no APK/native/export check pass.
+        self.assertEqual(smoke.results, {})
+        self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_platform_wait_never_handles_default_pine_unknown_or_wrong_controls(self):
+        scenarios = (
+            ("default", PLATFORM_ANR_XML, False),
+            ("pine", PLATFORM_ANR_XML.replace("System UI", "Pine Diagnostics"), True),
+            ("unknown", PLATFORM_ANR_XML.replace("System UI", "Fixture App"), True),
+            ("wrong-package", PLATFORM_ANR_XML.replace('package="android"', 'package="fixture.other"'), True),
+            ("prefixed-resource", PLATFORM_ANR_XML.replace('resource-id="android:', 'resource-id="fixture:android:'), True),
+            ("close", PLATFORM_ANR_XML.replace("android:id/aerr_wait", "android:id/aerr_close"), True),
+            ("not-clickable", PLATFORM_ANR_XML.replace('clickable="true"', 'clickable="false"'), True),
+            ("disabled", PLATFORM_ANR_XML.replace('enabled="true"', 'enabled="false"'), True),
+            ("missing-enabled", PLATFORM_ANR_XML.replace('enabled="true"', ''), True),
+        )
+        for name, xml, enabled in scenarios:
+            with self.subTest(case=name):
+                smoke = self.smoke(name, {"xml_sequence": [xml]}, allow_platform_anr=enabled)
+                screen = smoke.screen(name, deadline=time.monotonic() + 1)
+                self.assertFalse(smoke.wait_known_platform_dialog(screen, time.monotonic() + 1))
+                self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+                self.assertEqual(smoke.summary["platform_anr_waits"], [])
+
+    def test_repeated_platform_anr_is_still_blocked_after_two_waits(self):
+        smoke = self.smoke("platform-persistent", {"xml_sequence": [PLATFORM_ANR_XML]},
+                           allow_platform_anr=True)
+        smoke.args.ui_timeout = 3
+        started = time.monotonic()
+        with self.assertRaises(Blocked):
+            smoke.wait_ui("persistent", lambda value: value.find("Ready") is not None)
+        self.assertLess(time.monotonic() - started, 3.8)
+        self.assertEqual(len([row for row in self.commands(smoke) if "tap" in row["argv"]]), 2)
+        self.assertEqual(len(smoke.summary["platform_anr_waits"]), 2)
+        self.assertEqual(smoke.results, {})
+        self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_platform_wait_command_cannot_extend_the_original_ui_deadline(self):
+        smoke = self.smoke("platform-slow-tap", {"xml_sequence": [PLATFORM_ANR_XML], "tap": 2.5},
+                           allow_platform_anr=True)
+        started = time.monotonic()
+        with self.assertRaises(Blocked):
+            smoke.wait_ui("slow-tap", lambda value: value.find("Ready") is not None)
+        self.assertLess(time.monotonic() - started, 1.8)
+        self.assertTrue(any(row["timed_out"] and "tap" in row["argv"] for row in self.commands(smoke)))
+        self.assertEqual(smoke.summary["platform_anr_waits"][0]["status"], "blocked")
 
     def assert_gate_only(self, smoke, status):
         self.assertEqual(set(smoke.results), {"device_ready"})

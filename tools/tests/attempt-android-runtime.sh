@@ -136,7 +136,9 @@ framework_logger_pid=$!
 # The first API36 software-accelerated attempt completed boot but exhausted the
 # normal 300s install budget. This larger, finite CI-only budget changes neither
 # device security nor the APK/guest behavior; all unobserved checks stay blocked.
-if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900; then
+# This flag is scoped to this newly created, job-owned AVD. Ordinary users of
+# the smoke runner do not automatically interact with another app's ANR dialog.
+if python3 tools/android-diagnostics-smoke.py --adb "$adb" --serial emulator-5554 --apk "$apk" --expected-commit "$commit" --output "$out" --install-timeout 900 --wait-known-platform-anr; then
   smoke_result=0
 else
   smoke_result=$?

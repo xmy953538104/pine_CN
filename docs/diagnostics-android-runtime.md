@@ -148,6 +148,30 @@ error text at the old path remains blocked. This is a host observer test, not AP
 execution. The final SAF test still saves through the ordinary document picker
 and reads the actual ZIP in `/sdcard/Download`; its standard is not relaxed.
 
+**Android35 observer checkpoint, 2026-10-16 20:39 UTC:** the
+[`24ff025e` Ubuntu attempt](https://github.com/xmy953538104/pine_CN/actions/runs/38961409089/job/117179494200)
+installed its exact APK (SHA256
+`614c5fd640806d3759cedcf42db032891775616018388313b7dcbbf0c22952f7`)
+in 144.796 seconds including its absence query. The new temporary path produced
+valid XML: captures 004–006 show the exact Android title
+`System UI isn't responding`, resource `android:id/alertTitle`, package `android`,
+and a real enabled/clickable `android:id/aerr_wait` Button. The report remains
+5 passed, 13 blocked, 0 failed: a valid blocking dialog is not a Pine Settings
+pass. The launch response still timed out (`WaitTime: 36644`); no Pine crash was
+observed in capture.
+
+The next job-owned AVD explicitly opts into at most two ordinary **Wait** taps
+for that exact observed title or the previously observed process-system title.
+The standalone runner defaults to no such interaction. It requires exact Android
+resource IDs/package, enabled/clickable Wait buttons and fresh bounds, records
+the source XML/command/action status in its report, and shares the original UI
+deadline. Pine and unknown titles, Close app, wrong or disabled controls never
+qualify. A sent tap is not recovery evidence: a fresh hierarchy must satisfy the
+original predicate, and all native/log/SAF/crash checks still run unchanged.
+Persistent ANRs remain blocked after the global two-attempt cap. Controlled host
+tests cover recovery, no-action guards, persistent dialogs and slow-tap deadlines;
+they are not Android execution evidence.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

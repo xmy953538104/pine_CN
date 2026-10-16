@@ -158,6 +158,9 @@ class Smoke:
                 "No game content, keys, tickets, or private saves are supplied.",
                 "Retention/category checks verify configuration and native session restart, not load or rotation stress.",
             ],
+            "platform_anr_wait_enabled": bool(getattr(args, "wait_known_platform_anr", False)),
+            "platform_anr_wait_limit": 2,
+            "platform_anr_waits": [],
         }
         runner_source = Path(__file__).read_bytes()
         self.summary["runner_sha256"] = digest(runner_source)
@@ -188,6 +191,9 @@ class Smoke:
             "device": self.summary.get("device", {}),
             "android_readiness": self.summary.get("android_readiness", {}),
             "capture_warnings": self.summary.get("capture_warnings", []),
+            "platform_anr_wait_enabled": self.summary["platform_anr_wait_enabled"],
+            "platform_anr_wait_limit": self.summary["platform_anr_wait_limit"],
+            "platform_anr_waits": self.summary["platform_anr_waits"],
             "possible_platform_cause": self.summary.get("possible_platform_cause", []),
             "limitations": self.summary["limitations"],
             "evidence": sorted(p.name for p in self.output.iterdir() if p.is_file() and not p.name.endswith(".tmp")),
@@ -316,6 +322,9 @@ class Smoke:
         while time.monotonic() < deadline:
             try:
                 last = self.screen(label, deadline=deadline)
+                if self.wait_known_platform_dialog(last, deadline):
+                    self.pause(deadline)
+                    continue
                 if predicate(last):
                     self.budget(deadline, f"UI observation '{label}'")
                     self.screenshot(label, deadline=deadline)
@@ -327,12 +336,49 @@ class Smoke:
         evidence = last.xml.name if last else last_error or "no UI XML"
         raise Blocked(f"UI observation '{label}' not reached within {self.args.ui_timeout}s; last evidence: {evidence}")
 
-    def tap(self, node):
+    def wait_known_platform_dialog(self, screen, deadline):
+        """Opt-in, bounded ordinary Wait on two observed platform titles only.
+
+        A sent tap never proves recovery. Only a subsequent fresh hierarchy and
+        the original predicate can satisfy the surrounding UI observation.
+        """
+        if not self.summary["platform_anr_wait_enabled"]:
+            return False
+        title = screen.find(resource="android:id/alertTitle")
+        if (title is None or title.get("package") != "android" or title.get("resource-id") != "android:id/alertTitle" or
+                title.get("text") not in ("System UI isn't responding", "Process system isn't responding")):
+            return False
+        button = screen.find(resource="android:id/aerr_wait", class_name="android.widget.Button")
+        if (button is None or button.get("package") != "android" or button.get("resource-id") != "android:id/aerr_wait" or
+                button.get("enabled") != "true" or
+                button.get("clickable") != "true" or button.get("text", "").casefold() != "wait"):
+            return False
+        attempts = self.summary["platform_anr_waits"]
+        if len(attempts) >= self.summary["platform_anr_wait_limit"]:
+            raise Blocked("Known platform ANR persists after the bounded ordinary Wait attempts; no further action")
+        self.budget(deadline, "Known platform ANR Wait")
+        row = {"source_xml": screen.xml.name, "title": title.get("text"),
+               "button_resource": button.get("resource-id"), "bounds": button.get("bounds"),
+               "action": "Wait", "command_number": self.command_number + 1, "status": "attempted"}
+        attempts.append(row)
+        try:
+            self.tap(button, deadline=deadline)
+            self.budget(deadline, "Known platform ANR Wait")
+            row["status"] = "tap_sent"
+        except Blocked as error:
+            row.update(status="blocked", reason=str(error))
+            raise
+        finally:
+            self.write_summary()
+        return True
+
+    def tap(self, node, deadline=None):
         bounds = Screen.bounds(node)
         if not bounds:
             raise Blocked("Cannot tap a UI node without visible bounds")
         left, top, right, bottom = bounds
-        self.adb("shell", "input", "tap", (left + right) // 2, (top + bottom) // 2)
+        self.adb("shell", "input", "tap", (left + right) // 2, (top + bottom) // 2,
+                 timeout=self.budget(deadline, "UI tap"))
 
     def seek(self, text, label, direction="down", exact=False):
         deadline = time.monotonic() + self.args.ui_timeout
@@ -340,6 +386,9 @@ class Smoke:
         screen = None
         for _ in range(10):
             screen = self.screen(label, deadline=deadline)
+            if self.wait_known_platform_dialog(screen, deadline):
+                self.pause(deadline)
+                continue
             node = screen.find(text, exact=exact)
             self.budget(deadline, f"Seeking '{text}'")
             if node is not None:
@@ -898,6 +947,8 @@ def main():
     parser.add_argument("--ui-timeout", type=int, default=120)
     parser.add_argument("--boot-timeout", type=int, default=120, help="Total pre-install Android boot/readiness gate budget")
     parser.add_argument("--install-timeout", type=int, default=300)
+    parser.add_argument("--wait-known-platform-anr", action="store_true",
+                        help="Fresh owned test devices only: at most two normal Wait taps on exact observed System UI/process-system ANR dialogs; never Close app or a Pine/unknown title")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_commit):
         parser.error("--expected-commit must be a full lowercase 40-character Git commit")

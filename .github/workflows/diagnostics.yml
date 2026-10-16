@@ -119,6 +119,28 @@ jobs:
           path: runtime-apk
       - name: Attempt actual ARM64 APK through official Android native translation
         run: bash tools/tests/attempt-android-runtime.sh runtime-apk/app-full-debug.apk '${{ github.event.pull_request.head.sha || github.sha }}' runtime-evidence
+      - name: Print exact runtime result and bounded environment evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('runtime-evidence')
+          report = root / 'runtime-report.json'
+          if report.is_file():
+              print(json.dumps(json.loads(report.read_text()), ensure_ascii=False, sort_keys=True))
+          else:
+              print('No runtime report was produced; no APK execution result is claimed.')
+          for name in ('host.txt', 'accel-check.txt'):
+              path = root / name
+              if path.is_file():
+                  print(name + ': ' + path.read_text(errors='replace')[-4096:])
+          for name in ('android-framework-logcat.txt', 'android-logcat.txt'):
+              path = root / name
+              if path.is_file():
+                  lines = path.read_text(errors='replace').splitlines()
+                  relevant = [line for line in lines if any(word in line for word in ('WATCHDOG', 'Watchdog', 'SystemServer', 'system_server', 'DeadSystemException', 'FATAL EXCEPTION IN SYSTEM PROCESS', 'Lost network stack', 'ConnectivityModuleConnector', 'Failure calling service package'))]
+                  print(name + ':\n' + '\n'.join(relevant[-30:])[-12000:])
+          PY
       - name: Runtime evidence (includes blocked attempts)
         if: always()
         uses: actions/upload-artifact@v4

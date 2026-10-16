@@ -24,10 +24,16 @@ bool Verbose() noexcept;
 // Lifecycle calls are for ordinary threads only. Start replaces/drains an existing session.
 bool Start(const Config &config) noexcept;
 void Stop() noexcept;
+// Ordinary threads only. Wait for the currently accepted snapshot without
+// stopping the session; false on timeout, disk failure, or a busy lifecycle call.
+bool Flush(uint32_t timeoutMilliseconds = 250) noexcept;
 // Never call from a raw signal handler. Fields are copied, bounded and escaped.
 void Emit(std::string_view category, std::string_view event,
           std::initializer_list<std::pair<std::string_view, std::string_view>> fields = {},
           std::string_view level = "INFO") noexcept;
+// Ordinary threads only. Subsequent records carry the known base-title identity.
+// Empty means unknown; Start clears the context before enabling the next session.
+void SetTitleId(std::string_view titleId) noexcept;
 void Stage(std::string_view stage) noexcept;
 std::string LastStage();
 Statistics Stats() noexcept;

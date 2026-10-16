@@ -162,6 +162,8 @@ namespace skyline::nce {
             if (TrapManager::TrapHandler(reinterpret_cast<u8 *>(info->si_addr), true))
                 return;
 
+        state.thread->pendingGuestSignal.Capture(signal);
+
         if (signal != SIGINT) {
             signal::StackFrame topFrame{.lr = reinterpret_cast<void *>(ctx->uc_mcontext.pc), .next = reinterpret_cast<signal::StackFrame *>(ctx->uc_mcontext.regs[29])};
             std::string trace{state.loader->GetStackTrace(&topFrame)};

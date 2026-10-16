@@ -53,6 +53,7 @@ namespace skyline::kernel::type {
         state.thread = shared_from_this();
 
         if (setjmp(originalCtx)) { // Returns 1 if it's returning from guest, 0 otherwise
+            pendingGuestSignal.Drain();
             state.scheduler->RemoveThread();
 
             {

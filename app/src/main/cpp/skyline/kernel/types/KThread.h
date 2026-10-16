@@ -4,6 +4,7 @@
 #pragma once
 
 #include <csetjmp>
+#include <diagnostics/pending_signal.h>
 #include <nce/guest.h>
 #include <jit/thread_context32.h>
 #include <kernel/scheduler.h>
@@ -54,6 +55,7 @@ namespace skyline::kernel {
             KHandle handle;
             size_t id; //!< Index of thread in parent process's KThread vector
 
+            diagnostics::PendingGuestSignal pendingGuestSignal{};
             jmp_buf originalCtx{}; //!< The context of the host thread prior to jumping into guest code
 
             void *entry; //!< A function pointer to the thread's entry

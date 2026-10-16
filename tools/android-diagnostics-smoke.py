@@ -200,7 +200,7 @@ class Smoke:
         expired = False
         try:
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    timeout=timeout or self.args.command_timeout, check=False)
+                                    timeout=self.args.command_timeout if timeout is None else timeout, check=False)
             stdout, stderr, code = result.stdout, result.stderr, result.returncode
         except subprocess.TimeoutExpired as error:
             stdout, stderr, code = error.stdout or b"", error.stderr or b"", None
@@ -249,33 +249,59 @@ class Smoke:
         self.write_summary()
         print(f"{name}: {result['status']}" + (": " + result["reason"] if "reason" in result else ""), flush=True)
 
-    def screenshot(self, label):
-        data = self.adb("exec-out", "screencap", "-p", binary=True, check=False,
-                        save=f"{self.screen_number:03d}-{label}.png")
-        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-            self.summary.setdefault("capture_warnings", []).append({
-                "label": label, "command_number": self.command_number,
-                "reason": "screencap did not produce a PNG; UI XML remains the UI observation",
-            })
+    def budget(self, deadline, observation):
+        if deadline is None:
+            return self.args.command_timeout
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Blocked(f"{observation} exceeded its observation deadline")
+        return min(self.args.command_timeout, remaining)
+
+    @staticmethod
+    def pause(deadline, seconds=1):
+        time.sleep(min(seconds, max(0, deadline - time.monotonic())))
+
+    def screenshot(self, label, deadline=None):
+        # Captures are diagnostic only. They cannot extend an observation's
+        # deadline or replace its original success/blocker with a capture error.
+        timeout = min(5, self.args.command_timeout)
+        if deadline is not None:
+            timeout = min(timeout, max(0, deadline - time.monotonic()))
+        command_number = None
+        reason = "Screenshot skipped after the observation deadline"
+        if timeout > 0:
+            try:
+                data = self.adb("exec-out", "screencap", "-p", binary=True, check=False,
+                                timeout=timeout, save=f"{self.screen_number:03d}-{label}.png")
+                command_number = self.command_number
+                if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    return
+                reason = "screencap did not produce a PNG; UI XML remains the UI observation"
+            except (Blocked, OSError) as error:
+                reason = f"Screenshot capture failed: {error}; UI XML remains the UI observation"
+        self.summary.setdefault("capture_warnings", []).append({
+            "label": label, "command_number": command_number, "reason": reason,
+        })
+        try:
             (self.output / f"{self.screen_number:03d}-{label}-screenshot-error.txt").write_text(
-                "screencap did not produce a PNG; see commands.jsonl\n", encoding="utf-8")
+                reason + "; see commands.jsonl\n", encoding="utf-8")
+        except OSError:
+            pass
 
     def screen(self, label, deadline=None):
-        def budget():
-            if deadline is None:
-                return self.args.command_timeout
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise Blocked("Android readiness deadline expired while reading UIAutomator hierarchy")
-            return min(self.args.command_timeout, remaining)
+        observation = f"UI observation '{label}'"
         self.screen_number += 1
-        self.adb("shell", "uiautomator", "dump", "--compressed", self.remote_xml, timeout=budget())
+        self.adb("shell", "uiautomator", "dump", "--compressed", self.remote_xml,
+                 timeout=self.budget(deadline, observation))
         path = self.output / f"{self.screen_number:03d}-{label}.xml"
-        data = self.adb("exec-out", "cat", self.remote_xml, save=path.name, timeout=budget())
+        data = self.adb("exec-out", "cat", self.remote_xml, save=path.name,
+                        timeout=self.budget(deadline, observation))
         try:
-            return Screen(ET.fromstring(data), path, self.screen_number)
+            screen = Screen(ET.fromstring(data), path, self.screen_number)
         except ET.ParseError as error:
             raise Blocked(f"UIAutomator did not provide parseable XML: {path.name}: {error}") from error
+        self.budget(deadline, observation)
+        return screen
 
     def wait_ui(self, label, predicate):
         deadline = time.monotonic() + self.args.ui_timeout
@@ -283,14 +309,15 @@ class Smoke:
         last_error = None
         while time.monotonic() < deadline:
             try:
-                last = self.screen(label)
+                last = self.screen(label, deadline=deadline)
                 if predicate(last):
-                    self.screenshot(label)
+                    self.budget(deadline, f"UI observation '{label}'")
+                    self.screenshot(label, deadline=deadline)
                     return last
             except Blocked as error:
                 last_error = str(error)
-            time.sleep(1)
-        self.screenshot(label + "-blocked")
+            self.pause(deadline)
+        self.screenshot(label + "-blocked", deadline=deadline)
         evidence = last.xml.name if last else last_error or "no UI XML"
         raise Blocked(f"UI observation '{label}' not reached within {self.args.ui_timeout}s; last evidence: {evidence}")
 
@@ -302,12 +329,15 @@ class Smoke:
         self.adb("shell", "input", "tap", (left + right) // 2, (top + bottom) // 2)
 
     def seek(self, text, label, direction="down", exact=False):
+        deadline = time.monotonic() + self.args.ui_timeout
         previous = None
+        screen = None
         for _ in range(10):
-            screen = self.screen(label)
+            screen = self.screen(label, deadline=deadline)
             node = screen.find(text, exact=exact)
+            self.budget(deadline, f"Seeking '{text}'")
             if node is not None:
-                self.screenshot(label)
+                self.screenshot(label, deadline=deadline)
                 return screen, node
             signature = ET.tostring(screen.root)
             if signature == previous:
@@ -322,10 +352,13 @@ class Smoke:
             x = (left + right) // 2
             low, high = top + (bottom - top) * 4 // 5, top + (bottom - top) // 5
             start, finish = (low, high) if direction == "down" else (high, low)
-            self.adb("shell", "input", "swipe", x, start, x, finish, 350)
-            time.sleep(.5)
-        self.screenshot(label + "-missing")
-        raise Blocked(f"Visible control '{text}' unavailable after bounded scrolling; see {screen.xml.name}")
+            self.adb("shell", "input", "swipe", x, start, x, finish, 350,
+                     timeout=self.budget(deadline, f"Seeking '{text}'"))
+            self.budget(deadline, f"Seeking '{text}'")
+            self.pause(deadline, .5)
+        self.screenshot(label + "-missing", deadline=deadline)
+        evidence = screen.xml.name if screen else "no UI XML"
+        raise Blocked(f"Visible control '{text}' unavailable after bounded scrolling; see {evidence}")
 
     def prefs(self):
         data = self.adb("exec-out", "run-as", PACKAGE, "cat", "shared_prefs/diagnostics.xml")
@@ -339,34 +372,42 @@ class Smoke:
         deadline = time.monotonic() + self.args.ui_timeout
         while time.monotonic() < deadline:
             raw = self.adb("exec-out", "run-as", PACKAGE, "cat",
-                           "files/diagnostics/main/session-id.txt", check=False)
+                           "files/diagnostics/main/session-id.txt", check=False,
+                           timeout=self.budget(deadline, "Native session marker"))
             session = decode(raw).strip()
+            self.budget(deadline, "Native session marker")
             if UUID_RE.fullmatch(session) and session != previous:
                 self.session = session
                 self.sessions.add(session)
                 return session
-            time.sleep(1)
+            self.pause(deadline)
         raise Blocked("No new native-session marker observed after the UI settings change")
 
-    def native_records(self, label):
-        listing = decode(self.adb("exec-out", "run-as", PACKAGE, "ls", "files/diagnostics/main"))
+    def native_records(self, label, deadline=None):
+        observation = f"Native records '{label}'"
+        listing = decode(self.adb("exec-out", "run-as", PACKAGE, "ls", "files/diagnostics/main",
+                                  timeout=self.budget(deadline, observation)))
         names = sorted(name for name in listing.splitlines() if re.fullmatch(r"diagnostics-[0-7]\.jsonl", name))
         rows = []
         for name in names:
             data = self.adb("exec-out", "run-as", PACKAGE, "cat", "files/diagnostics/main/" + name,
-                            binary=True, save=label + "-main-" + name)
+                            binary=True, save=label + "-main-" + name,
+                            timeout=self.budget(deadline, observation))
             require(len(data) <= 2 * 1024 * 1024, f"Native {name} exceeds configured 2 MiB file bound")
             rows.extend(parse_records(data, name))
+            self.budget(deadline, observation)
+        self.budget(deadline, observation)
         return rows, names
 
     def wait_native(self, label, event, session):
         deadline = time.monotonic() + self.args.ui_timeout
         while time.monotonic() < deadline:
-            rows, names = self.native_records(label)
+            rows, names = self.native_records(label, deadline=deadline)
             matching = [r for r in rows if r.get("session_id") == session and r.get("event") == event]
+            self.budget(deadline, f"Native {event} observation")
             if matching:
                 return rows, names, matching
-            time.sleep(1)
+            self.pause(deadline)
         raise Blocked(f"No native {event} record observed for session {session}")
 
     def apk_identity(self):
@@ -617,14 +658,16 @@ class Smoke:
         deadline = time.monotonic() + self.args.ui_timeout
         while time.monotonic() < deadline:
             data = self.adb("exec-out", "cat", remote, check=False, binary=True,
-                            save="exported-diagnostics.zip")
+                            save="exported-diagnostics.zip",
+                            timeout=self.budget(deadline, "SAF ZIP observation"))
             try:
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     if archive.testzip() is None:
+                        self.budget(deadline, "SAF ZIP observation")
                         return {"destination": remote, "zip_bytes": len(data), "sha256": digest(data)}
             except (zipfile.BadZipFile, OSError):
                 pass
-            time.sleep(1)
+            self.pause(deadline)
         raise Blocked("SAF did not produce a readable ZIP in the selected Downloads root; see picker evidence and commands.jsonl")
 
     def verify_zip(self):

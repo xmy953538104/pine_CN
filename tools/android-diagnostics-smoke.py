@@ -169,7 +169,7 @@ class Smoke:
         self.preview_entries = {}
         self.snapshot_bytes = {}
         self.snapshot_id = None
-        self.saved_name = "pine-diag-smoke-" + uuid.uuid4().hex + ".zip"
+        self.saved_name = None  # Set only from the exact observed current-session SAF filename.
         self.logger = None
         self.log_stream = None
         self.results = {}
@@ -807,12 +807,39 @@ class Smoke:
         self.logger = subprocess.Popen(command, stdout=self.log_stream, stderr=subprocess.STDOUT)
         self.summary["logcat_capture_argv"] = command
 
-    def open_settings(self):
+    @staticmethod
+    def own_diagnostics_controls(screen):
+        """Cleanup-only recognition: visible own switch plus own live status, no foreign dialog."""
+        visible = [n for n in screen.root.iter("node") if Screen.bounds(n) and n.get("enabled") == "true"]
+        if any(n.get("package") not in (PACKAGE, "com.android.systemui") for n in visible):
+            return None
+        switch = next((n for n in visible if n.get("package") == PACKAGE and
+                       n.get("class") == "android.widget.Switch" and n.get("checkable") == "true" and
+                       n.get("checked") in ("true", "false") and
+                       n.get("text") == "Enable diagnostics / 启用诊断 (default off)"), None)
+        status = next((n for n in visible if n.get("package") == PACKAGE and
+                       n.get("class") == "android.widget.TextView" and
+                       "Status process: main\n" in n.get("text", "") and
+                       re.search(r"(?:^|\n)Session: [0-9a-f-]{36}\nSink active: (?:true|false)\nWritten: ", n.get("text", ""))), None)
+        return switch if status is not None else None
+
+    def open_settings(self, *, cleanup=False):
         result = decode(self.adb("shell", "am", "start", "-W", "-n", SETTINGS,
                                  save="settings-launch.txt"))
         require("Error:" not in result and "Exception" not in result, "Settings activity launch failed: " + result[-1500:])
-        self.wait_ui("settings", lambda screen: screen.find("Developer diagnostics") is not None)
-        _, node = self.seek("Developer diagnostics", "settings-entry")
+        def preference(screen):
+            node = screen.find("Developer diagnostics")
+            return node if node is not None and (not cleanup or node.get("package") == PACKAGE) else None
+        screen = self.wait_ui("settings", lambda screen: preference(screen) is not None or
+                              (cleanup and self.own_diagnostics_controls(screen) is not None))
+        if cleanup and self.own_diagnostics_controls(screen) is not None:
+            return {"component": SETTINGS, "entry": "cleanup: already visible own Diagnostics controls and status",
+                    "evidence": screen.xml.name}
+        if cleanup:
+            screen = self.wait_ui("settings-entry", lambda s: preference(s) is not None)
+            node = preference(screen)
+        else:
+            _, node = self.seek("Developer diagnostics", "settings-entry")
         self.tap(node)
         self.wait_ui("diagnostics", lambda screen: screen.find("Enable diagnostics") is not None)
         return {"component": SETTINGS, "entry": "GlobalSettingsFragment developer_diagnostics preference"}
@@ -926,39 +953,42 @@ class Smoke:
 
     def saf_save(self):
         screen = self.screen("export-confirm")
+        self.reject_app_anr(screen)
         button = screen.find_button("Export", exact=True)
         if button is None:
             raise Blocked("Prepared preview Export action is unavailable; use retained preview XML/screenshot for manual handoff")
         self.tap(button)
-        picker = self.wait_ui("saf-picker", lambda s: any("documentsui" in n.get("package", "") for n in s.root.iter("node")))
+        providers = ("com.google.android.documentsui", "com.android.documentsui")
+        def control(screen, *, labels=None, resource=None, class_name=None, package=None):
+            return next((n for n in screen.root.iter("node") if Screen.bounds(n) and n.get("enabled") == "true" and
+                         n.get("package") in ((package,) if package else providers) and
+                         (labels is None or n.get("text") in labels or n.get("content-desc") in labels) and
+                         (resource is None or n.get("resource-id") == resource) and
+                         (class_name is None or n.get("class") == class_name)), None)
+        picker = self.wait_ui("saf-picker", lambda s: control(s) is not None)
         download_labels = ("Downloads", "Download", "下载")
         # Pick an explicit local Downloads root. Do not guess a provider or grant permissions.
-        if not any(picker.find(label, exact=True) is not None for label in download_labels):
-            drawer = next((picker.find(label, exact=True) for label in (
-                "Show roots", "Open navigation drawer", "显示根目录", "显示位置", "打开导航抽屉")
-                if picker.find(label, exact=True) is not None), None)
+        if control(picker, labels=download_labels) is None:
+            drawer = control(picker, labels=("Show roots", "Open navigation drawer", "显示根目录", "显示位置", "打开导航抽屉"))
             if drawer is None:
                 raise Blocked("SAF picker does not expose a recognized local Downloads root; complete export manually using saf-picker evidence")
             self.tap(drawer)
-            picker = self.wait_ui("saf-roots", lambda s: any(s.find(label, exact=True) is not None for label in download_labels))
-        root = next((picker.find(label, exact=True) for label in download_labels if picker.find(label, exact=True) is not None), None)
+            picker = self.wait_ui("saf-roots", lambda s: control(s, labels=download_labels) is not None)
+        root = control(picker, labels=download_labels)
         if root is not None:
             self.tap(root)
-        picker = self.wait_ui("saf-downloads", lambda s: s.find(class_name="android.widget.EditText") is not None)
-        field = picker.find(class_name="android.widget.EditText")
-        old = field.get("text", "")
-        if len(old) > 160:
-            raise Blocked("SAF filename field is unexpectedly long; retained picker for manual handoff")
-        self.tap(field)
-        self.adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
-        if old:
-            self.adb("shell", "input", "keyevent", *(["KEYCODE_DEL"] * len(old)))
-        self.adb("shell", "input", "text", self.saved_name)
-        picker = self.wait_ui("saf-filename", lambda s: s.find(self.saved_name, exact=True) is not None)
-        save = next((picker.find(label, exact=True) for label in ("SAVE", "Save", "保存", "CREATE", "Create", "创建")
-                     if picker.find(label, exact=True) is not None), None)
-        if save is None:
-            raise Blocked("SAF Save control unavailable; complete the picker manually using saf-filename evidence")
+        picker = self.wait_ui("saf-downloads", lambda s: control(s, resource="android:id/title", class_name="android.widget.EditText") is not None)
+        field = control(picker, resource="android:id/title", class_name="android.widget.EditText")
+        if not self.session or not UUID_RE.fullmatch(self.session):
+            raise Blocked("No verified current session for SAF filename validation")
+        expected_name = "pine-diag-" + self.session + ".zip"
+        if field.get("text") != expected_name:
+            raise Blocked("SAF filename does not exactly match the current-session app default; no filename editing attempted")
+        self.saved_name = field.get("text")
+        save = control(picker, labels=("SAVE", "Save", "保存", "CREATE", "Create", "创建"),
+                       resource="android:id/button1", class_name="android.widget.Button", package=field.get("package"))
+        if save is None or save.get("clickable") != "true":
+            raise Blocked("SAF Save control unavailable; complete the picker manually using saf-downloads evidence")
         self.tap(save)
         self.wait_ui("saf-return", lambda s: any(n.get("package") == PACKAGE for n in s.root.iter("node")))
         remote = "/sdcard/Download/" + self.saved_name
@@ -971,7 +1001,7 @@ class Smoke:
                 with zipfile.ZipFile(io.BytesIO(data)) as archive:
                     if archive.testzip() is None:
                         self.budget(deadline, "SAF ZIP observation")
-                        return {"destination": remote, "zip_bytes": len(data), "sha256": digest(data)}
+                        return {"destination": remote, "observed_filename": self.saved_name, "zip_bytes": len(data), "sha256": digest(data)}
             except (zipfile.BadZipFile, OSError):
                 pass
             self.pause(deadline)
@@ -1004,20 +1034,21 @@ class Smoke:
             raise Blocked("Diagnostics was never successfully enabled; no native Stop summary can be claimed")
         # Recover through the normal exported Settings activity if a picker/dialog blocked later checks.
         try:
-            self.open_settings()
+            self.open_settings(cleanup=True)
         except (AppAnr, SettingsBackBlocked, PlatformCrashBlocked):
             raise
         except (Blocked, AssertionError):
             if self.summary["settings_back_recoveries"] or self.summary["platform_crash_dismissals"]:
                 raise
             self.adb("shell", "input", "keyevent", "KEYCODE_BACK", check=False)
-            self.open_settings()
-        _, node = self.seek("Enable diagnostics", "disable", direction="up")
+            self.open_settings(cleanup=True)
+        screen = self.wait_ui("disable-controls", lambda s: self.own_diagnostics_controls(s) is not None)
+        node = self.own_diagnostics_controls(screen)
         require(node.get("checked") == "true", "Diagnostics unexpectedly disabled before cleanup")
         ending_session = self.marker()
         self.tap(node)
-        screen = self.wait_ui("disabled-status", lambda s: "Sink active: false" in s.text())
-        require(screen.find("Enable diagnostics").get("checked") == "false", "Disable switch remained checked")
+        screen = self.wait_ui("disabled-status", lambda s: self.own_diagnostics_controls(s) is not None and "Sink active: false" in s.text())
+        require(self.own_diagnostics_controls(screen).get("checked") == "false", "Disable switch remained checked")
         require(self.prefs().get("enabled") == "false", "Disabled preference did not persist")
         rows, names, summaries = self.wait_native("disabled", "SESSION_SUMMARY", ending_session)
         require(all(str(r["fields"].get("disk_errors")) == "0" for r in summaries), "Native Stop summary reports disk errors")

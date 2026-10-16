@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Offline subprocess deadline regressions; no APK, Android device or runtime pass."""
 import argparse
+import base64
+import io
+import zipfile
 import json
 from pathlib import Path
 import runpy
@@ -41,6 +44,14 @@ def ui_xml(*nodes):
     return ET.tostring(root, encoding="unicode")
 
 
+def diagnostics_xml(enabled=True, package=None):
+    package = package or MODULE["PACKAGE"]
+    checked = "true" if enabled else "false"
+    return ui_xml({"package": package, "class": "android.widget.Switch", "checkable": "true",
+                   "checked": checked, "clickable": "true", "text": "Enable diagnostics / 启用诊断 (default off)"},
+                  {"package": package, "text": f"Status process: main\nSession: {SESSION}\nSink active: {checked}\nWritten: 2, dropped: 0, disk errors: 0"})
+
+
 SEARCH_LOCATIONS_XML = '''<hierarchy>
 <node resource-id="io.github.pine.emu.diagnostics:id/toolbar_layout" package="io.github.pine.emu.diagnostics"
  class="android.widget.FrameLayout" content-desc="Search Locations" enabled="true" bounds="[0,0][480,136]">
@@ -64,6 +75,7 @@ class ObservationDeadlines(unittest.TestCase):
         self.fake.write_text(textwrap.dedent('''\
             #!/usr/bin/env python3
             import json
+            import base64
             from pathlib import Path
             import sys
             import time
@@ -99,6 +111,8 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'dropbox', config.get('dropbox_result', 'Retained data_app_anr fixture entry')
             elif args == ['shell', 'dumpsys', 'activity', 'activities']:
                 operation, output = 'activities', 'Final activity evidence'
+            elif args == ['logcat', '-d', '-v', 'raw', 'PineDiag:V', '*:S']:
+                operation, output = 'pine-logcat', json.dumps({'schema':1,'session_id':config['session'],'sequence':1,'event':'SESSION_METADATA','fields':{'commit':'a'*40}})
             elif args[:2] == ['logcat', '-b']:
                 operation, output = 'final-logcat', 'Final crash evidence'
             elif args[:3] == ['shell', 'rm', '-f']:
@@ -115,6 +129,8 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'dump', 'UI hierarchy dumped'
             elif args[:3] == ['shell', 'am', 'start']:
                 operation, output = 'start-settings', 'Status: ok'
+            elif args[:2] == ['exec-out', 'cat'] and args[2].startswith('/sdcard/') and 'zip_base64' in config:
+                operation, output, binary = 'safzip', base64.b64decode(config['zip_base64']), True
             elif args[:2] == ['exec-out', 'cat']:
                 operation = 'xml'
                 output = next_result('xml_sequence', '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>')
@@ -126,6 +142,11 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'swipe', ''
             elif args[:3] == ['shell', 'input', 'tap']:
                 operation, output = 'tap', ''
+                if config.get('cleanup_simulation'):
+                    path = Path(__file__).with_suffix('.state.json')
+                    state = json.loads(path.read_text()) if path.is_file() else {}
+                    state['cleanup_tapped'] = True
+                    path.write_text(json.dumps(state))
             elif args == ['shell', 'input', 'keyevent', 'KEYCODE_BACK']:
                 operation, output = 'back', ''
             elif args[:2] == ['exec-out', 'screencap']:
@@ -149,7 +170,7 @@ class ObservationDeadlines(unittest.TestCase):
             elif args[:2] == ['exec-out', 'run-as'] and args[4].endswith('session-id.txt'):
                 operation, output = 'marker', config['session']
             elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat'] and args[4] == 'shared_prefs/diagnostics.xml':
-                operation, output = 'prefs', '<map><string name="files">2</string><string name="categories">content,storage,exception</string></map>'
+                operation, output = 'prefs', config.get('prefs_xml', '<map><string name="files">2</string><string name="categories">content,storage,exception</string></map>')
             elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat'] and args[4].startswith('cache/diagnostics-exports/'):
                 operation, binary = 'snapshot', True
                 name = args[4].split('/', 3)[3]
@@ -157,6 +178,10 @@ class ObservationDeadlines(unittest.TestCase):
             elif args[:2] == ['exec-out', 'run-as'] and args[3] == 'cat':
                 operation = 'record0' if args[4].endswith('diagnostics-0.jsonl') else 'record1'
                 events = ['SESSION_START'] if operation == 'record0' else config.get('record1_events', ['SESSION_METADATA'])
+                if config.get('cleanup_simulation'):
+                    path = Path(__file__).with_suffix('.state.json')
+                    state = json.loads(path.read_text()) if path.is_file() else {}
+                    if not state.get('cleanup_tapped'): events = [event for event in events if event != 'SESSION_SUMMARY']
                 output = '\\n'.join(json.dumps({'schema': 1, 'session_id': config['session'], 'sequence': index + 1,
                                                 'fields': {'commit': 'a' * 40, 'disk_errors': '0'}, 'event': event})
                                    for index, event in enumerate(events))
@@ -199,6 +224,119 @@ class ObservationDeadlines(unittest.TestCase):
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
+
+    def cleanup_fixture(self, name, **overrides):
+        config = {"cleanup_simulation": True, "xml_sequence": [diagnostics_xml(), diagnostics_xml(), diagnostics_xml(False)],
+                  "record1_events": ["SESSION_METADATA", "SESSION_SUMMARY"],
+                  "prefs_xml": '<map><boolean name="enabled" value="false"/></map>', **overrides}
+        smoke = self.smoke(name, config)
+        smoke.ever_enabled = True
+        smoke.session = SESSION
+        return smoke
+
+    def test_disable_already_open_diagnostics_reads_actual_native_stop(self):
+        smoke = self.cleanup_fixture("cleanup-visible")
+        result = smoke.disable()
+        self.assertEqual(result["stop_event"], "SESSION_SUMMARY")
+        self.assertEqual(result["session_id"], SESSION)
+        self.assertTrue(result["summaries"])
+        commands = self.commands(smoke)
+        self.assertEqual(sum("tap" in row["argv"] for row in commands), 1)
+        self.assertTrue((smoke.output / "disabled-main-diagnostics-1.jsonl").is_file())
+
+    def test_disable_from_real_settings_keeps_preference_entry_path(self):
+        settings = ui_xml({"text": "Developer diagnostics / 开发者诊断"})
+        smoke = self.cleanup_fixture("cleanup-settings", xml_sequence=[settings, settings, diagnostics_xml(),
+                                                                        diagnostics_xml(), diagnostics_xml(False)])
+        result = smoke.disable()
+        self.assertEqual(result["stop_event"], "SESSION_SUMMARY")
+        self.assertEqual(sum("tap" in row["argv"] for row in self.commands(smoke)), 2)
+
+    def test_initial_settings_entry_cannot_accept_cleanup_shortcut(self):
+        smoke = self.cleanup_fixture("initial-strict", xml_sequence=[diagnostics_xml()])
+        with self.assertRaises(Blocked):
+            smoke.open_settings()
+        self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+
+    def test_cleanup_rejects_foreign_unknown_saf_and_app_anr(self):
+        for name, xml in (("foreign", diagnostics_xml(package="foreign.app")), ("unknown", READY_XML),
+                          ("saf", diagnostics_xml(package="com.google.android.documentsui")),
+                          ("anr", PINE_ANR_XML)):
+            with self.subTest(name=name):
+                smoke = self.cleanup_fixture("cleanup-" + name, xml_sequence=[xml])
+                smoke.args.ui_timeout = 0.35
+                expected = MODULE["AppAnr"] if name == "anr" else Blocked
+                with self.assertRaises(expected):
+                    smoke.disable()
+                self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+
+    def test_cleanup_without_native_stop_summary_remains_blocked(self):
+        smoke = self.cleanup_fixture("cleanup-no-summary", record1_events=["SESSION_METADATA"])
+        with self.assertRaises(Blocked):
+            smoke.disable()
+
+    def saf_fixture(self, name, filename=None, provider="com.google.android.documentsui", **overrides):
+        filename = filename or "pine-diag-" + SESSION + ".zip"
+        picker = ui_xml({"package": provider, "text": "Downloads"},
+                        {"package": provider, "text": filename, "class": "android.widget.EditText", "resource-id": "android:id/title"},
+                        {"package": provider, "text": "SAVE", "class": "android.widget.Button", "resource-id": "android:id/button1", "clickable": "true"})
+        files = {"session-metadata.txt": b"fixture metadata\n", "main/diagnostics-0.jsonl":
+                 (json.dumps({"schema": 1, "session_id": SESSION, "sequence": 1, "event": "SESSION_METADATA", "fields": {"commit": "a" * 40}}) + "\n").encode()}
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zipped:
+            for entry, data in files.items():
+                zipped.writestr(entry, data)
+        config = {"xml_sequence": [ui_xml({"text": "EXPORT", "class": "android.widget.Button"}), picker, picker, diagnostics_xml()],
+                  "zip_base64": base64.b64encode(archive.getvalue()).decode(), **overrides}
+        smoke = self.smoke(name, config)
+        smoke.session = SESSION
+        smoke.snapshot_bytes = files
+        smoke.preview_entries = {entry: len(data) for entry, data in files.items()}
+        return smoke
+
+    def test_saf_preserves_observed_default_filename_and_verifies_saved_zip(self):
+        smoke = self.saf_fixture("saf-default")
+        saved = smoke.saf_save()
+        self.assertEqual(saved["observed_filename"], "pine-diag-" + SESSION + ".zip")
+        self.assertTrue(smoke.verify_zip()["preview_bytes_match"])
+        commands = self.commands(smoke)
+        self.assertFalse(any("KEYCODE_DEL" in row["argv"] or "KEYCODE_MOVE_END" in row["argv"] or
+                             row["argv"][-2:-1] == ["text"] for row in commands))
+        self.assertEqual(sum("tap" in row["argv"] for row in commands), 3)
+
+    def test_saf_wrong_session_or_path_and_foreign_provider_are_blocked(self):
+        cases = (("session", {"filename": "pine-diag-" + "2" * 36 + ".zip"}),
+                 ("path", {"filename": "../pine-diag-" + SESSION + ".zip"}),
+                 ("provider", {"provider": "untrusted.documentsui"}))
+        for name, options in cases:
+            with self.subTest(name=name):
+                smoke = self.saf_fixture("saf-reject-" + name, **options)
+                smoke.args.ui_timeout = 0.5
+                with self.assertRaises(Blocked):
+                    smoke.saf_save()
+                self.assertFalse(any("/sdcard/Download/" in " ".join(row["argv"]) for row in self.commands(smoke)))
+                self.assertIsNone(smoke.saved_name)
+
+    def test_saf_foreign_save_control_is_not_tapped(self):
+        smoke = self.saf_fixture("saf-foreign-save")
+        config = json.loads(self.config.read_text())
+        for index in (1, 2):
+            root = ET.fromstring(config["xml_sequence"][index])
+            for node in root.iter("node"):
+                if node.get("text") == "SAVE":
+                    node.set("package", "foreign.app")
+            config["xml_sequence"][index] = ET.tostring(root, encoding="unicode")
+        self.config.write_text(json.dumps(config))
+        with self.assertRaises(Blocked):
+            smoke.saf_save()
+        self.assertEqual(sum("tap" in row["argv"] for row in self.commands(smoke)), 2)
+
+    def test_saf_valid_zip_bytes_after_deadline_do_not_pass(self):
+        smoke = self.saf_fixture("saf-late", safzip=0.8, emit_before_delay="safzip")
+        smoke.args.ui_timeout = 0.5
+        with self.assertRaises(Blocked):
+            smoke.saf_save()
+        self.assertTrue(any(row["timed_out"] and "/sdcard/Download/" in " ".join(row["argv"]) for row in self.commands(smoke)))
 
     def test_explicit_single_column_listing_reads_actual_native_metadata_and_summary(self):
         smoke = self.smoke("native-columns", {"record1_events": ["SESSION_METADATA", "SESSION_SUMMARY"]})

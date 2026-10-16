@@ -17,10 +17,10 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Android/JVM exporter, selection, process/settings and game-generation ownership | 34/34 passed actual full Gradle task: 17 exporter, 4 selection, 3 process/settings and 10 generation tests, including controlled A→B drain/apply/exit interleavings, cancellation, Activity destruction and duplicate/late requests | Local JitPack proxy was unavailable; pinned upstream dependencies/native classpath helpers outside checkout support this supplemental JVM run; exact-commit CI remains authoritative |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
-| Windows PS5.1/pwsh ADB | Full suite passed at `6fe018a7`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 32/63 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
+| Windows PS5.1/pwsh ADB | Full suite passed at `86ae1d47`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 47/62 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
 | Actual POSIX PTY Ctrl+C, fake ADB and native JSONL replay | Passed | These controlled inputs are not an Android/device run |
 | Preview publication guards | Passed offline tests for rejected commits/jobs, tampered APK/evidence, wrong ABI and extra APK | Test ZIPs are deliberately non-executable fixtures |
-| Android observer safeguards | CI at `6fe018a7` passed 27 smoke, 4 passive first-boot and 11 startup-probe tests using controlled subprocesses | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
+| Android observer safeguards | CI at `86ae1d47` passed 31 smoke, 4 passive first-boot and 11 startup-probe tests; the subsequent cleanup/SAF observer correction passed 40 smoke tests locally using controlled subprocesses | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
 
 Reproduce independent native checks without the Android SDK:
 
@@ -66,6 +66,14 @@ inside `System.loadLibrary`, before diagnostic setup. Original reports are not
 rewritten. Both APKs predate the independently reviewed active-title/generation
 fixes and are superseded review builds, not final candidates. New exact-commit
 build and runtime evidence is required for the corrected App.
+
+Readback of that retained SAF evidence showed the original app-provided filename
+was valid, but synthetic delete/type commands left only `pine-diag-s`. The observer
+now preserves and verifies the exact current-session default filename in the
+official DocumentsUI provider before pressing Save. Cleanup can recognize an
+already visible own Diagnostics screen after launching Settings; initial Settings
+entry still requires the real preference path. Actual saved ZIP bytes, matching
+snapshot contents and a native Stop summary remain required for those checks.
 
 The [same-AVD main comparison](https://github.com/xmy953538104/pine_CN/actions/runs/38968004469/job/117206287625)
 installed and hash-verified tracked-clean main `f665512f`, but its Settings launch

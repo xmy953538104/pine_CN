@@ -33,6 +33,7 @@ template<typename F> void Record(F emit) {
 template<typename F> void Session(const std::filesystem::path &root, size_t index, const std::string &id, F emit) {
     const auto directory = root / std::to_string(index);
     diag::Config config{directory.string(), id, 1024, 65536, 1, false, {}};
+    diag::ClearTitleId(); // Each fixture session represents a new game launch.
     if (!diag::Start(config)) throw std::runtime_error("fixture session did not start");
     emit();
     diag::Stop();

@@ -37,7 +37,9 @@ struct Sink {
     std::condition_variable wake, progress;
     std::deque<Record> queue;
     Config config;
-    std::string stage, titleId;
+    std::string stage;
+    // Game identity outlives a logging session; only true game boundaries clear it.
+    std::string activeTitleId;
     bool stopping{};
     std::thread worker;
     ~Sink();
@@ -156,7 +158,7 @@ void Run(Sink &s) noexcept {
         summary.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
         summary.dropped = s.dropped;
         summary.category = "lifecycle"; summary.event = "SESSION_SUMMARY"; summary.level = "INFO"; summary.thread = "diagnostic-writer";
-        { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.titleId = s.titleId; }
+        { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.titleId = s.activeTitleId; }
         summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())}, {"disk_errors", std::to_string(s.diskErrors.load())}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
@@ -203,7 +205,7 @@ void Enqueue(Sink &s, std::string_view category, std::string_view event,
         if (stage) s.stage = Sanitize(*stage, 128);
         if (s.queue.size() >= s.config.queueCapacity) { ++s.dropped; return; }
         Record r;
-        r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16); r.stage = s.stage; r.titleId = s.titleId;
+        r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16); r.stage = s.stage; r.titleId = s.activeTitleId;
         char name[16]{}; pthread_getname_np(pthread_self(), name, sizeof(name));
         std::ostringstream thread; thread << name << ':' << std::this_thread::get_id(); r.thread = Sanitize(thread.str(), 128);
         r.wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -326,7 +328,7 @@ bool Start(const Config &config) noexcept {
         std::lock_guard life(s.lifecycle); StopLocked(s);
         if (config.directory.empty() || config.sessionId.empty() || !config.queueCapacity || config.queueCapacity > 65536 || config.maxFiles < 1 || config.maxFiles > 16 || config.maxFileBytes < 65536) return false;
         try {
-            { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.queue.clear(); s.stage.clear(); s.titleId.clear(); s.stopping = false; }
+            { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.queue.clear(); s.stage.clear(); s.stopping = false; }
             s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0; s.verbose = config.verbose;
             s.producers.store(0, std::memory_order_release);
             s.worker = std::thread([&s] { Run(s); });
@@ -358,14 +360,19 @@ void Emit(std::string_view category, std::string_view event, std::initializer_li
     Enqueue(s, category, event, fields, level);
 }
 void SetTitleId(std::string_view titleId) noexcept {
-    auto &s = Get(); if (!IsEnabled(s)) return;
-    Producer producer(s);
-    if (!producer) return;
     try {
         auto copy = Sanitize(titleId, 32);
+        auto &s = Get();
         std::lock_guard lock(s.mutex);
-        if (IsEnabled(s) && !s.stopping) s.titleId = std::move(copy);
-    } catch (...) { ++s.dropped; }
+        s.activeTitleId = std::move(copy);
+    } catch (...) {}
+}
+void ClearTitleId() noexcept {
+    try {
+        auto &s = Get();
+        std::lock_guard lock(s.mutex);
+        s.activeTitleId.clear();
+    } catch (...) {}
 }
 void Stage(std::string_view stage) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return;

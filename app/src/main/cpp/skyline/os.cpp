@@ -57,14 +57,14 @@ namespace skyline::kernel {
             }
         };
         state.loader = loadContent(romFd, "base");
-        if (diagnostics::Enabled()) {
-            try {
-                if (state.loader->cnmt)
-                    diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->cnmt->header.id));
-                else if (state.loader->programNca)
-                    diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->programNca->header.titleId));
-            } catch (...) {}
-        }
+        // Remember the selected base even when logging is off so live enabling
+        // can correlate the running game without loading its metadata again.
+        try {
+            if (state.loader->cnmt)
+                diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->cnmt->header.id));
+            else if (state.loader->programNca)
+                diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->programNca->header.titleId));
+        } catch (...) {}
         diagnostics::Stage("base_loader_ready");
         PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"},
             {"cnmt_version", state.loader->cnmt ? std::to_string(state.loader->cnmt->header.version) : "unknown"},

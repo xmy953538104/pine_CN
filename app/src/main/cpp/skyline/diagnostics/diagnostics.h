@@ -31,9 +31,11 @@ bool Flush(uint32_t timeoutMilliseconds = 250) noexcept;
 void Emit(std::string_view category, std::string_view event,
           std::initializer_list<std::pair<std::string_view, std::string_view>> fields = {},
           std::string_view level = "INFO") noexcept;
-// Ordinary threads only. Subsequent records carry the known base-title identity.
-// Empty means unknown; Start clears the context before enabling the next session.
+// Ordinary threads only. Current-game identity is retained while diagnostics are
+// disabled and across Start/Stop; subsequent records inherit it. Empty is unknown.
 void SetTitleId(std::string_view titleId) noexcept;
+// True game boundaries only: clear at launch and after the final session drains.
+void ClearTitleId() noexcept;
 void Stage(std::string_view stage) noexcept;
 std::string LastStage();
 Statistics Stats() noexcept;

@@ -97,6 +97,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     jobject assetManager
 ) {
     skyline::signal::ScopedStackBlocker stackBlocker; // We do not want anything to unwind past JNI code as there are invalid stack frames which can lead to a segmentation fault
+    skyline::diagnostics::ClearTitleId();
     Fps = 0;
     AverageFrametimeMs = AverageFrametimeDeviationMs = 0.0f;
 
@@ -174,6 +175,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
 
     skyline::diagnostics::Stage("EMULATION_ENDED");
     skyline::diagnostics::Stop();
+    skyline::diagnostics::ClearTitleId();
     skyline::AsyncLogger::Finalize(true);
     close(romFd);
 

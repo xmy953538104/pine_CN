@@ -36,6 +36,102 @@ void CheckSummary(const std::filesystem::path &root) {
     assert(last.find("\"accepted\":\"" + std::to_string(stats.accepted) + "\"") != std::string::npos);
     assert(last.find("\"written\":\"" + std::to_string(stats.written) + "\"") != std::string::npos);
 }
+void CheckTitle(const std::filesystem::path &root, std::string_view event, std::string_view title) {
+    std::ifstream file(root / "diagnostics-0.jsonl");
+    std::string line;
+    bool found{};
+    while (std::getline(file, line)) {
+        if (line.find("\"event\":\"" + std::string(event) + "\"") == std::string::npos) continue;
+        const auto fields = line.find(",\"fields\":");
+        assert(fields != std::string::npos);
+        // Inspect the record identity, independently of any content title field.
+        assert(line.substr(0, fields).find(",\"title_id\":\"" + std::string(title) + "\"") != std::string::npos);
+        found = true;
+    }
+    assert(found);
+}
+void CheckActiveTitleLifecycle(const std::filesystem::path &root) {
+    constexpr auto firstTitle = "0100000000001000";
+    constexpr auto secondTitle = "0100000000002000";
+    Config config{(root / "disabled-load").string(), "native-test", 1024, 65536, 3, false, {}};
+    ClearTitleId();
+    assert(!Enabled());
+    const auto before = Stats();
+    SetTitleId(firstTitle); // A real base can be selected while diagnostics are off.
+    Emit("guest", "DISABLED_GAME_EVENT");
+    const auto after = Stats();
+    assert(!Enabled() && before.accepted == after.accepted && before.written == after.written);
+    assert(before.dropped == after.dropped && before.diskErrors == after.diskErrors);
+    assert(!std::filesystem::exists(config.directory));
+    assert(Start(config));
+    Accepted([] { Emit("lifecycle", "SESSION_METADATA"); });
+    Accepted([secondTitle] { Emit("storage", "ACTIVE_GAME_READ", {{"title_id", secondTitle}}); });
+    assert(Flush(2000));
+    CheckTitle(config.directory, "SESSION_METADATA", firstTitle);
+    Stop();
+    CheckTitle(config.directory, "SESSION_METADATA", firstTitle);
+    CheckTitle(config.directory, "ACTIVE_GAME_READ", firstTitle);
+    CheckTitle(config.directory, "SESSION_SUMMARY", firstTitle);
+
+    // Stop is a logging toggle, and Start can also replace a live configuration.
+    config.directory = (root / "resumed").string();
+    assert(Start(config));
+    Accepted([] { Emit("lifecycle", "SESSION_METADATA"); });
+    const auto resumed = config.directory;
+    config.directory = (root / "reconfigured").string();
+    config.verbose = true;
+    config.categories = "guest";
+    assert(Start(config));
+    assert(Verbose());
+    CheckTitle(resumed, "SESSION_METADATA", firstTitle);
+    CheckTitle(resumed, "SESSION_SUMMARY", firstTitle);
+    Accepted([] { Emit("lifecycle", "SESSION_METADATA"); });
+    Accepted([] { Emit("guest", "ACTIVE_GAME_DEBUG"); });
+    assert(Flush(2000));
+    Stop();
+    CheckTitle(config.directory, "SESSION_METADATA", firstTitle);
+    CheckTitle(config.directory, "ACTIVE_GAME_DEBUG", firstTitle);
+    CheckTitle(config.directory, "SESSION_SUMMARY", firstTitle);
+
+    // The current base can change while logging remains disabled.
+    SetTitleId(secondTitle);
+    config.directory = (root / "disabled-replaced").string();
+    config.verbose = false;
+    config.categories.clear();
+    assert(Start(config));
+    Accepted([] { Emit("lifecycle", "SESSION_METADATA"); });
+    Accepted([] { Emit("exception", "ACTIVE_GAME_ERROR", {}, "ERROR"); });
+    assert(Flush(2000));
+    Stop();
+    CheckTitle(config.directory, "SESSION_METADATA", secondTitle);
+    CheckTitle(config.directory, "ACTIVE_GAME_ERROR", secondTitle);
+    CheckTitle(config.directory, "SESSION_SUMMARY", secondTitle);
+
+    // The real game end clears only after its summary; a settings session has no game.
+    ClearTitleId();
+    config.directory = (root / "settings-after-end").string();
+    assert(Start(config));
+    Accepted([] { Emit("lifecycle", "SESSION_METADATA"); });
+    assert(Flush(2000));
+    Stop();
+    CheckTitle(config.directory, "SESSION_METADATA", "");
+    CheckTitle(config.directory, "SESSION_SUMMARY", "");
+
+    // A new unknown-title game must not inherit an earlier known game's identity,
+    // even when diagnostics stay enabled throughout the launch boundary.
+    config.directory = (root / "unknown-game").string();
+    assert(Start(config));
+    SetTitleId(firstTitle);
+    Accepted([] { Emit("guest", "PREVIOUS_GAME_EVENT"); });
+    ClearTitleId();
+    Accepted([secondTitle] { Emit("lifecycle", "SESSION_METADATA", {{"title_id", secondTitle}}); });
+    assert(Flush(2000));
+    Stop();
+    CheckTitle(config.directory, "PREVIOUS_GAME_EVENT", firstTitle);
+    CheckTitle(config.directory, "SESSION_METADATA", "");
+    CheckTitle(config.directory, "SESSION_SUMMARY", "");
+    ClearTitleId();
+}
 void CheckLocationRedaction() {
     for (std::string_view location : {
             "/storage/emulated/0/Alice Smith/秘密 \"save\".nsp",
@@ -77,6 +173,7 @@ int main(int argc, char **argv) {
     std::filesystem::remove_all(root);
     Config c{root.string(), "native-test", 1024, 65536, 3, true, {}};
     assert(!Enabled()); Emit("test", "DISABLED"); assert(Stats().accepted == 0);
+    CheckActiveTitleLifecycle(root / "title-lifecycle");
     assert(Start(c));
     Eventually([] { Stage("ready"); return LastStage() == "ready"; });
     std::string owned = "hello\n\"世界 content://secret/game.nsp";
@@ -118,6 +215,7 @@ int main(int argc, char **argv) {
     assert(data.find("\"title_id\":\"separate-dlc-id\"") != std::string::npos);
     CheckSummary(root);
     std::filesystem::copy_file(root / "diagnostics-0.jsonl", root / "encoding.jsonl");
+    ClearTitleId(); // This stress session starts after the preceding game ended.
     c.queueCapacity = 1;
     assert(Start(c));
     assert(Verbose());
@@ -201,5 +299,5 @@ int main(int argc, char **argv) {
     assert(Stats().diskErrors == 0 && !std::filesystem::exists(outside));
     CheckSummary(c.directory);
     c.directory = root.string(); c.queueCapacity = 0; assert(!Start(c));
-    std::cout << "PASS: disabled gate, ownership, UTF-8, redaction, title context/reset, flush, stable shutdown counters, overflow, rotation/retention, restart, rejected writes, symlink safety\n";
+    std::cout << "PASS: disabled gate, ownership, UTF-8, redaction, active title across off/start/reconfigure and explicit game boundaries, flush, stable shutdown counters, overflow, rotation/retention, restart, rejected writes, symlink safety\n";
 }

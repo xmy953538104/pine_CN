@@ -454,7 +454,8 @@ class Smoke:
     def start_logger(self):
         self.log_stream = (self.output / "runtime-logcat.txt").open("wb")
         command = [self.args.adb, "-s", self.args.serial, "logcat", "-T", "1", "-b", "main", "-b", "system", "-b", "crash",
-                   "-v", "threadtime", "PineDiag:V", "AndroidRuntime:V", "libc:F", "DEBUG:V", "Watchdog:W", "*:S"]
+                   "-v", "threadtime", "PineDiag:V", "AndroidRuntime:V", "libc:F", "DEBUG:V", "Watchdog:W",
+                   "ndk_translation:V", "NativeBridge:V", "*:S"]
         self.logger = subprocess.Popen(command, stdout=self.log_stream, stderr=subprocess.STDOUT)
         self.summary["logcat_capture_argv"] = command
 

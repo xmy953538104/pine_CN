@@ -40,6 +40,12 @@ jobs:
               if path.is_file():
                   text = path.read_text(errors='replace')
                   print(name + ':\n' + text[:64000])
+          path = pathlib.Path('prior-runtime/android-logcat.txt')
+          if path.is_file():
+              lines = path.read_text(errors='replace').splitlines()
+              for index, line in enumerate(lines):
+                  if any(word in line.lower() for word in ('ndk_translation', 'undefined instruction', 'nativebridge', 'adrenotools', 'libskyline')):
+                      print('prior platform context:\n' + '\n'.join(lines[max(0, index-3):index+5]))
           PY
       - name: Native diagnostic tests
         run: |

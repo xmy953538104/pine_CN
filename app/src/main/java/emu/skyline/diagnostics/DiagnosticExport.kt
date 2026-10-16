@@ -22,8 +22,8 @@ object DiagnosticExport {
     private const val MAX_RECORD_BYTES = 64 * 1024
     private const val MAX_IDENTITIES = 65536
     private val json = Json { isLenient = false }
-    private val locationStart = Regex("""(?i)(?:(?<uri>[a-z][a-z0-9+.-]*://|(?:file|content):(?=/|[A-Z]:[\\/]))|(?<![\p{L}\p{N}_./\\-])(?<unix>/(?:storage|sdcard|data|mnt|home|Users)(?=[/\\\s"'<>]|$))|(?<![a-z0-9_./\\-])(?:[a-z]:[\\/]|\\\\(?=[^\\\s])))""")
-    private val guestMountPrefix = Regex("""(?i)(?:^|[^a-z0-9_+.-])(?:rom|romfs|sdmc):$""")
+    private val locationStart = Regex("""(?i)(?:(?<uri>(?:file|content):(?=/|[A-Z]:[\\/]))|(?<![\p{L}\p{N}_./\\-])(?<unix>/(?:storage|sdcard|data|mnt|cache|home|Users)(?=[/\\\s"'<>]|$))|(?<![a-z0-9_./\\-])(?:[a-z]:[\\/]|\\\\(?=[^\\\s])))""")
+    private val guestMounts = arrayOf("rom:", "romfs:", "sdmc:")
     private val sensitiveName = Regex("(?i)(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)")
     private val credentialLine = Regex("(?i)(?:prod\\.keys|title\\.keys|\\b(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)\\b[\\s=:])")
     private val snapshotId = Regex("snapshot-[0-9a-f-]{36}")
@@ -38,12 +38,46 @@ object DiagnosticExport {
     fun redact(text: String): String = text.lineSequence().joinToString("\n") { line ->
         if (credentialLine.containsMatchIn(line)) "[REDACTED_CREDENTIAL_LINE]"
         else {
+            val uri = findUriStart(line)
             val location = locationStart.findAll(line).firstOrNull { match ->
-                match.groups["unix"] == null || !guestMountPrefix.containsMatchIn(line.take(match.range.first))
+                match.groups["unix"] == null || !hasGuestMountPrefix(line, match.range.first)
             }
-            if (location == null) line
+            if (uri >= 0 && (location == null || uri <= location.range.first)) line.take(uri) + "[REDACTED_URI]"
+            else if (location == null) line
             else line.take(location.range.first) + if (location.groups["uri"] != null) "[REDACTED_URI]" else "[REDACTED_PATH]"
         }
+    }
+
+    private fun isAsciiLetter(char: Char) = char in 'a'..'z' || char in 'A'..'Z'
+    private fun isSchemeChar(char: Char) = isAsciiLetter(char) || char in '0'..'9' || char in "+.-"
+
+    private fun findUriStart(line: String): Int {
+        var search = 0
+        while (true) {
+            val delimiter = line.indexOf("://", search)
+            if (delimiter < 0) return -1
+            var start = delimiter
+            while (start > 0 && isSchemeChar(line[start - 1])) start--
+            // Each delimiter has a disjoint scheme run. No unanchored regex
+            // retries the same long ASCII suffix at every possible start.
+            while (start < delimiter && !isAsciiLetter(line[start])) start++
+            if (start < delimiter) return start
+            search = delimiter + 3
+        }
+    }
+
+    private fun hasGuestMountPrefix(line: String, end: Int): Boolean {
+        for (mount in guestMounts) {
+            val start = end - mount.length
+            if (start < 0 || (start > 0 && (isSchemeChar(line[start - 1]) || line[start - 1] == '_'))) continue
+            var matches = true
+            for (index in mount.indices) {
+                val char = line[start + index].let { if (it in 'A'..'Z') it + 32 else it }
+                if (char != mount[index]) { matches = false; break }
+            }
+            if (matches) return true
+        }
+        return false
     }
 
     fun redactJson(record: JsonObject): JsonObject = redactElement(record) as JsonObject

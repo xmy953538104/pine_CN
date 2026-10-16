@@ -79,6 +79,7 @@ class DiagnosticExportTest {
         val locations = listOf(
             "/storage/emulated/0/Alice Smith/秘密 \"save\".nsp" to "[REDACTED_PATH]",
             "/data/user/0/app/Private Name/O'Connor 秘密.nsp" to "[REDACTED_PATH]",
+            "/cache/Private Name/秘密.nsp" to "[REDACTED_PATH]",
             "C:\\Users\\Alice Smith\\秘密 \"save\".nsp" to "[REDACTED_PATH]",
             "D:/Private Name/O'Connor 秘密.nsp" to "[REDACTED_PATH]",
             "\\\\server\\Private Share\\秘密 file.nsp" to "[REDACTED_PATH]",
@@ -95,6 +96,29 @@ class DiagnosticExportTest {
         }
         val relative = "scripts/data/a.lua ./data/a.lua ../data/a.lua 脚本/data/a.lua scripts/storage/a.lua /database/a.lua /datafile/a.lua rom:/data/a.lua romfs:/storage/a.lua sdmc:/data/a.lua ns::rom:/data/a.lua"
         assertEquals(relative, DiagnosticExport.redact(relative))
+    }
+
+    @Test(timeout = 5000) fun longGuestLinesStayFastAndKeepFirstLocationSemantics() = sandbox { logs, textLog, cache, _ ->
+        val plain = "a".repeat(65536)
+        assertEquals(plain, DiagnosticExport.redact(plain))
+        val noSchemeLetter = "123+.-".repeat(10000) + "://"
+        assertEquals(noSchemeLetter, DiagnosticExport.redact(noSchemeLetter))
+        val mounts = "rom:/data/a.lua sdmc:/data/b.lua ".repeat(1600)
+        assertEquals(mounts, DiagnosticExport.redact(mounts))
+        val late = plain.take(60000) + " 正在打开content://provider/Alice Smith/秘密 file"
+        val lateExpected = plain.take(60000) + " 正在打开[REDACTED_URI]"
+        assertEquals(lateExpected, DiagnosticExport.redact(late))
+        assertEquals("[REDACTED_URI]", DiagnosticExport.redact(plain + "https://provider/private"))
+        assertEquals("123+.-[REDACTED_URI]", DiagnosticExport.redact("123+.-content://provider/private"))
+        assertEquals("open [REDACTED_PATH]", DiagnosticExport.redact("open /data/private then https://provider/private"))
+        assertEquals("open [REDACTED_URI]", DiagnosticExport.redact("open https://provider/private then /data/private"))
+        val messages = listOf(plain.take(60000), late)
+        log(logs, "main/diagnostics-0.jsonl", messages.joinToString("\n", postfix = "\n") { buildJsonObject { put("message", it) }.toString() })
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val exported = archive(snapshot).getValue("main/diagnostics-0.jsonl").lineSequence().filter { it.isNotBlank() }
+                .map { Json.parseToJsonElement(it).jsonObject.getValue("message").jsonPrimitive.content }.toList()
+            assertEquals(listOf(messages[0], lateExpected), exported)
+        }
     }
 
     @Test fun archiveRedactsSpacedLocationsWithoutChangingOtherJsonFields() = sandbox { logs, textLog, cache, _ ->

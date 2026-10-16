@@ -106,3 +106,6 @@ libVkLayer_adreno.so
 
 # Output Metadata
 output-metadata.json
+
+# Kotlin compiler state
+.kotlin/

@@ -52,12 +52,19 @@ jobs:
       # sample Gradle wrappers are not used by this CMake build (Oboe includes an
       # unverifiable 2013 wrapper). Keep root validation enabled.
       - uses: gradle/actions/setup-gradle@v4
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: diagnostics-ndk-27.3
+          max-size: 3Gi
       - name: Native dependencies at pinned revisions
         run: git submodule update --init --recursive --jobs 8
       - name: JVM tests and Debug APK
         env:
           IS_BUILD_SIGNED: 'false'
           SIGNING_STORE_PATH: unused.jks
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CCACHE_COMPILERCHECK: 'string:27.3.13750724'
         run: ./gradlew --no-daemon testFullDebugUnitTest assembleFullDebug --stacktrace
       - name: Verify APK identity and checksums
         env:

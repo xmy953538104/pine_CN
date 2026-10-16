@@ -18,6 +18,7 @@ import java.util.zip.ZipOutputStream
 object DiagnosticExport {
     const val MAX_FILE_BYTES = 8 * 1024 * 1024
     const val MAX_SNAPSHOT_BYTES = 40 * 1024 * 1024
+    const val MAX_METADATA_BYTES = 1024 * 1024
     private const val MAX_RECORD_BYTES = 64 * 1024
     private const val MAX_IDENTITIES = 65536
     private val json = Json { isLenient = false }
@@ -53,7 +54,8 @@ object DiagnosticExport {
         val id: String get() = directory.name
         val entries: List<Entry> get() = archiveNames.mapNotNull { name ->
             val file = File(directory, name)
-            if (isSafeFile(file) && file.length() <= MAX_FILE_BYTES) Entry(name, file.length()) else null
+            val limit = if (name == "session-metadata.txt") MAX_METADATA_BYTES else MAX_FILE_BYTES
+            if (isSafeFile(file) && file.length() <= limit) Entry(name, file.length()) else null
         }
         internal fun file(name: String) = File(directory, name)
         override fun close() {
@@ -82,7 +84,7 @@ object DiagnosticExport {
         if (!snapshotId.matches(id)) return null
         val directory = File(cacheDirectory, id)
         return if (directory.absoluteFile == directory.canonicalFile && directory.isDirectory &&
-            isSafeFile(File(directory, "session-metadata.txt"))) Snapshot(directory) else null
+            isSafeFile(File(directory, "session-metadata.txt")) && File(directory, "session-metadata.txt").length() <= MAX_METADATA_BYTES) Snapshot(directory) else null
     }
 
     /**
@@ -135,7 +137,9 @@ object DiagnosticExport {
                     }
                 }
             }
-            snapshot.file("session-metadata.txt").writeText(redact(metadata) + "\n" + summary.render(), Charsets.UTF_8)
+            val metadataBytes = (redact(metadata.take(16384)) + "\nmetadata_header_truncated=${metadata.length > 16384}\n" + summary.render()).toByteArray(Charsets.UTF_8)
+            check(metadataBytes.size <= MAX_METADATA_BYTES) { "Export metadata limit exceeded" }
+            snapshot.file("session-metadata.txt").writeBytes(metadataBytes)
             return snapshot
         } catch (error: Throwable) {
             snapshot.close()
@@ -232,7 +236,7 @@ object DiagnosticExport {
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(128)
             if (session.isNotEmpty() && sessions.size < 64) sessions.add(session)
             val category = (record["category"] as? JsonPrimitive)?.contentOrNull
-            val event = (record["event"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val event = (record["event"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(96)
             val level = (record["level"] as? JsonPrimitive)?.contentOrNull
             val stage = (record["last_stage"] as? JsonPrimitive)?.contentOrNull
             val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull ?: -1L
@@ -247,9 +251,9 @@ object DiagnosticExport {
                     record[key]?.let { put(key, it) }
                 }
             }.toString()
-            val row = if (fullRow.length <= 4096) fullRow else buildJsonObject {
+            val row = if (fullRow.length <= 1024) fullRow else buildJsonObject {
                 put("event", event); put("session_id", session)
-                put("summary_truncated", true); put("excerpt", fullRow.take(2048))
+                put("summary_truncated", true); put("excerpt", fullRow.take(512))
             }.toString()
             if (event == "SESSION_METADATA" && (session in sessionBuilds || sessionBuilds.size < 64)) sessionBuilds[session] = row
             if (category == "content") {
@@ -296,6 +300,7 @@ object DiagnosticExport {
     fun write(output: OutputStream, snapshot: Snapshot) {
         val entries = snapshot.entries
         require(entries.any { it.name == "session-metadata.txt" }) { "Export snapshot expired" }
+        require(entries.filter { it.name != "session-metadata.txt" }.sumOf { it.bytes } <= MAX_SNAPSHOT_BYTES)
         val channels = mutableListOf<Pair<Entry, FileChannel>>()
         try {
             for (entry in entries) {

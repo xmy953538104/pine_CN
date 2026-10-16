@@ -14,10 +14,10 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Two independent process sinks with concurrent rotation | Passed real fork/exec test | Android process lifecycle still needs runtime checks |
 | Native ASan/UBSan and core ThreadSanitizer | Passed local review runs | Host tools, not an Android sanitizer APK |
 | NSP selection/catch policy, production Backing/IStorage/PatchManager and BKTR/CTR/Region/OS compositions | Passed controlled host tests | Crypto keys, full NSP parsing and commercial files are not exercised |
-| Android/JVM exporter, selection and process directory/session behavior | 20/20 passed actual Gradle task | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
+| Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 21/21 passed actual Gradle task at `00811378` | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
-| Complete ARM64 native link | Passed 983-step local build; changed-source rebuild follows | Local supplemental native build uses debug compilation; CI builds the packaged configuration |
-| Windows PS5.1/pwsh ADB | Earlier CI passed; strengthened closed-output fixture required a further Windows fix | Use final commit CI result, not an older green run |
+| Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
+| Windows PS5.1/pwsh ADB | Earlier suite passed; strengthened EOF fixture exposed a still-open pipe writer in the managed fake | Native Windows fixture investigation is in progress; use final commit CI result, not an older green run |
 | Actual POSIX PTY Ctrl+C, fake ADB and native JSONL replay | Passed | These controlled inputs are not an Android/device run |
 | Preview publication guards | Passed offline tests for rejected commits/jobs, tampered APK/evidence, wrong ABI and extra APK | Test ZIPs are deliberately non-executable fixtures |
 
@@ -47,6 +47,14 @@ Google APIs image were installed; the image advertises ARM64 native translation.
 The first software boot entered system_server watchdog restart loops before Pine
 was installed. This is environment evidence, not an App failure. Runtime checks
 continue using the same AVD without wiping it or changing guest security settings.
+
+The source `00811378` supplemental APK passed signature, label/package/version,
+all packaged ARM64 library headers, embedded DEX commit and release-process
+manifest verification. Its SHA-256 is
+`aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.
+This is a local build with separately recorded flags and pinned-dependency
+provenance, not the CI binary. The runtime report identifies which actual APK was
+attempted; build success alone is not installation or UI evidence.
 
 No physical ARM64, commercial-game or FPS/audio acceptance is claimed here.
 The preview's annotated verification evidence/release notes record the final
@@ -100,3 +108,24 @@ existing immediate process exit. Raw handlers only store a signal number for lat
 serialization. Forced kills, power loss or fatal paths that cannot return safely
 can still lose queued events. A session summary confirms a completed drain; its
 absence must not be presented as a clean shutdown.
+
+## Optional host storage benchmark
+
+Run `python3 tools/tests/benchmark-storage-diagnostics.py` with a C++20 host
+compiler, or add `--output /path/to/new-directory` to retain evidence at a chosen
+fresh path. The runner compiles production `IStorage.cpp`, `Backing` and the real
+diagnostic sink with existing IPC/platform host stand-ins. Each mode makes the
+same one million controlled 64-byte reads per trial in five fresh-process trials,
+rotating mode order. It checks identical backing calls/checksum, sampling ordinals, valid
+JSON, accepted plus dropped attempts, complete draining and zero disk errors;
+timings have no pass/fail threshold. `result.json` records all trials, build
+command, source hashes, host settings and accepted/written/dropped counts.
+
+At `00811378`, the initial shared Linux host run (two CPUs, nice 15) measured median
+off/normal/detailed call times of 12.33/93.66/172.90 ns. Across five million reads per
+mode, accepted/written/dropped totals were 0/0/0, 26299/26299/12766 and
+43639/43639/268861. Successful reads sample first then every 128 in normal mode,
+every 16 in detailed mode. This tight in-memory loop saturates the bounded async
+writer, especially in detailed mode; scheduling and drop rates affect timing.
+These observations do not measure Android game FPS, audio, device storage or
+ARM64 performance, and do not replace the repeated owner scene comparison above.

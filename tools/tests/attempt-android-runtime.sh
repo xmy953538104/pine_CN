@@ -88,7 +88,7 @@ elif platform.system() == 'Darwin':
             print(json.dumps({'sysctl': name, 'unavailable': str(error)}))
 PY
 # This is a fresh, job-local AVD, never a user's existing device or disk.
-printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-36;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
+printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-35;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
 # API36 first-boot logs showed memory/I/O pressure and system-app ANRs with 3 GiB.
 # Give the fresh AVD 4 GiB inside the existing standard runner; this is an
 # empirical capacity retry, not an established cause or a game-performance test.

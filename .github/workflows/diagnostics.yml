@@ -123,7 +123,9 @@ jobs:
         with:
           packages: platform-tools emulator
       - name: Official Android image
-        run: sdkmanager 'system-images;android-36;google_apis;x86_64'
+        # The actual API35 r9 bridge supports CNTFRQ in all decoder engines;
+        # API36 booted but its framework ANRs blocked the Settings observation.
+        run: sdkmanager 'system-images;android-35;google_apis;x86_64'
       - uses: actions/download-artifact@v4
         with:
           name: pine-diagnostics-debug-${{ github.event.pull_request.head.sha || github.sha }}
@@ -136,6 +138,12 @@ jobs:
           python3 - <<'PY'
           import json, pathlib
           root = pathlib.Path('runtime-evidence')
+          # Preserve the actual launch response even when later UI commands
+          # exhaust the recent-command tail or artifact transfer is unavailable.
+          for name in ('install.txt', 'settings-launch.txt', 'installed-apk-sha256.txt'):
+              path = root / name
+              if path.is_file():
+                  print(name + ':\n' + path.read_text(errors='replace')[-8000:])
           report = root / 'runtime-report.json'
           if report.is_file():
               result = json.loads(report.read_text())

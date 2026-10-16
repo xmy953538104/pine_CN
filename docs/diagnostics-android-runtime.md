@@ -73,6 +73,38 @@ establish successful native loading or UI acceptance. The next fresh AVD uses
 pressure and system-app ANRs. This is an empirical capacity retry, not proof of a
 single cause or a controlled game-performance comparison.
 
+**Intel macOS Android36 checkpoint, 2026-10-16 19:50 UTC:** source
+`f8aefde1c30895859ad70b28f60edf4980145bdf`, exact APK SHA256
+`08e0c44e3cec9becd92ac0aa1dee94f5d0bd35ab0e67a62bb44c229161f856af`,
+[job 117156978705](https://github.com/xmy953538104/pine_CN/actions/runs/38954682338/job/117156978705).
+The revised readiness gate passed on its first observation with PID 665 unchanged
+across a real package query and 2.553-second continuity window. Installation
+succeeded in 235.583 seconds including its absence query; the installed SHA256
+matched. The actual Settings-start command was followed by a 120-second UI
+observation that never reached Pine's Settings. Four captured XML hierarchies
+show `Process system isn't responding`, with normal `Close app` and `Wait`
+buttons. A later window dump separately shows `Application Not Responding:
+com.google.android.gms`; these are not assumed to be the same dialog.
+UiAutomation itself also repeatedly timed out. The [unmodified report](https://github.com/xmy953538104/pine_CN/actions/runs/38954682338/artifacts/12071905739)
+is `environment_blocked`: 5 passed, 13 blocked, 0 failed, with no Pine Java/native
+crash observed during capture. This does not prove Pine native loading, Settings,
+diagnostic logging or export. No dialog was dismissed or platform setting changed.
+
+The next attempt uses the official Android35 Google APIs x86_64 r9 image.
+Its actual bridge also supports `CNTFRQ_EL0` in all three decoder engines, rather
+than inferring support from the shared `0.2.3` version string. The archive matched
+Google's manifest SHA1 `0103e6dab21290c4b9d16550a3ce99476f884eef`; the actual bridge
+SHA256 is `9b5808354a85d722a290ae879400b909aa961955e80ea1a7e807aea9416d92f9`.
+Read-only extraction and official `aapt` manifest parsing also verified actual
+DocumentsUIGoogle, ExternalStorageProvider, DownloadProvider and DownloadProviderUi
+APKs, with packages `com.google.android.documentsui`, `com.android.externalstorage`,
+`com.android.providers.downloads` and `com.android.providers.downloads.ui`.
+This confirms the SAF packages exist, not that a save intent has executed.
+This is a platform
+configuration retry after observed Android36 ANRs, not an App-code workaround or
+a claim that Android35 has run Pine successfully. The same bounded install/UI,
+identity, native-log, export and crash checks remain required.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

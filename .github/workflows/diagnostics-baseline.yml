@@ -10,14 +10,6 @@ on:
         description: Full target APK source commit
         required: true
         type: string
-  # One scoped investigation on the authorized development branch. Later
-  # ordinary production/docs changes do not rebuild the fixed main baseline.
-  push:
-    branches: [feat/diagnostics-v1]
-    paths:
-      - .github/workflows/diagnostics-baseline.yml
-      - tools/android-startup-probe.py
-      - tools/tests/test-android-startup-probe.py
 permissions:
   contents: read
   actions: read
@@ -26,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 env:
   BASELINE_COMMIT: f665512f52fa6c3b7e726299d0c23ff3abe09d8c
-  TARGET_COMMIT: ${{ inputs.target_commit || '199bbccda9517c019ad0984ab5ed8d0718570fc8' }}
-  TARGET_RUN: ${{ inputs.target_run_id || '38966014916' }}
+  TARGET_COMMIT: ${{ inputs.target_commit }}
+  TARGET_RUN: ${{ inputs.target_run_id }}
 jobs:
   baseline-apk:
     runs-on: ubuntu-latest

@@ -44,16 +44,24 @@ pwsh -NoProfile -File .\tools\tests\pine-diag.Tests.ps1
 ```
 
 Windows tests use the OS .NET Framework compiler for fake ADB and Visual Studio
-C++ Build Tools (discovered through `vswhere`) with a Windows SDK to build a small
-native EOF fixture.
-The latter links only Kernel32, with no CLR or CRT startup, and remains alive
+C++ Build Tools (discovered through `vswhere`) with a Windows SDK to build small
+native EOF and isolated-console fixtures.
+The EOF fixture links only Kernel32, with no CLR or CRT startup, and remains alive
 after closing stdout. A pipe probe distinguishes native EOF from an empty pipe
 that still has a writer. On Linux, tests use Python 3 for fake ADB. Tests cover multiple/no devices,
 unauthorized/offline devices, USB permission and discovery failures, closed or
 disconnected streams, production-sink title/session filters, UTF-8 round-trip without
 a BOM, collision-free session grouping, bounded overflow, retaining logs,
-finite capture cleanup and PowerShell pipeline cancellation. Cancellation
-exercises the engine's Ctrl+C stop/finally path, not Windows keyboard delivery.
+finite capture cleanup and PowerShell pipeline cancellation. A separate native
+helper creates an owned console and process job, verifies its console contains
+only the helper and the test PowerShell process, and sends one real Win32
+`CTRL_C_EVENT`. It requires the collector to exit itself within ten seconds,
+the original fake-ADB process to be gone before closing the job, and all twelve
+complete UTF-8 fixture records to be readable with exclusive file access.
+Failure cleanup cannot count as a passing Ctrl+C result. At `5ff61e81`, this
+passed in Windows PowerShell 5.1 (31 ms from signal to exit) and pwsh 7.6.6
+(78 ms); these are controlled CI observations, not device or physical-keyboard
+latency measurements. Neither fixture changes the workstation script policy.
 
 Valid fake-ADB records are replayed unchanged from
 [`fixtures/native-sink.jsonl`](tests/fixtures/native-sink.jsonl) and

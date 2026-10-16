@@ -243,8 +243,19 @@ small startup probe requires own Settings XML, a real Back transition and a
 fresh reopened UI; a successful launch command alone cannot pass. Its outcome
 and source hash are separate from Diagnostics acceptance. Baseline-first order,
 different package/version and shared system warming are confounds. Eleven
-controlled subprocess tests passed; actual baseline execution is still pending
-at this checkpoint. No physical ARM64 or game acceptance follows from it.
+controlled subprocess tests passed. The actual
+[comparison job](https://github.com/xmy953538104/pine_CN/actions/runs/38968004469/job/117206287625)
+completed at 22:13 UTC: baseline APK SHA-256
+`24817b26362350c1a530ceb765c752b88807256130ba40f5c9658b07bc2ae767`
+was installed and verified, but its 120-second `settings-launch` command exceeded
+the deadline. The baseline result is **blocked**, not Settings success. The
+subsequent exact `199bbccd` target APK reached Diagnostics/default-off/enable
+(8 passed / 10 blocked); its older directory observer still prevented local
+native-file checks. The passive boot callback was observed on system-server
+PID570. This comparison does not isolate a Diagnostics regression. Future
+comparisons require explicit manual target run/commit inputs; the one scoped
+investigation push trigger and fixed target fallback were removed. No physical
+ARM64 or game acceptance follows from it.
 
 **First actual Diagnostics UI and native-event evidence, recovered 21:40 UTC:**
 the [`69826dda` Intel Mac run](https://github.com/xmy953538104/pine_CN/actions/runs/38964404733/job/117189621941)

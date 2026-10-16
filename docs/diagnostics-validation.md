@@ -17,10 +17,10 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 24/24 passed actual Gradle task: 17 exporter, 4 selection and 3 process/settings tests, including long-line export and private-path tails | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
-| Windows PS5.1/pwsh ADB | Full suite passed at `d859e3b5`, including native EOF, complete shared-file records and cancellation cleanup | Windows physical-keyboard Ctrl+C still needs manual acceptance; actual POSIX PTY Ctrl+C passed separately |
+| Windows PS5.1/pwsh ADB | Full suite passed at `5ff61e81`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 31/78 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
 | Actual POSIX PTY Ctrl+C, fake ADB and native JSONL replay | Passed | These controlled inputs are not an Android/device run |
 | Preview publication guards | Passed offline tests for rejected commits/jobs, tampered APK/evidence, wrong ABI and extra APK | Test ZIPs are deliberately non-executable fixtures |
-| Android observer safeguards | Local 17 smoke, 4 passive first-boot and 11 startup-probe tests passed using controlled subprocesses | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
+| Android observer safeguards | CI 22 smoke, 4 passive first-boot and 11 startup-probe tests passed at `5ff61e81` using controlled subprocesses | They pass none of the 18 actual APK acceptance checks; current exact-commit CI is authoritative |
 
 Reproduce independent native checks without the Android SDK:
 
@@ -44,6 +44,25 @@ The dedicated Diagnostics Debug workflow performs these checks and runs the ADB
 suite in Windows PowerShell5.1 and pwsh. The `ci` PR label enables APK upload.
 
 ## Actual Android execution
+
+The [`69826dda` Intel Mac attempt](https://github.com/xmy953538104/pine_CN/actions/runs/38964404733/job/117189621941)
+installed and hash-verified the actual ARM64 APK on an official API35 x86_64
+image with native translation. Settings, Diagnostics, default off, enable/session
+and native-active observations passed. Four actual native `PineDiag` JSONL rows
+also passed supplemental checks, including exact-commit metadata and completed
+session summaries. Its original report remains 8 passed / 10 blocked: it did not
+verify local JSONL bytes or export. Concrete directory-listing and rendered-label
+observer defects were subsequently fixed and tested. The matching latest APK
+runtime report determines whether those remaining flows have passed.
+
+The [same-AVD main comparison](https://github.com/xmy953538104/pine_CN/actions/runs/38968004469/job/117206287625)
+installed and hash-verified tracked-clean main `f665512f`, but its Settings launch
+exceeded the 120-second observer deadline. The subsequent target `199bbccd`
+reached Diagnostics/default-off/enable (8 passed / 10 blocked with the older
+directory observer). This does not isolate a Diagnostics regression or establish
+baseline Settings success; baseline-first order and shared system warming remain
+confounds. Earlier failed/blocked reports are preserved below and in the runtime
+evidence document.
 
 See [environment evidence](diagnostics-android-runtime.md). This cloud host is
 x86_64 with no `/dev/kvm` or graphics device. Official Android30 and Android34

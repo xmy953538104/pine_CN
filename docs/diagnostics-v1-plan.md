@@ -16,7 +16,7 @@ actual guest messages. Closed-source Lua stacks cannot be invented.
 Build baseline: Gradle 8.6, Java 17, AGP 8.4.0, NDK 27.3.13750724, compileSdk 35,
 arm64-v8a only, 21 initially uninitialized submodules. Existing CI builds release;
 the additional workflow builds Debug and runs native, JVM and Windows shell tests.
-No release or merge is part of this work.
+Main is not merged by this work. A clearly marked pre-release may be published only after the authorized quality checks and exact-commit artifact verification.
 
 Runtime evidence and final acceptance results are recorded separately; synthetic
 input and JVM tests are not evidence of running the ARM64 APK.

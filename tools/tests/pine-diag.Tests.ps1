@@ -1,15 +1,18 @@
 #requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $collector = Join-Path $PSScriptRoot '../pine-diag.ps1'
-$temp = Join-Path ([IO.Path]::GetTempPath()) ('pine-adb-test-' + [guid]::NewGuid())
+$temp = Join-Path ([IO.Path]::GetTempPath()) ('pine adb test-' + [guid]::NewGuid())
 [void][IO.Directory]::CreateDirectory($temp)
 $env:PINE_FAKE_ADB_ARGS = Join-Path $temp 'args.txt'
 $env:PINE_FAKE_ADB_PID = Join-Path $temp 'pid.txt'
+$env:PINE_FAKE_ADB_FIXTURE = Join-Path $PSScriptRoot 'fixtures/native-sink.jsonl'
+$env:PINE_FAKE_ADB_SESSIONS_FIXTURE = Join-Path $PSScriptRoot 'fixtures/native-sessions.jsonl'
+$fixtureLines = [IO.File]::ReadAllLines($env:PINE_FAKE_ADB_FIXTURE, [Text.Encoding]::UTF8)
 $isWindowsHost = $env:OS -eq 'Windows_NT'
 if ($isWindowsHost) {
     $fake = Join-Path $temp 'adb.exe'
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-    & $compiler /nologo /target:exe "/out:$fake" (Join-Path $PSScriptRoot 'fake-adb.cs')
+    & $compiler /nologo /target:exe /codepage:65001 "/out:$fake" (Join-Path $PSScriptRoot 'fake-adb.cs')
     if ($LASTEXITCODE -ne 0) { throw 'Fake ADB compilation failed' }
 } else {
     $fake = Join-Path $temp 'adb'
@@ -17,50 +20,122 @@ if ($isWindowsHost) {
     & chmod +x $fake
 }
 function Assert([bool]$condition, [string]$message) { if (-not $condition) { throw $message } }
-function Expect-Failure([string]$mode, [string]$expected) {
+function Expect-Failure([string]$mode, [string]$expected, [string]$selectedSerial = '') {
     $env:PINE_FAKE_ADB_MODE = $mode
     $caught = $false
-    try { & $collector -AdbPath $fake -NonInteractive -OutputDirectory $temp -DurationSeconds 1 | Out-Null }
-    catch { $caught = $_.ToString().Contains($expected) }
+    # Give Windows .NET startup/EOF time to finish; this is not a deadline test.
+    try { & $collector -AdbPath $fake -Serial $selectedSerial -NonInteractive -OutputDirectory $temp -DurationSeconds 15 | Out-Null }
+    catch {
+        $caught = $_.ToString().Contains($expected)
+        if (-not $caught) { throw }
+    }
     Assert $caught "Expected failure for $mode containing $expected"
 }
 try {
+    $env:PINE_FAKE_ADB_MODE = 'multiple'
+    $listOutput = Join-Path $temp 'list-only'
+    & $collector -AdbPath $fake -ListDevices -NonInteractive -OutputDirectory $listOutput | Out-Null
+    Assert (-not (Test-Path $env:PINE_FAKE_ADB_PID) -and -not (Test-Path $listOutput)) 'Device listing should not start logcat or create a capture directory'
     Expect-Failure 'none' 'No ADB devices'
     Expect-Failure 'multiple' 'Multiple ADB devices'
+    Expect-Failure 'multiple' 'not present' 'missing-device'
     Expect-Failure 'unauthorized' 'unauthorized'
     Expect-Failure 'offline' 'not ready'
+    Expect-Failure 'permissions' 'no ADB permissions'
+    Expect-Failure 'discovery-error' 'ADB discovery failed'
     Expect-Failure 'disconnect' 'stream ended'
+    $closedOutput = [Diagnostics.Stopwatch]::StartNew()
+    Expect-Failure 'closed-output' 'stream ended'
+    Assert ($closedOutput.Elapsed.TotalSeconds -lt 12) 'Closed stdout must not wait forever for stderr/process exit'
+    $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
+    Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Closed stream leaked ADB'
     $env:PINE_FAKE_ADB_MODE = 'multiple'
     $out = Join-Path $temp 'filtered'
-    & $collector -AdbPath $fake -Serial second-device -SessionId session-a -TitleId 0100 -OutputDirectory $out -DurationSeconds 1 | Out-Null
+    & $collector -AdbPath $fake -Serial second-device -SessionId native-adb-a -TitleId 0100751007ada000 -OutputDirectory $out -DurationSeconds 3 | Out-Null
     $files = @(Get-ChildItem $out -Filter '*.jsonl')
     Assert ($files.Count -eq 1) 'Session/title filtering should produce one file'
-    $event = [IO.File]::ReadAllText($files[0].FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    $lines = @([IO.File]::ReadAllLines($files[0].FullName, [Text.Encoding]::UTF8))
+    Assert ($lines.Count -eq 6) 'Base title filter must retain DLC/guest/stage/summary context and known content before launch'
+    # Compare the collected bytes with actual sink output, not a second event
+    # serializer. The first BEFORE_TITLE record has neither known title field.
+    for ($i = 0; $i -lt $lines.Count; $i++) { Assert ($lines[$i] -ceq $fixtureLines[$i + 1]) 'Collector altered or selected the wrong native sink record' }
+    $events = @($lines | ForEach-Object { $_ | ConvertFrom-Json })
+    $event = @($events | Where-Object { $_.event -eq 'BASE_SELECTED' })[0]
     $expectedUnicode = -join ([char[]]@(0x4e2d, 0x6587, 0x20, 0x65e5, 0x5fd7))
-    Assert ($event.message -eq $expectedUnicode) 'UTF8 did not round trip'
-    Assert ($files[0].Name -match 'session-a') 'Output filename lacks session'
+    Assert ($event.fields.message -eq $expectedUnicode) 'UTF8 did not round trip'
+    $bytes = [IO.File]::ReadAllBytes($files[0].FullName)
+    Assert (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xef -and $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf)) 'JSONL should be UTF8 without a BOM'
+    Assert ($files[0].Name -match 'native-adb-a') 'Output filename lacks session'
     $arguments = [IO.File]::ReadAllText($env:PINE_FAKE_ADB_ARGS)
     Assert ($arguments.Contains('-s second-device logcat -v raw PineDiag:V *:S')) 'Wrong device/tag'
     Assert (-not ($arguments -match 'logcat.* -c')) 'Collector must not clear device logs'
     $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
     Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Timed collection leaked ADB'
 
+    $ownTitleOutput = Join-Path $temp 'own-title'
+    & $collector -AdbPath $fake -Serial second-device -SessionId native-adb-a -TitleId 0100751007ADB001 -OutputDirectory $ownTitleOutput -DurationSeconds 3 | Out-Null
+    Assert (@(Get-ChildItem $ownTitleOutput -Filter '*.jsonl').Count -eq 0) 'A distinct DLC Data ID must not override known base-title context'
+    $unknownOutput = Join-Path $temp 'unknown-base'
+    & $collector -AdbPath $fake -Serial second-device -SessionId native-adb-unknown -TitleId 0100751007ADB001 -OutputDirectory $unknownOutput -DurationSeconds 3 | Out-Null
+    $unknownFiles = @(Get-ChildItem $unknownOutput -Filter '*.jsonl')
+    Assert ($unknownFiles.Count -eq 1) 'Unknown base must allow event-specific fields.title_id fallback'
+    $unknownLines = @([IO.File]::ReadAllLines($unknownFiles[0].FullName, [Text.Encoding]::UTF8))
+    Assert ($unknownLines.Count -eq 1 -and $unknownLines[0] -ceq $fixtureLines[10]) 'Fallback must preserve the native unknown-base content record only'
+
+    $env:PINE_FAKE_ADB_MODE = 'sessions'
+    $grouped = Join-Path $temp 'grouped'
+    & $collector -AdbPath $fake -NonInteractive -OutputDirectory $grouped -DurationSeconds 3 | Out-Null
+    $files = @(Get-ChildItem $grouped -Filter '*.jsonl')
+    Assert ($files.Count -eq 33) 'Expected 32 session files and one bounded overflow file'
+    $events = 0
+    $overflowEvents = 0
+    $collisionFiles = 0
+    foreach ($file in $files) {
+        $rows = @([IO.File]::ReadAllLines($file.FullName, [Text.Encoding]::UTF8) | ForEach-Object { $_ | ConvertFrom-Json })
+        $events += $rows.Count
+        if ($file.Name -match '-overflow\.jsonl$') {
+            $overflowEvents += $rows.Count
+        } else {
+            $first = $rows[0].session_id
+            foreach ($row in $rows) { Assert ($row.session_id -ceq $first) 'Distinct session IDs were mixed in a session file' }
+            if ($first -ceq 'collision/a') {
+                $collisionFiles++
+                Assert ($rows.Count -eq 3) 'Repeated session events and the native summary must reuse their file'
+            }
+        }
+    }
+    Assert ($events -eq 81 -and $overflowEvents -eq 16 -and $collisionFiles -eq 1) 'Sanitized/truncated/case-sensitive session grouping or overflow lost native records'
+    $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
+    Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Grouped collection leaked ADB'
+
     # PowerShell pipeline cancellation follows the Ctrl+C stop/finally path.
     # This checks engine cancellation; console keyboard delivery is a separate manual check.
     Remove-Item $env:PINE_FAKE_ADB_PID
     $env:PINE_FAKE_ADB_MODE = 'normal'
+    $cancelOutput = Join-Path $temp 'cancel'
     $runspace = [PowerShell]::Create()
-    [void]$runspace.AddCommand($collector).AddParameter('AdbPath', $fake).AddParameter('NonInteractive').AddParameter('OutputDirectory', (Join-Path $temp 'cancel'))
-    $pending = $runspace.BeginInvoke()
-    $limit = [DateTime]::UtcNow.AddSeconds(10)
-    while (-not (Test-Path $env:PINE_FAKE_ADB_PID) -and [DateTime]::UtcNow -lt $limit) { Start-Sleep -Milliseconds 50 }
-    Assert (Test-Path $env:PINE_FAKE_ADB_PID) 'Cancellation fixture never started'
-    $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
-    $runspace.Stop()
-    $runspace.Dispose()
+    try {
+        [void]$runspace.AddCommand($collector).AddParameter('AdbPath', $fake).AddParameter('NonInteractive').AddParameter('OutputDirectory', $cancelOutput)
+        $pending = $runspace.BeginInvoke()
+        $limit = [DateTime]::UtcNow.AddSeconds(15)
+        do {
+            $saved = @(Get-ChildItem $cancelOutput -Filter '*.jsonl' -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
+            # All three fixture sessions appear after the UTF8 base event, so
+            # cancellation necessarily exercises an open, populated writer.
+            if ((Test-Path $env:PINE_FAKE_ADB_PID) -and $saved.Count -eq 3) { break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $limit)
+        Assert ((Test-Path $env:PINE_FAKE_ADB_PID) -and $saved.Count -eq 3) 'Cancellation fixture never saved all native sessions'
+        $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
+    } finally {
+        $runspace.Stop()
+        $runspace.Dispose()
+    }
     Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Cancellation leaked ADB'
-    Write-Host 'PASS: no-device, multi-device, unauthorized, offline, disconnect, filters, UTF8, retained logs, deadline and pipeline cancellation cleanup'
+    $cancelEvents = @(Get-ChildItem $cancelOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName, [Text.Encoding]::UTF8) } | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert (@($cancelEvents | Where-Object { $_.fields.message -eq $expectedUnicode }).Count -eq 1) 'Cancellation did not preserve a complete UTF8 event'
+    Write-Host 'PASS: actual native sink JSONL replay, discovery/devices/errors, base-title and unknown-context fallback filters, UTF8/BOM, session grouping/overflow, deadline and cancellation cleanup'
 } finally {
     Remove-Item $temp -Recurse -Force
-    Remove-Item Env:PINE_FAKE_ADB_ARGS, Env:PINE_FAKE_ADB_PID, Env:PINE_FAKE_ADB_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:PINE_FAKE_ADB_ARGS, Env:PINE_FAKE_ADB_PID, Env:PINE_FAKE_ADB_MODE, Env:PINE_FAKE_ADB_FIXTURE, Env:PINE_FAKE_ADB_SESSIONS_FIXTURE -ErrorAction SilentlyContinue
 }

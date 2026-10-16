@@ -17,14 +17,13 @@ jobs:
         run: bash tools/tests/run-native-diagnostics.sh
   adb:
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shell: [powershell, pwsh]
     steps:
       - uses: actions/checkout@v4
-      - name: Fake ADB integration tests
-        shell: ${{ matrix.shell }}
+      - name: Fake ADB PowerShell 5.1 tests
+        shell: powershell
+        run: ./tools/tests/pine-diag.Tests.ps1
+      - name: Fake ADB pwsh tests
+        shell: pwsh
         run: ./tools/tests/pine-diag.Tests.ps1
   debug-apk:
     runs-on: ubuntu-latest

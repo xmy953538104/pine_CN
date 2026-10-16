@@ -19,6 +19,7 @@ jobs:
         run: |
           bash tools/tests/run-native-diagnostics.sh
           bash tools/tests/run-content-diagnostics.sh
+          python3 tools/tests/test-preview-gates.py
   adb:
     runs-on: windows-latest
     steps:
@@ -57,7 +58,7 @@ jobs:
           key: diagnostics-ndk-27.3
           max-size: 3Gi
       - name: Native dependencies at pinned revisions
-        run: git submodule update --init --recursive --jobs 8
+        run: git submodule update --init --recursive --depth 1 --jobs 8
       - name: JVM tests and Debug APK
         env:
           IS_BUILD_SIGNED: 'false'
@@ -65,7 +66,7 @@ jobs:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_COMPILERCHECK: 'string:27.3.13750724'
-        run: ./gradlew --no-daemon testFullDebugUnitTest assembleFullDebug --stacktrace
+        run: ./gradlew --no-daemon testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
       - name: Verify APK identity and checksums
         env:
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}

@@ -1,0 +1,43 @@
+name: Diagnostics Preview
+on:
+  push:
+    tags: ['v*-diagnostics-v1*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check annotated verification evidence
+        id: evidence
+        run: python3 tools/prepare-diagnostics-preview.py
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.evidence.outputs.run_id }}
+          name: pine-diagnostics-debug-${{ steps.evidence.outputs.commit }}
+          path: preview
+      - name: Verify exact tested APK
+        run: python3 tools/prepare-diagnostics-preview.py --verify-apk preview
+      - name: Prepare draft and verify downloaded release assets
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --json isDraft,targetCommitish,tagName > /tmp/pine-preview-existing.json; then
+            EXPECTED_COMMIT="${{ steps.evidence.outputs.commit }}" python3 -c 'import json,os; r=json.load(open("/tmp/pine-preview-existing.json")); assert r["isDraft"] and r["tagName"] == os.environ["GITHUB_REF_NAME"] and r["targetCommitish"] == os.environ["EXPECTED_COMMIT"], "Refusing to overwrite a published or unrelated release"'
+            gh release upload "$GITHUB_REF_NAME" preview/app-full-debug.apk preview/build-identity.json preview/verification-evidence.json --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=true --prerelease --latest=false --notes-file preview/release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" preview/app-full-debug.apk preview/build-identity.json preview/verification-evidence.json --verify-tag --draft --prerelease --latest=false --target "${{ steps.evidence.outputs.commit }}" --title "Pine 2.1.2 Diagnostics v1 Preview" --notes-file preview/release-notes.md
+          fi
+          gh release download "$GITHUB_REF_NAME" --dir /tmp/pine-preview-download
+          python3 tools/prepare-diagnostics-preview.py --verify-release /tmp/pine-preview-download
+      - name: Publish verified preview
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --latest=false

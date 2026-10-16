@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import zipfile
+import xml.etree.ElementTree as ET
 
 apk = pathlib.Path(sys.argv[1])
 expected = sys.argv[2]
@@ -20,7 +21,23 @@ with zipfile.ZipFile(apk) as archive:
     libs = sorted(p for p in archive.namelist() if p.startswith("lib/") and p.endswith(".so"))
     assert "lib/arm64-v8a/libskyline.so" in libs, libs
     assert all(p.split("/")[1] == "arm64-v8a" for p in libs), libs
+    for name in libs:
+        elf = archive.read(name)
+        assert elf[:6] == b"\x7fELF\x02\x01" and int.from_bytes(elf[18:20], "little") == 183, (name, "not ELF64 AArch64")
+    skyline_digest = hashlib.sha256(archive.read("lib/arm64-v8a/libskyline.so")).hexdigest()
     assert any(expected.encode() in archive.read(name) for name in archive.namelist() if re.fullmatch(r"classes\d*\.dex", name)), "BuildConfig commit missing from DEX"
+reports = list(pathlib.Path("app/build/test-results/testFullDebugUnitTest").glob("TEST-*.xml"))
+suites = [ET.parse(path).getroot() for path in reports]
+jvm = {key: sum(int(suite.attrib.get(key, 0)) for suite in suites) for key in ("tests", "failures", "errors", "skipped")}
+assert jvm["tests"] >= 20 and not any(jvm[key] for key in ("failures", "errors", "skipped")), jvm
+jvm["classes"] = sorted(suite.attrib["name"] for suite in suites)
+assert all(any(name.endswith(required) for name in jvm["classes"]) for required in ("DiagnosticExportTest", "ContentSelectionTest", "DiagnosticsProcessTest")), jvm
+release_manifests = [*pathlib.Path("app/build/intermediates/merged_manifest/fullRelease").rglob("AndroidManifest.xml"),
+                     *pathlib.Path("app/build/intermediates/merged_manifests/fullRelease").rglob("AndroidManifest.xml")]
+android_process = "{http://schemas.android.com/apk/res/android}process"
+android_name = "{http://schemas.android.com/apk/res/android}name"
+assert any(any(activity.attrib.get(android_name, "").endswith(".EmulationActivity") and activity.attrib.get(android_process) == ":emulationProcess"
+               for activity in ET.parse(path).getroot().iter("activity")) for path in release_manifests), "Release emulation-process manifest not verified"
 metadata = {
     "schema": 1,
     "commit": actual,
@@ -30,6 +47,9 @@ metadata = {
     "abi": ["arm64-v8a"],
     "min_sdk": 29,
     "build_type": "debug",
+    "skyline_elf_sha256": skyline_digest,
+    "jvm_tests": jvm,
+    "release_emulation_process_manifest_verified": True,
     "runtime_validation": "See docs/diagnostics-validation.md; build verification is not device execution.",
 }
 apk.with_name("build-identity.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

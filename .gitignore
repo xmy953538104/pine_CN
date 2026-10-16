@@ -109,3 +109,6 @@ output-metadata.json
 
 # Kotlin compiler state
 .kotlin/
+
+# Python test state
+__pycache__/

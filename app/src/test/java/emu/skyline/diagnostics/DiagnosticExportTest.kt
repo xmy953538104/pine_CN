@@ -184,6 +184,30 @@ class DiagnosticExportTest {
         } finally { snapshots.forEach { it.close() } }
     }
 
+    @Test fun prunesInterruptedSnapshotWithoutMetadata() = sandbox { logs, textLog, cache, _ ->
+        val incomplete = File(cache, "snapshot-11111111-1111-1111-1111-111111111111")
+        log(incomplete, "emulation/diagnostics-0.jsonl", "partial export")
+        assertTrue(incomplete.setLastModified(1))
+        assertNull(DiagnosticExport.restore(cache, incomplete.name))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use {
+            assertFalse("Interrupted snapshot was not pruned", incomplete.exists())
+        }
+    }
+
+    @Test fun snapshotCleanupUnlinksScopeSymlinkWithoutDeletingOutsideLogs() = sandbox { logs, textLog, cache, root ->
+        log(logs, "main/diagnostics-0.jsonl", record("main", 1))
+        val outside = File(root, "outside").apply { mkdir() }
+        val victim = File(outside, "diagnostics-0.jsonl").apply { writeText("DO_NOT_DELETE") }
+        val snapshot = DiagnosticExport.capture(logs, textLog, cache, "schema=1")
+        val scope = File(cache, "${snapshot.id}/main")
+        assertTrue(File(scope, "diagnostics-0.jsonl").delete())
+        assertTrue(scope.delete())
+        Files.createSymbolicLink(scope.toPath(), outside.toPath())
+        snapshot.close()
+        assertEquals("DO_NOT_DELETE", victim.readText())
+        assertFalse(Files.exists(scope.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+    }
+
     @Test fun aggregateBudgetPrioritizesEmulationThenMainOverLegacy() = sandbox { logs, textLog, cache, _ ->
         val emulation = record("emu", 1)
         val main = record("main", 1)

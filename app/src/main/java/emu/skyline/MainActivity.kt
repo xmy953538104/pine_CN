@@ -383,7 +383,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        emu.skyline.diagnostics.Diagnostics.apply(this)
 
         // Try to return to normal GPU clocks upon resuming back to main activity, to avoid GPU being stuck at max clocks after a crash
         GpuDriverHelper.forceMaxGpuClocks(false)

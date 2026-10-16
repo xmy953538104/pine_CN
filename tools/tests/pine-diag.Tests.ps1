@@ -5,6 +5,7 @@ $temp = Join-Path ([IO.Path]::GetTempPath()) ('pine adb test-' + [guid]::NewGuid
 [void][IO.Directory]::CreateDirectory($temp)
 $env:PINE_FAKE_ADB_ARGS = Join-Path $temp 'args.txt'
 $env:PINE_FAKE_ADB_PID = Join-Path $temp 'pid.txt'
+$env:PINE_FAKE_ADB_CLOSED = Join-Path $temp 'closed.txt'
 $env:PINE_FAKE_ADB_FIXTURE = Join-Path $PSScriptRoot 'fixtures/native-sink.jsonl'
 $env:PINE_FAKE_ADB_SESSIONS_FIXTURE = Join-Path $PSScriptRoot 'fixtures/native-sessions.jsonl'
 $fixtureLines = [IO.File]::ReadAllLines($env:PINE_FAKE_ADB_FIXTURE, [Text.Encoding]::UTF8)
@@ -45,9 +46,11 @@ try {
     Expect-Failure 'discovery-error' 'ADB discovery failed'
     Expect-Failure 'disconnect' 'stream ended'
     $closedOutput = [Diagnostics.Stopwatch]::StartNew()
-    Expect-Failure 'closed-output' 'stream ended'
+    try { Expect-Failure 'closed-output' 'stream ended' }
+    finally { Assert (Test-Path $env:PINE_FAKE_ADB_CLOSED) 'Closed-output fixture did not confirm native stdout closure' }
     Assert ($closedOutput.Elapsed.TotalSeconds -lt 12) 'Closed stdout must not wait forever for stderr/process exit'
     $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
+    Assert ([IO.File]::ReadAllText($env:PINE_FAKE_ADB_CLOSED) -eq [string]$childId) 'Closed-output fixture marker came from a different process'
     Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Closed stream leaked ADB'
     $env:PINE_FAKE_ADB_MODE = 'multiple'
     $out = Join-Path $temp 'filtered'
@@ -137,5 +140,5 @@ try {
     Write-Host 'PASS: actual native sink JSONL replay, discovery/devices/errors, base-title and unknown-context fallback filters, UTF8/BOM, session grouping/overflow, deadline and cancellation cleanup'
 } finally {
     Remove-Item $temp -Recurse -Force
-    Remove-Item Env:PINE_FAKE_ADB_ARGS, Env:PINE_FAKE_ADB_PID, Env:PINE_FAKE_ADB_MODE, Env:PINE_FAKE_ADB_FIXTURE, Env:PINE_FAKE_ADB_SESSIONS_FIXTURE -ErrorAction SilentlyContinue
+    Remove-Item Env:PINE_FAKE_ADB_ARGS, Env:PINE_FAKE_ADB_PID, Env:PINE_FAKE_ADB_CLOSED, Env:PINE_FAKE_ADB_MODE, Env:PINE_FAKE_ADB_FIXTURE, Env:PINE_FAKE_ADB_SESSIONS_FIXTURE -ErrorAction SilentlyContinue
 }

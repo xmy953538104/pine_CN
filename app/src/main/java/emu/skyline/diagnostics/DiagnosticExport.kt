@@ -60,9 +60,17 @@ object DiagnosticExport {
         internal fun file(name: String) = File(directory, name)
         override fun close() {
             // Delete only our allowlisted copies, even when restoring after activity recreation.
-            archiveNames.forEach { File(directory, it).delete() }
-            File(directory, "main").delete(); File(directory, "emulation").delete()
-            directory.delete()
+            // A symlink at a scope directory must be unlinked, never traversed to its children.
+            fun deleteEntry(file: File) {
+                val safeParent = runCatching {
+                    val parent = file.parentFile!!
+                    parent.absoluteFile == parent.canonicalFile
+                }.getOrDefault(false)
+                if (safeParent) file.delete()
+            }
+            archiveNames.forEach { deleteEntry(File(directory, it)) }
+            deleteEntry(File(directory, "main")); deleteEntry(File(directory, "emulation"))
+            deleteEntry(directory)
         }
     }
 
@@ -96,14 +104,17 @@ object DiagnosticExport {
     fun capture(directory: File, textLog: File, cacheDirectory: File, metadata: String): Snapshot =
         captureBounded(directory, textLog, cacheDirectory, metadata, MAX_SNAPSHOT_BYTES)
 
-    internal fun captureBounded(directory: File, textLog: File, cacheDirectory: File, metadata: String, byteBudget: Int): Snapshot {
+    @Synchronized internal fun captureBounded(directory: File, textLog: File, cacheDirectory: File, metadata: String, byteBudget: Int): Snapshot {
         require(byteBudget in 1..MAX_SNAPSHOT_BYTES)
         require(cacheDirectory.absoluteFile == cacheDirectory.canonicalFile)
         check(cacheDirectory.isDirectory || cacheDirectory.mkdirs())
         cacheDirectory.listFiles()?.filter { snapshotId.matches(it.name) }
             ?.sortedByDescending { it.lastModified() }?.forEachIndexed { index, file ->
                 if (index >= 1 || file.lastModified() < System.currentTimeMillis() - 24 * 60 * 60 * 1000L) {
-                    restore(cacheDirectory, file.name)?.close()
+                    // A killed process can leave an incomplete snapshot without metadata.
+                    // Still remove only fixed allowlisted copies in a direct, non-symlink child.
+                    if (file.absoluteFile == file.canonicalFile &&
+                        java.nio.file.Files.isDirectory(file.toPath(), LinkOption.NOFOLLOW_LINKS)) Snapshot(file).close()
                 }
             }
         val target = File(cacheDirectory, "snapshot-${UUID.randomUUID()}")

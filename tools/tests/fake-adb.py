@@ -35,4 +35,5 @@ else:
         sys.exit(1)
     if mode == 'closed-output':
         os.close(sys.stdout.fileno())
+        Path(os.environ['PINE_FAKE_ADB_CLOSED']).write_text(str(os.getpid()))
     time.sleep(60)

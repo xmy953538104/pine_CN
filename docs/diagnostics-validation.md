@@ -42,11 +42,14 @@ suite in Windows PowerShell5.1 and pwsh. The `ci` PR label enables APK upload.
 ## Actual Android execution
 
 See [environment evidence](diagnostics-android-runtime.md). This cloud host is
-x86_64 with no `/dev/kvm` or graphics device. Official Android tools and an Android30
-Google APIs image were installed; the image advertises ARM64 native translation.
-The first software boot entered system_server watchdog restart loops before Pine
-was installed. This is environment evidence, not an App failure. Runtime checks
-continue using the same AVD without wiping it or changing guest security settings.
+x86_64 with no `/dev/kvm` or graphics device. Official Android30 and Android34
+Google APIs images advertise ARM64 native translation. Local installation attempts
+failed during documented Android framework failures. A separate CI Android34 run
+successfully installed the exact ARM64 APK and verified its hash, then the Pine
+process crashed: `ndk_translation` rejected `0xd53be008` (`MRS CNTFRQ_EL0`).
+The unchanged baseline clock initializer uses that instruction during library
+loading. The runtime report remains **failed**; Settings, native logging and
+export are not runtime passes. Later attempts have separate per-APK reports.
 
 The source `00811378` supplemental APK passed signature, label/package/version,
 all packaged ARM64 library headers, embedded DEX commit and release-process
@@ -57,8 +60,9 @@ provenance, not the CI binary. The runtime report identifies which actual APK wa
 attempted; build success alone is not installation or UI evidence.
 
 No physical ARM64, commercial-game or FPS/audio acceptance is claimed here.
-The preview's annotated verification evidence/release notes record the final
-attempted APK, runtime outcome and remaining limitations for that exact commit.
+Use the matching CI artifact and runtime report. Any published preview must carry
+annotated verification evidence with the attempted APK, runtime outcome and
+remaining limitations for that exact commit.
 
 ## Owner reproduction
 
@@ -124,10 +128,10 @@ JSON, accepted plus dropped attempts, complete draining and zero disk errors;
 timings have no pass/fail threshold. `result.json` records all trials, build
 command, source hashes, host settings and accepted/written/dropped counts.
 
-At `00811378`, the initial shared Linux host run (two CPUs, nice 15) measured median
-off/normal/detailed call times of 12.33/93.66/172.90 ns. Across five million reads per
-mode, accepted/written/dropped totals were 0/0/0, 26299/26299/12766 and
-43639/43639/268861. Successful reads sample first then every 128 in normal mode,
+At `5e450f19`, the shared Linux host run (two CPUs, nice 15) measured median
+off/normal/detailed call times of 11.47/94.69/296.21 ns. Across five million reads per
+mode, accepted/written/dropped totals were 0/0/0, 39065/39065/0 and
+148946/148946/163554. Successful reads sample first then every 128 in normal mode,
 every 16 in detailed mode. This tight in-memory loop saturates the bounded async
 writer, especially in detailed mode; scheduling and drop rates affect timing.
 These observations do not measure Android game FPS, audio, device storage or

@@ -1,6 +1,46 @@
 # Android runtime test: cloud execution evidence
 
-Checkpoint: 2026-10-16 UTC. **No Pine APK has been installed or launched at this checkpoint.** APK/CI build is still in progress. Emulator startup, native core tests, JVM tests and fake ADB tests must not be reported as an APK smoke-test pass.
+Local checkpoint: **2026-10-16 18:01 UTC — the exact supplemental `00811378` APK remains runtime blocked.** Its packaged ARM64/commit identity passed. Both official Android 30 installation methods and the one actual Android 34 installation attempt failed at the package service. A successful final Android 34 package listing confirmed the target absent. This local APK therefore has no observed installed-APK hash, Settings launch, Diagnostics UI, native JSONL, export, or Stop-summary pass. Unobserved checks remain blocked.
+
+These claims apply only to the identified local APK and recorded attempts. For every later CI APK, its matching `runtime-report.json` and preview runtime annotation are authoritative; this historical checkpoint does not qualify or override a later artifact's results.
+
+A separate later **CI Android 34** run for `bdbe5036b480e568f95a95c5236f33abf1a5def2` successfully installed its own exact CI APK and verified the installed SHA256. It then blocked at the Settings UI observation and **failed** its app-crash gate with a real SIGILL. The matching report/crash evidence are in CI run `38939148938`, job `117104977029`, artifact `12063203454`. That CI APK is distinct from the supplemental local APK below, and its original failed report remains unchanged.
+
+A further readback (CI run `38943813038`, job `117117783108`) recovered the precise same-process sequence: at 17:45:54.595, `ndk_translation` reported `Undefined instruction 0xd53be008 at 0x00007ae118375b08` for Pine PID 4111; 21 ms later that PID received SIGILL. The opcode decodes to `MRS x8, CNTFRQ_EL0`; inspection of the verified official bridge confirms its decoder rejects that selector. This establishes a bridge failure on the observed instruction, not a successful APK run. The baseline `common/utils.h` is byte-identical to `origin/main` commit `f665512f52fa6c3b7e726299d0c23ff3abe09d8c` (blob `69405941cbe477ec13d98cc2b5de8442e92e6e49`, recorded in `baseline-clock-file-identity.json`). It initializes global `util::ClockFrequency` by reading `CNTFRQ_EL0`, and `SkylineApplication.onCreate` loads `skyline` before calling the new `Diagnostics.apply`. That is a strong inference for the caller; complete guest-PC-to-library symbol mapping and an actual unmodified baseline APK comparison were not obtained. No clock or guest execution logic was changed to accommodate x86 translation. The failed app-crash gate, unobserved Diagnostics UI, and unrun physical ARM64/NCE/game checks remain explicit.
+
+The newer official **Android36 Google APIs x86_64 r7/ext17** image provides a
+different bridge. Its downloaded ZIP matched Google's manifest SHA1
+`c6bf44bdcd885bb902b4ba752d111a073ad7a817`; the extracted bridge SHA256 is
+`fbadc774c989534a567e6af8fd16d2c00727b1f1d9cc778bf538d6b59ed9776d`.
+All three inspected decoder engines explicitly support `CNTFRQ_EL0`, supplying
+10,485,760 Hz. This removes the specific static rejection seen on Android30/34,
+so CI now attempts the unchanged ARM64 APK on Android36. This is a justified next
+runtime candidate, not an installation or UI pass. The exact new runtime report
+is authoritative. Image/CRC/ELF provenance is recorded under
+`/workspace/android-build/newer-bridge-evaluation`; independent instruction and
+decoder evidence is under `/workspace/android-build/evidence/cntfrq-translation`.
+
+- Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
+- APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
+- APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.
+- Local provenance is supplemental: pinned upstream JitPack dependencies were rebuilt unchanged outside the checkout after local download restrictions; the production native source tree matched the identified source. It is not the exact CI artifact.
+
+| Local attempt | Actual observation | Evidence under `/workspace/android-runtime` |
+| --- | --- | --- |
+| Android 30 streamed install | APK/device checks passed; real `adb install` failed after 79.853 s with package-service broken pipe. No UI attempted. | `smoke-00811378-local-2/runtime-report.json` |
+| Android 30 non-streamed install | Successful target-absence query, complete 51,470,773-byte push, then exit 224 after 205.823 s with broken pipe. Final PMS listing returned no target. | `smoke-00811378-local-4-no-streaming/non-streaming-attempt-report.json` |
+| Android 34 strict runner | Thirty minutes of boot observation plus the final 60 s gate did not produce a boot-complete flag; 1 required check passed, 17 blocked, exit 2. No installation from this strict run. | `smoke-00811378-api34-1/runtime-report.json` |
+| Android 34 independent manual attempt | Real PMS and AMS responses and short same-PID continuity passed while boot flag was absent. The sole real install failed after 44.947 s with broken pipe; full boot remained explicitly blocked. A later successful package listing confirmed the target absent. | `smoke-00811378-api34-manual-preboot-1/manual-preboot-attempt-report.json`, `api34-final-target-package-query.json` |
+
+The Android 30 streamed-install window contains a confirmed system-process fatal error: system server PID 4153 threw `IllegalStateException: Lost network stack`, then Zygote recorded its death as the installer lost its service connection. During the non-streamed install, Zygote recorded PID 5723 killed by signal 9; the retained evidence does not identify that kill's sender. The network-stack root cause and any separate CI compatibility issue remain unisolated. Retained Android 30 logs show network-stack processes killed for background ANRs; no explicit guest OOM/LMKD kill was found there. Absence in logs does not rule out pressure. Host cgroup OOM counters were zero. Android 34 later recorded a `system_server_lowmem` marker; that marker alone does not establish why a process was killed.
+
+The original AVD was preserved and stopped gracefully. A separate official **Android 34 Google APIs x86_64 r14** AVD started at 17:24:18 UTC with 3072 MiB RAM, two cores, software CPU acceleration and a 480×800 display at 240 dpi. The emulator enforced a sparse 6 GiB virtual userdata partition despite a 2 GiB request; physical workspace free space remained above 6 GiB. No guest security, network or watchdog setting was changed. Download and real native-bridge library checksums were verified. The live guest advertised `x86_64,arm64-v8a`, `native.bridge=libndk_translation.so` and `isa.arm64=x86_64`; none of these facts proves Pine native loading.
+
+Initial Android 34 package preparation completed, but framework watchdogs killed PIDs 532, 1231 and 1832 while waiting on default runtime permissions. PID 2338 completed that phase, then its watchdog killed it at 17:56:32 while waiting on `RoleService.maybeGrantDefaultRolesSync`. The manual install's broken pipe at 17:56:35 overlaps that confirmed platform death. Android performed its own framework restarts; QEMU was not restarted. No local Pine process ran, so these logs do not reproduce or explain the separate CI SIGILL.
+
+Official ATD candidates were excluded after their real build properties showed no advertised ARM64 translation. The image evaluation is `/workspace/android-build/image-evaluation/evaluation-summary.json`. Launch/ABI/watchdog/install evidence is in `api34-start.json`, `api34-boot-observations.jsonl`, `api34-watchdog-excerpts.txt`, `api34-manual-install-platform-window.txt`, and the preserved unfiltered `api34-through-local-attempt-logcat.txt`. The complete local checkpoint index is `local-00811378-runtime-checkpoint.json`.
+
+Historical checkpoints and their unmodified failure evidence follow. Build/JVM/native-core/fake-ADB checks are not APK runtime passes; translated execution also does not establish physical ARM64 or NCE/game compatibility.
 
 ## Host and official tools
 
@@ -15,6 +55,8 @@ Checkpoint: 2026-10-16 UTC. **No Pine APK has been installed or launched at this
 | Emulator 37.2.12.0 | `emulator-linux_x64-16428233.zip` | `cd7362ea55dfb86a418958138dc396e74165dd01` |
 | Platform tools 37.0.1 | `platform-tools_r37.0.1-linux.zip` | `477254aa5f903c15cf51001717bdf347fb6b53e0` |
 | Google APIs Android 30 x86_64 r16 | `x86_64-30_r16.zip` | `6ae21030eaadc041078444d3798e4b399f3e787d` |
+| Google APIs Android 34 x86_64 r14 | `x86_64-34_r14.zip` | `e0f6c9a0691aa27bd597d0deb1bcfdc943ac8ca7` |
+| Google APIs Android 36 x86_64 r7 | `x86_64-36_r07.zip` | `c6bf44bdcd885bb902b4ba752d111a073ad7a817` |
 
 Manifest URLs:
 
@@ -23,7 +65,7 @@ Manifest URLs:
 
 The emulator supports software rendering and software CPU execution, so the absent KVM/GPU alone was **not** treated as proof that Android cannot run. Official documentation: [acceleration requirements and software rendering](https://developer.android.com/studio/run/emulator-acceleration), [command-line startup](https://developer.android.com/studio/run/emulator-commandline), [emulator release notes including ARM translation](https://developer.android.com/studio/releases/emulator).
 
-## Actual launch and current checkpoint
+## Original Android 30 launch (historical checkpoint)
 
 AVD configuration: `/workspace/android-runtime/user/avd/PineDiag.avd/config.ini`.
 System image: `/workspace/android-runtime/system-images/android-30/google_apis/x86_64/`.
@@ -40,7 +82,7 @@ ANDROID_SDK_ROOT=/workspace/android-runtime \
   -gpu swiftshader -accel off -cores 2 -verbose
 ```
 
-At handover the QEMU emulator process is **PID 2723**, running in the background; do not start a second copy against the same AVD. The original 120-second wrapper was removed while retaining QEMU to permit continued slow software boot. Check the current PID rather than assuming it remains valid after environment restart.
+At the original handover the QEMU emulator process was **PID 2723**. It was later stopped gracefully and the original AVD was preserved. The original 120-second wrapper had been removed while retaining QEMU to permit continued slow software boot. Check the latest checkpoint and process evidence rather than assuming a historical PID remains valid.
 
 The log confirms software rendering initialization and image fingerprint:
 
@@ -60,7 +102,7 @@ List of devices attached
 emulator-5554          offline transport_id:1
 ```
 
-## Next actual checks (pending)
+## Checks pending at the original checkpoint (historical)
 
 ```sh
 /workspace/android-runtime/platform-tools/adb devices -l
@@ -203,5 +245,7 @@ states the limitation in the CI step summary without presenting it as an APK bug
 Runner-only validation performed here: Python syntax, CLI help, Bash wrapper
 syntax, and an absent-APK failure-path check. That check produced exit 2,
 `environment_blocked`, 18 blocked checks and **zero ADB commands**. It is not an
-APK/UI test. An actual APK smoke-test result remains pending completed Android
-boot and the final APK.
+APK/UI test. The subsequent actual Android 30 installation attempts are recorded
+in the latest checkpoint above; Android 34 testing is a separate attempt.
+
+Cleanup checkpoint, **2026-10-16 18:08 UTC**: only the verified owned Android 34 QEMU PID 45401 and full-logcat PID 46096 were stopped with SIGTERM; both reached exited/zombie state and emulator output records normal configuration/render-thread shutdown. The AVD and userdata remain intact, with no wipe or additional installation. Final properties and log tail were preserved before stopping. Those late properties reported `sys.boot_completed=1` and system-server start count 6; this later flag does not replace the earlier blocked strict report or establish any Pine UI/native pass. The last successful target-package absence query remains the one recorded at 17:59:04. Shutdown evidence is `/workspace/android-runtime/api34-final-shutdown.json`, `api34-final-shutdown-getprop.txt`, `api34-pre-shutdown-logcat-tail.txt`, and the final unfiltered `api34-final-stopped-logcat.txt` (8,517,713 bytes, SHA256 `aa552828aaa848ccb5dd6f19dc77ad6d18b76336f8d2ffe2a563a3fd96fe52fc`).

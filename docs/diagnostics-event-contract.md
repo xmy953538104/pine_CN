@@ -170,9 +170,16 @@ in place. Normal emulation completion stops/drains the diagnostic writer before
 returning; the explicit exit UI drains on a background thread before process kill.
 Forced kills or power loss can still lose queued events.
 
+Native faults before the diagnostic library/session is initialized can only be
+observed through external Android crash/logcat evidence. They do not have a
+diagnostic session or a completed initialization stage invented after the fault.
+
 The main and release emulation Android processes use fixed `main/` and
 `emulation/` subdirectories, each with its own session and bounded rotation. The
 settings screen identifies current-process stats and lists the other scope's last
 observed session separately. Changes apply to the next emulation process start.
 The export includes only fixed filenames from these scopes and legacy diagnostics,
 with per-value JSON redaction; incomplete/malformed records are counted/omitted.
+Recognized private locations are removed through their decoded string's line end,
+including filenames with spaces or quotes. Earlier context, other JSON fields
+and relative guest paths survive; later same-line detail is conservatively omitted.

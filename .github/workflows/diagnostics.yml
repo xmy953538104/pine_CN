@@ -1,0 +1,61 @@
+name: Diagnostics Debug
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+permissions:
+  contents: read
+concurrency:
+  group: diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native diagnostic tests
+        run: bash tools/tests/run-native-diagnostics.sh
+  adb:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fake ADB integration tests
+        shell: ${{ matrix.shell }}
+        run: ./tools/tests/pine-diag.Tests.ps1
+  debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Android build tools
+        run: sdkmanager 'ndk;27.3.13750724' 'cmake;3.22.1' 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: JVM tests and Debug APK
+        env:
+          IS_BUILD_SIGNED: 'false'
+          SIGNING_STORE_PATH: unused.jks
+        run: ./gradlew --no-daemon testFullDebugUnitTest assembleFullDebug --stacktrace
+      - name: Upload Debug APK
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
+        uses: actions/upload-artifact@v4
+        with:
+          name: pine-diagnostics-debug-${{ github.sha }}
+          path: app/build/outputs/apk/full/debug/*.apk
+          if-no-files-found: error
+      - name: Test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-jvm-reports
+          path: app/build/reports/tests/

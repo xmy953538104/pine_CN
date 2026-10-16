@@ -31,7 +31,8 @@ suites = [ET.parse(path).getroot() for path in reports]
 jvm = {key: sum(int(suite.attrib.get(key, 0)) for suite in suites) for key in ("tests", "failures", "errors", "skipped")}
 assert jvm["tests"] >= 20 and not any(jvm[key] for key in ("failures", "errors", "skipped")), jvm
 jvm["classes"] = sorted(suite.attrib["name"] for suite in suites)
-assert all(any(name.endswith(required) for name in jvm["classes"]) for required in ("DiagnosticExportTest", "ContentSelectionTest", "DiagnosticsProcessTest")), jvm
+assert all(any(name.endswith(required) for name in jvm["classes"]) for required in (
+    "DiagnosticExportTest", "ContentSelectionTest", "DiagnosticsProcessTest", "EmulationGenerationTest")), jvm
 release_manifests = [*pathlib.Path("app/build/intermediates/merged_manifest/fullRelease").rglob("AndroidManifest.xml"),
                      *pathlib.Path("app/build/intermediates/merged_manifests/fullRelease").rglob("AndroidManifest.xml")]
 android_process = "{http://schemas.android.com/apk/res/android}process"

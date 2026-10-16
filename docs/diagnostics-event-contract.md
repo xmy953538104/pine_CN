@@ -162,6 +162,20 @@ known. `fields.title_id` can identify a candidate, update or DLC. ADB `-TitleId`
 uses known base context first and falls back to the content field before that
 context exists. Import/early-loader events can have no running game context.
 
+The current-game identity is independent of the diagnostic sink session. Actual
+base selection updates it even while diagnostics is off; Stop/Start and changes
+to level, categories or retention preserve it. JNI clears it at a true game launch
+and only after the final native session has drained at game end. A later settings
+session or unknown-title game cannot inherit the previous game's identity.
+
+Android completion owns a process-wide game generation. Session apply and drain
+serialize on background threads under that ownership; navigation/process exit
+checks the generation again on the main thread. A replacement game invalidates
+old completions immediately. Once a normal ending is accepted, Activity
+destruction or coroutine cancellation cannot silently discard it. Late same-game
+apply and duplicate endings are rejected. This preserves orderly shutdown without
+letting an old game's suspended completion stop or kill its replacement.
+
 `GUEST_SIGNAL` is emitted after the existing guest signal longjmp returns to the
 ordinary KThread entrypoint. The handler only captures a `sig_atomic_t` signal
 number. SIGINT does not produce a crash event. No JSON/locking/allocation/JNI is

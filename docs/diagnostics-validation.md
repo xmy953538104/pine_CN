@@ -10,11 +10,11 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 
 | Check | Actual result at implementation review | Boundary |
 | --- | --- | --- |
-| Native core, concurrency, disk failure, bounds, UTF-8, rotation, retention, final summary | Passed host production-sink tests | Not game FPS validation |
+| Native core, concurrency, disk failure, bounds, UTF-8, rotation, retention, final summary and active-game identity across off/live reconfiguration | Passed host production-sink tests; new identity regression fails unchanged old implementation and passes all 7 corrected lifecycle scenarios | Not game FPS validation |
 | Two independent process sinks with concurrent rotation | Passed real fork/exec test | Android process lifecycle still needs runtime checks |
 | Native ASan/UBSan and core ThreadSanitizer | Passed local review runs | Host tools, not an Android sanitizer APK |
 | NSP selection/catch policy, production Backing/IStorage/PatchManager and BKTR/CTR/Region/OS compositions | Passed controlled host tests | Crypto keys, full NSP parsing and commercial files are not exercised |
-| Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 24/24 passed actual Gradle task: 17 exporter, 4 selection and 3 process/settings tests, including long-line export and private-path tails | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
+| Android/JVM exporter, selection, process/settings and game-generation ownership | 34/34 passed actual full Gradle task: 17 exporter, 4 selection, 3 process/settings and 10 generation tests, including controlled A→B drain/apply/exit interleavings, cancellation, Activity destruction and duplicate/late requests | Local JitPack proxy was unavailable; pinned upstream dependencies/native classpath helpers outside checkout support this supplemental JVM run; exact-commit CI remains authoritative |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
 | Windows PS5.1/pwsh ADB | Full suite passed at `6fe018a7`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 32/63 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
@@ -54,6 +54,18 @@ session summaries. Its original report remains 8 passed / 10 blocked: it did not
 verify local JSONL bytes or export. Concrete directory-listing and rendered-label
 observer defects were subsequently fixed and tested. The matching latest APK
 runtime report determines whether those remaining flows have passed.
+
+The subsequent [`6fe018a7` Intel Mac attempt](https://github.com/xmy953538104/pine_CN/actions/runs/38975708728/job/117226034703)
+passed **15/18 actual checks**, including native JSONL file bytes, PineDiag,
+level/retention/categories, the real export preview and its three private snapshot
+files. SAF reached Downloads but its filename observation timed out; no saved ZIP
+or clean Stop-summary pass was obtained. The matching Ubuntu run has a real
+supplemental Pine startup ANR from DropBox, even though its original UI-based
+report says 5 passed / 13 blocked. Its main thread was sampled in native translation
+inside `System.loadLibrary`, before diagnostic setup. Original reports are not
+rewritten. Both APKs predate the independently reviewed active-title/generation
+fixes and are superseded review builds, not final candidates. New exact-commit
+build and runtime evidence is required for the corrected App.
 
 The [same-AVD main comparison](https://github.com/xmy953538104/pine_CN/actions/runs/38968004469/job/117206287625)
 installed and hash-verified tracked-clean main `f665512f`, but its Settings launch

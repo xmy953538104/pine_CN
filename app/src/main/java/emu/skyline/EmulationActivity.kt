@@ -107,6 +107,10 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
          * The Kotlin thread on which emulation code executes
          */
         private var emulationThread : Thread? = null
+        private val generations = emu.skyline.emulation.EmulationGeneration()
+        // Normal ending survives Activity destruction; generation ownership, not
+        // lifecycle cancellation, decides whether a pending exit is still valid.
+        private val endingScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     }
 
     private val binding by lazy { EmuActivityBinding.inflate(layoutInflater) }
@@ -130,11 +134,8 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      */
     private var vibrators = HashMap<Int, Vibrator>()
 
-    /**
-     * If the emulation thread should call [returnToMain] or not
-     */
-    @Volatile
-    private var shouldFinish : Boolean = true
+    @Volatile private var generationToken = 0L
+    @Volatile private var runningGeneration = 0L
 
     /**
      * If the activity should return to [MainActivity] or just call [finishAffinity]
@@ -258,21 +259,20 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      * Return from emulation to either [MainActivity] or the activity on the back stack
      */
     @SuppressWarnings("WeakerAccess")
-    fun returnFromEmulation() {
-        if (shouldFinish) {
-            runOnUiThread {
-                if (shouldFinish) {
-                    shouldFinish = false
-                    lifecycleScope.launch {
-                        // Drain on an ordinary background thread before Android's
-                        // immediate process kill, which does not run C++ destructors.
-                        withContext(Dispatchers.IO) {
-                            emu.skyline.diagnostics.Diagnostics.finishSession()
-                        }
-                        if (returnToMain)
+    fun returnFromEmulation() = returnFromEmulation(generationToken)
+
+    private fun returnFromEmulation(token: Long) {
+        runOnUiThread {
+            if (generations.isCurrent(token)) {
+                val navigateToMain = returnToMain
+                endingScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    generations.finish(token, {
+                        emu.skyline.diagnostics.Diagnostics.finishSession()
+                    }, {
+                        if (navigateToMain)
                             startActivity(Intent(applicationContext, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
                         Process.killProcess(Process.myPid())
-                    }
+                    })
                 }
             }
         }
@@ -282,8 +282,9 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      * @note Any caller has to handle the application potentially being restarted with the supplied intent
      */
     private fun executeApplication(intent : Intent) {
+        val token = generations.begin()
+        generationToken = token
         if (emulationThread?.isAlive == true) {
-            shouldFinish = false
             if (stopEmulation(false))
                 emulationThread!!.join(250)
 
@@ -294,11 +295,10 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             }
         }
 
-        emu.skyline.diagnostics.Diagnostics.apply(this)
-        shouldFinish = true
         returnToMain = intent.getBooleanExtra(ReturnToMainTag, false)
 
-        emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED") { "title_id=${item.titleId} format=${item.format}" }
+        val diagnosticTitle = item.titleId
+        val diagnosticFormat = item.format
         val rom = item.uri
         val romType = item.format.ordinal
 
@@ -315,12 +315,22 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             updateFd = contentResolver.openFileDescriptor(updateUri, "r")!!.detachFd()
         }
 
-        emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED") { "title_id=${item.titleId} update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
         GpuDriverHelper.ensureFileRedirectDir(this)
         emulationThread = Thread {
-            emu.skyline.diagnostics.Diagnostics.apply(this)
+            runningGeneration = token
+            if (!generations.session(token) {
+                emu.skyline.diagnostics.Diagnostics.apply(this)
+                emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED") { "title_id=$diagnosticTitle format=$diagnosticFormat" }
+                emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED") { "title_id=$diagnosticTitle update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
+            }) {
+                // Superseded before native execution took ownership of these FDs.
+                runCatching { romFd.close() }
+                dlcFds?.forEach { fd -> runCatching { ParcelFileDescriptor.adoptFd(fd).close() } }
+                if (updateFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(updateFd).close() }
+                return@Thread
+            }
             executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets)
-            returnFromEmulation()
+            returnFromEmulation(token)
         }
 
         emulationThread!!.start()
@@ -532,17 +542,18 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                     true
                 }
                 R.id.menu_exit -> {
+                    val token = generationToken
                     pauseEmulator()
                     MaterialAlertDialogBuilder(this)
                         .setTitle(R.string.emulation_close_game)
                         .setMessage(R.string.emulation_close_game_message)
                         .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
-                            returnFromEmulation()
+                            returnFromEmulation(token)
                         }
                         .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int ->
-                            resumeEmulator()
+                            if (generations.isCurrent(token)) resumeEmulator()
                         }
-                        .setOnCancelListener { resumeEmulator() }
+                        .setOnCancelListener { if (generations.isCurrent(token)) resumeEmulator() }
                         .show()
                     true
                 }
@@ -927,7 +938,6 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
     override fun onDestroy() {
         super.onDestroy()
-        shouldFinish = false
 
         // Stop forcing 60Hz on exit to allow the skyline UI to run at high refresh rates
         getSystemService<DisplayManager>()?.unregisterDisplayListener(this)
@@ -935,7 +945,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         if (emulationSettings.forceMaxGpuClocks)
             GpuDriverHelper.forceMaxGpuClocks(false)
 
-        stopEmulation(false)
+        if (generations.isCurrent(generationToken)) stopEmulation(false)
         vibrators.forEach { (_, vibrator) -> vibrator.cancel() }
         vibrators.clear()
     }
@@ -1150,13 +1160,14 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
     fun reportCrash() {
         if (BuildConfig.BUILD_TYPE != "release")
             return
+        val token = runningGeneration
         runOnUiThread {
+            if (!generations.isCurrent(token)) return@runOnUiThread
             MaterialAlertDialogBuilder(this)
                 .setTitle(getString(R.string.game_crash))
                 .setMessage(getString(R.string.game_crash_message))
                 .setPositiveButton(getString(android.R.string.ok)) { _, _ ->
-                    shouldFinish = true
-                    returnFromEmulation()
+                    returnFromEmulation(token)
                 }.show()
         }
     }

@@ -179,7 +179,8 @@ jobs:
                   print(name + ':\n' + path.read_text(errors='replace')[:48000])
           # Best-effort failure probes may be refused on an official image;
           # preserve those errors without treating them as functional passes.
-          names = ['last-anr.txt', 'last-anr.stderr.txt', 'last-anr-traces.txt', 'last-anr-traces.stderr.txt', 'pine-process-ids.txt', 'pine-process-ids.stderr.txt']
+          names = ['last-anr.txt', 'last-anr.stderr.txt', 'last-anr-traces.txt', 'last-anr-traces.stderr.txt',
+                   'dropbox-data-app-anr.txt', 'dropbox-data-app-anr.stderr.txt', 'pine-process-ids.txt', 'pine-process-ids.stderr.txt']
           names.extend(path.name for pattern in ('pine-maps-[0-9]*.txt', 'pine-native-backtrace-[0-9]*.txt')
                        for path in sorted(root.glob(pattern)))
           for name in names:

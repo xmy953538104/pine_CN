@@ -127,6 +127,19 @@ class Screen:
             return node
         return None
 
+    def find_button(self, text, *, exact=False):
+        # Android's Button transformation may render these known app actions
+        # in all caps. Keep generic text, platform dialogs and data checks exact.
+        expected = text.casefold()
+        for node in self.root.iter("node"):
+            if (not self.bounds(node) or node.get("enabled") != "true" or
+                    node.get("package") != PACKAGE or node.get("class") != "android.widget.Button"):
+                continue
+            actual = node.get("text", "").casefold()
+            if actual == expected if exact else actual.startswith(expected):
+                return node
+        return None
+
 
 class Smoke:
     def __init__(self, args):
@@ -166,7 +179,7 @@ class Smoke:
             "platform_anr_wait_limit": 2,
             "platform_anr_waits": [],
             "system_last_anr_traces_enabled": bool(getattr(args, "collect_system_last_anr_traces", False)),
-            "system_last_anr_traces_scope": "Latest system-wide ANR trace file; not filtered to Pine and may include other processes.",
+            "system_last_anr_traces_scope": "Latest system-wide ANR trace file and all retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated and include other processes.",
         }
         runner_source = Path(__file__).read_bytes()
         self.summary["runner_sha256"] = digest(runner_source)
@@ -399,7 +412,7 @@ class Smoke:
         self.adb("shell", "input", "tap", (left + right) // 2, (top + bottom) // 2,
                  timeout=self.budget(deadline, "UI tap"))
 
-    def seek(self, text, label, direction="down", exact=False):
+    def seek(self, text, label, direction="down", exact=False, button=False):
         deadline = time.monotonic() + self.args.ui_timeout
         previous = None
         screen = None
@@ -409,7 +422,7 @@ class Smoke:
             if self.wait_known_platform_dialog(screen, deadline):
                 self.pause(deadline)
                 continue
-            node = screen.find(text, exact=exact)
+            node = screen.find_button(text, exact=exact) if button else screen.find(text, exact=exact)
             self.budget(deadline, f"Seeking '{text}'")
             if node is not None:
                 self.screenshot(label, deadline=deadline)
@@ -460,7 +473,7 @@ class Smoke:
 
     def native_records(self, label, deadline=None):
         observation = f"Native records '{label}'"
-        listing = decode(self.adb("exec-out", "run-as", PACKAGE, "ls", "files/diagnostics/main",
+        listing = decode(self.adb("exec-out", "run-as", PACKAGE, "ls", "-1", "files/diagnostics/main",
                                   timeout=self.budget(deadline, observation)))
         names = sorted(name for name in listing.splitlines() if re.fullmatch(r"diagnostics-[0-7]\.jsonl", name))
         rows = []
@@ -708,7 +721,7 @@ class Smoke:
 
     def retention(self):
         previous = self.session
-        _, node = self.seek("Retention /", "retention")
+        _, node = self.seek("Retention /", "retention", button=True)
         self.tap(node)
         screen = self.wait_ui("retention-dialog", lambda s: s.find("2 files / 4 MiB", exact=True) is not None)
         self.tap(screen.find("2 files / 4 MiB", exact=True))
@@ -721,7 +734,7 @@ class Smoke:
 
     def categories(self):
         previous = self.session
-        _, node = self.seek("Diagnostic categories", "categories")
+        _, node = self.seek("Diagnostic categories", "categories", button=True)
         self.tap(node)
         screen = self.wait_ui("category-dialog", lambda s: s.find("guest", exact=True) is not None)
         guest = screen.find("guest", exact=True)
@@ -739,7 +752,7 @@ class Smoke:
         return {"categories": selected, "new_session_id": self.session}
 
     def export_preview(self):
-        _, node = self.seek("Preview and export", "export-button")
+        _, node = self.seek("Preview and export", "export-button", button=True)
         self.tap(node)
         screen = self.wait_ui("export-preview", lambda s: s.find("Export snapshot /") is not None)
         entries = dict((name, int(size)) for name, size in re.findall(
@@ -751,7 +764,7 @@ class Smoke:
         return {"entries": entries, "screen": screen.xml.name}
 
     def export_snapshot(self):
-        listing = decode(self.adb("exec-out", "run-as", PACKAGE, "ls", "cache/diagnostics-exports"))
+        listing = decode(self.adb("exec-out", "run-as", PACKAGE, "ls", "-1", "cache/diagnostics-exports"))
         candidates = [name for name in listing.splitlines() if re.fullmatch(r"snapshot-" + UUID_RE.pattern, name)]
         require(len(candidates) == 1, "Fresh run did not produce exactly one private export snapshot")
         self.snapshot_id = candidates[0]
@@ -773,7 +786,7 @@ class Smoke:
 
     def saf_save(self):
         screen = self.screen("export-confirm")
-        button = screen.find("Export", exact=True)
+        button = screen.find_button("Export", exact=True)
         if button is None:
             raise Blocked("Prepared preview Export action is unavailable; use retained preview XML/screenshot for manual handoff")
         self.tap(button)
@@ -915,6 +928,7 @@ class Smoke:
             # This reads the system-wide latest file, without package filtering.
             # Only fresh, job-owned AVDs should opt in to this broader evidence.
             capture("last-anr-traces", 15, "shell", "dumpsys", "activity", "lastanr-traces")
+            capture("dropbox-data-app-anr", 15, "shell", "dumpsys", "dropbox", "--print", "data_app_anr")
         capture("last-anr", 15, "shell", "dumpsys", "activity", "lastanr")
         raw = capture("pine-process-ids", 5, "shell", "pidof", PACKAGE)
         pids = decode(raw).split()
@@ -1001,7 +1015,7 @@ def main():
     parser.add_argument("--wait-known-platform-anr", action="store_true",
                         help="Fresh owned test devices only: at most two normal Wait taps on exact observed System UI/process-system ANR dialogs; never Close app or a Pine/unknown title")
     parser.add_argument("--collect-system-last-anr-traces", action="store_true",
-                        help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace file; not filtered to Pine and may include other processes")
+                        help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace and retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_commit):
         parser.error("--expected-commit must be a full lowercase 40-character Git commit")

@@ -246,6 +246,40 @@ different package/version and shared system warming are confounds. Eleven
 controlled subprocess tests passed; actual baseline execution is still pending
 at this checkpoint. No physical ARM64 or game acceptance follows from it.
 
+**First actual Diagnostics UI and native-event evidence, recovered 21:40 UTC:**
+the [`69826dda` Intel Mac run](https://github.com/xmy953538104/pine_CN/actions/runs/38964404733/job/117189621941)
+installed and hash-verified APK
+`b58562cdc8ca361a9337bfb18d1b35b2c82a37334ac97616479a616a0761c7af`.
+Its original report is 8 passed / 10 blocked: Settings → Diagnostics, default off,
+and enabling with `Sink active: true` plus a UUID genuinely passed. Later UI also
+shows disabled status. The actual filtered runtime log contains two native
+`SESSION_METADATA` records with the exact commit and two corresponding
+`SESSION_SUMMARY` records, each with accepted=written=1 and disk_errors=0.
+Supplemental JSON/schema/session/sequence/clock checks on those four observed
+Logcat rows passed; this does not rewrite the original report or prove exported
+file bytes.
+
+That run exposed two concrete observer defects. Its successful raw `ls` commands
+returned `diagnostics-0.jsonl  diagnostics-1.jsonl  session-id.txt` on one line;
+the line-based filename filter therefore read **no** JSONL file. Missing observed
+metadata was not evidence that native metadata was absent. The UI also renders
+known Button labels as `RETENTION`, `DIAGNOSTIC CATEGORIES` and
+`PREVIEW AND EXPORT`, while the observer used mixed case. The next observer uses
+explicit `ls -1` for both native files and export snapshots, and case-insensitive
+matching only for those own-package enabled Buttons and Export confirmation.
+Generic text, ANR identities, JSON/schema, boolean and ZIP checks remain strict.
+Twenty-two controlled subprocess tests passed, including real method paths for
+multi-column listings, all-caps actions and negative button identities.
+
+The default-off broader failure-evidence flag additionally attempts a bounded
+`dumpsys dropbox --print data_app_anr`. This prints retained entries of that tag,
+not a Pine package filter; entries may be old, missing or truncated. It requests
+no new stack or signal; the service may initialize/tidy its log directory on its
+first dump. Ordinary standalone runs do not enable it. The original `849a9bc0`
+Mac attempt remains a real Pine ANR failure (5 passed / 12 blocked / 1 failed):
+its `lastanr` said no ANR and `debuggerd` returned text `root is required`, so
+neither is a successful Pine stack capture. No root was requested or attempted.
+
 - Local APK source commit: `00811378bad3ebeb7a7188508fc1cdc643fb4304`.
 - APK: `/workspace/android-build/evidence/00811378/pine-diagnostics-00811378-supplemental-arm64-debug.apk` (51,470,773 bytes).
 - APK SHA256: `aea2cb73b5dfbca9f1341e8b964c34bd9e1735f01657377356f4e4445c4dd808`.

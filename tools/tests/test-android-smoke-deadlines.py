@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+import xml.etree.ElementTree as ET
 
 
 RUNNER = Path(__file__).resolve().parents[1] / "android-diagnostics-smoke.py"
@@ -22,6 +23,14 @@ PLATFORM_ANR_XML = '''<hierarchy><node package="android" bounds="[48,313][431,51
  class="android.widget.Button" enabled="true" clickable="true" bounds="[64,438][415,486]"/>
 </node></hierarchy>'''
 PINE_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Pine Diagnostics isn't responding")
+
+
+def ui_xml(*nodes):
+    root = ET.Element("hierarchy")
+    for node in nodes:
+        ET.SubElement(root, "node", {"package": MODULE["PACKAGE"], "class": "android.widget.TextView",
+                                     "enabled": "true", "bounds": "[20,30][220,130]", **node})
+    return ET.tostring(root, encoding="unicode")
 
 
 class ObservationDeadlines(unittest.TestCase):
@@ -65,6 +74,8 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'lastanr', config.get('lastanr_result', 'ANR in io.github.pine.emu.diagnostics')
             elif args == ['shell', 'dumpsys', 'activity', 'lastanr-traces']:
                 operation, output = 'lastanr-traces', config.get('lastanr_traces_result', 'Global fixture ANR traces')
+            elif args == ['shell', 'dumpsys', 'dropbox', '--print', 'data_app_anr']:
+                operation, output = 'dropbox', config.get('dropbox_result', 'Retained data_app_anr fixture entry')
             elif args == ['shell', 'dumpsys', 'activity', 'activities']:
                 operation, output = 'activities', 'Final activity evidence'
             elif args[:2] == ['logcat', '-b']:
@@ -100,13 +111,30 @@ class ObservationDeadlines(unittest.TestCase):
             elif args[:5] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', '/system/bin/debuggerd', '-b']:
                 operation, output = 'backtrace', config.get('backtrace_result', 'Fixture native backtrace')
             elif args[:2] == ['exec-out', 'run-as'] and args[3] == 'ls':
-                operation, output = 'list', 'diagnostics-0.jsonl\\ndiagnostics-1.jsonl'
+                operation = 'list'
+                if args[-1] == 'files/diagnostics/main':
+                    names = ['diagnostics-0.jsonl', 'diagnostics-1.jsonl', 'session-id.txt']
+                elif args[-1] == 'cache/diagnostics-exports':
+                    names = ['snapshot-' + config['session'], 'not-a-snapshot.txt']
+                else:
+                    raise SystemExit('Unexpected list directory: ' + repr(args))
+                # Reproduce the actual adb default: success with multiple names
+                # on one line. Only explicit ls -1 produces machine-safe lines.
+                output = ('\\n' if args[4:-1] == ['-1'] else '  ').join(names)
             elif args[:2] == ['exec-out', 'run-as'] and args[4].endswith('session-id.txt'):
                 operation, output = 'marker', config['session']
+            elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat'] and args[4] == 'shared_prefs/diagnostics.xml':
+                operation, output = 'prefs', '<map><string name="files">2</string><string name="categories">content,storage,exception</string></map>'
+            elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat'] and args[4].startswith('cache/diagnostics-exports/'):
+                operation, binary = 'snapshot', True
+                name = args[4].split('/', 3)[3]
+                output = config['snapshot_files'][name].encode()
             elif args[:2] == ['exec-out', 'run-as'] and args[3] == 'cat':
                 operation = 'record0' if args[4].endswith('diagnostics-0.jsonl') else 'record1'
-                output = json.dumps({'schema': 1, 'session_id': config['session'], 'sequence': 1,
-                                     'fields': {}, 'event': 'SESSION_START' if operation == 'record0' else 'SESSION_METADATA'})
+                events = ['SESSION_START'] if operation == 'record0' else config.get('record1_events', ['SESSION_METADATA'])
+                output = '\\n'.join(json.dumps({'schema': 1, 'session_id': config['session'], 'sequence': index + 1,
+                                                'fields': {'commit': 'a' * 40, 'disk_errors': '0'}, 'event': event})
+                                   for index, event in enumerate(events))
             else:
                 raise SystemExit('Unexpected offline fixture command: ' + repr(args))
             if isinstance(output, dict):
@@ -144,6 +172,92 @@ class ObservationDeadlines(unittest.TestCase):
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
+
+    def test_explicit_single_column_listing_reads_actual_native_metadata_and_summary(self):
+        smoke = self.smoke("native-columns", {"record1_events": ["SESSION_METADATA", "SESSION_SUMMARY"]})
+        raw = smoke.adb("exec-out", "run-as", MODULE["PACKAGE"], "ls", "files/diagnostics/main")
+        self.assertEqual(raw, b"diagnostics-0.jsonl  diagnostics-1.jsonl  session-id.txt\n")
+        smoke.session = SESSION
+        smoke.step("native_jsonl", smoke.verify_native)
+        self.assertEqual(smoke.results["native_jsonl"]["status"], "pass")
+        rows, names, summaries = smoke.wait_native("disabled", "SESSION_SUMMARY", SESSION)
+        self.assertEqual(names, ["diagnostics-0.jsonl", "diagnostics-1.jsonl"])
+        self.assertEqual([row["event"] for row in rows], ["SESSION_START", "SESSION_METADATA", "SESSION_SUMMARY"])
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0]["fields"]["disk_errors"], "0")
+        listings = [row for row in self.commands(smoke) if "ls" in row["argv"]]
+        self.assertTrue(all(row["argv"][-3:] == ["ls", "-1", "files/diagnostics/main"] for row in listings[1:]))
+        self.assertTrue((smoke.output / "enabled-main-diagnostics-1.jsonl").is_file())
+        self.assertTrue((smoke.output / "disabled-main-diagnostics-1.jsonl").is_file())
+
+    def test_snapshot_listing_uses_single_column_output_and_reads_exact_snapshot_bytes(self):
+        files = {
+            "session-metadata.txt": "exporter_commit=" + "a" * 40 + "\nconfigured_enabled=true\nsink_active=true\n",
+            "main/diagnostics-0.jsonl": json.dumps({"schema": 1, "session_id": SESSION, "sequence": 1,
+                                                   "event": "SESSION_METADATA", "fields": {"commit": "a" * 40}}) + "\n",
+        }
+        smoke = self.smoke("snapshot-columns", {"snapshot_files": files})
+        raw = smoke.adb("exec-out", "run-as", MODULE["PACKAGE"], "ls", "cache/diagnostics-exports")
+        self.assertEqual(raw.decode().strip(), "snapshot-" + SESSION + "  not-a-snapshot.txt")
+        smoke.preview_entries = {name: len(data.encode()) for name, data in files.items()}
+        smoke.step("export_snapshot", smoke.export_snapshot)
+        self.assertEqual(smoke.results["export_snapshot"]["status"], "pass")
+        self.assertEqual(smoke.snapshot_bytes, {name: data.encode() for name, data in files.items()})
+        self.assertEqual(smoke.snapshot_id, "snapshot-" + SESSION)
+        listings = [row for row in self.commands(smoke) if "ls" in row["argv"]]
+        self.assertEqual(listings[-1]["argv"][-3:], ["ls", "-1", "cache/diagnostics-exports"])
+
+    def test_observed_all_caps_buttons_work_in_retention_category_and_preview_flows(self):
+        labels = {
+            "retention_setting": "RETENTION / 保留: 2, 4 OR 8 × 2 MIB PER PROCESS",
+            "category_setting": "DIAGNOSTIC CATEGORIES / 诊断项目",
+            "export_preview": "PREVIEW AND EXPORT / 预览并导出",
+        }
+        for check, label in labels.items():
+            with self.subTest(check=check):
+                button = ui_xml({"class": "android.widget.Button", "text": label, "resource-id": "", "clickable": "true"})
+                if check == "retention_setting":
+                    screens = [button, ui_xml({"text": "2 files / 4 MiB"}), ui_xml({"text": "Limit per process: 2 × 2 MiB"})]
+                    action = "retention"
+                elif check == "category_setting":
+                    screens = [button, ui_xml({"text": "guest", "checked": "true"}),
+                               ui_xml({"text": "guest", "checked": "false"},
+                                      {"class": "android.widget.Button", "text": "OK", "resource-id": "android:id/button1"})]
+                    action = "categories"
+                else:
+                    screens = [button, ui_xml({"text": "Export snapshot / 导出快照"},
+                                             {"text": "session-metadata.txt (10 bytes)"},
+                                             {"text": "main/diagnostics-0.jsonl (10 bytes)"})]
+                    action = "export_preview"
+                smoke = self.smoke("button-" + check, {"xml_sequence": screens})
+                smoke.session = "00000000-0000-0000-0000-000000000000"
+                smoke.step(check, getattr(smoke, action))
+                self.assertEqual(smoke.results[check]["status"], "pass")
+                self.assertEqual(smoke.summary["overall"], "blocked")
+                self.assertTrue(any("tap" in row["argv"] for row in self.commands(smoke)))
+
+    def test_known_button_matching_rejects_other_packages_nonbuttons_and_disabled_nodes(self):
+        for name, override in (("wrong-package", {"package": "fixture.other"}),
+                               ("textview", {"class": "android.widget.TextView"}),
+                               ("disabled", {"enabled": "false"})):
+            with self.subTest(case=name):
+                xml = ui_xml({"class": "android.widget.Button", "text": "PREVIEW AND EXPORT / 预览并导出", **override})
+                smoke = self.smoke("button-" + name, {"xml_sequence": [xml]})
+                with self.assertRaises(Blocked):
+                    smoke.seek("Preview and export", name, button=True)
+                self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
+
+    def test_all_caps_export_confirmation_reaches_the_unchanged_saf_observation(self):
+        smoke = self.smoke("export-confirm-caps", {"xml_sequence": [
+            ui_xml({"class": "android.widget.Button", "text": "EXPORT", "resource-id": "android:id/button1"}),
+            ui_xml({"package": "com.google.android.documentsui", "text": "Unrecognized local root"}),
+        ]})
+        with self.assertRaisesRegex(Blocked, "SAF picker does not expose a recognized local Downloads root"):
+            smoke.saf_save()
+        taps = [row for row in self.commands(smoke) if "tap" in row["argv"]]
+        self.assertEqual(len(taps), 1)
+        self.assertEqual(smoke.results, {})
+        self.assertEqual(smoke.summary["overall"], "blocked")
 
     def test_late_ui_marker_and_native_observations_cannot_pass(self):
         scenarios = (
@@ -344,6 +458,7 @@ class ObservationDeadlines(unittest.TestCase):
         smoke.write_summary()
         smoke.finish()
         self.assertFalse(any("pidof" in row["argv"] or "lastanr" in row["argv"] or "lastanr-traces" in row["argv"] or
+                             "dropbox" in row["argv"] or
                              "run-as" in row["argv"] for row in self.commands(smoke)))
         self.assertEqual(smoke.summary["overall"], "pass")
 
@@ -353,6 +468,9 @@ class ObservationDeadlines(unittest.TestCase):
             ("denied", True, {"lastanr_traces_result": {"code": 1, "stderr": "ANR trace permission denied"}}),
             ("timeout", True, {"lastanr_traces_result": {"stdout": "Partial global trace", "stderr": "Trace still being read"},
                                "lastanr-traces": 2, "emit_before_delay": "lastanr-traces"}),
+            ("dropbox-denied", True, {"dropbox_result": {"code": 1, "stderr": "DropBox permission denied"}}),
+            ("dropbox-timeout", True, {"dropbox_result": {"stdout": "Partial data_app_anr entry", "stderr": "DropBox still being read"},
+                                       "dropbox": 2, "emit_before_delay": "dropbox"}),
         ):
             with self.subTest(case=name):
                 smoke = self.smoke("system-traces-" + name, {"xml_sequence": [PINE_ANR_XML], "app_pids": "", **config},
@@ -367,10 +485,17 @@ class ObservationDeadlines(unittest.TestCase):
                 self.assertEqual(report["status"], "failed")
                 self.assertEqual(report["system_last_anr_traces_enabled"], enabled)
                 self.assertIn("not filtered to Pine", report["system_last_anr_traces_scope"])
+                self.assertIn("all retained data_app_anr", report["system_last_anr_traces_scope"])
+                self.assertIn("old or truncated", report["system_last_anr_traces_scope"])
                 commands = self.commands(smoke)
                 traces = [row for row in commands if "lastanr-traces" in row["argv"]]
+                dropbox = [row for row in commands if "dropbox" in row["argv"]]
                 self.assertEqual(len(traces), int(enabled))
+                self.assertEqual(len(dropbox), int(enabled))
                 self.assertEqual((smoke.output / "last-anr-traces.txt").exists(), enabled)
+                self.assertEqual((smoke.output / "dropbox-data-app-anr.txt").exists(), enabled)
+                if enabled:
+                    self.assertEqual(dropbox[0]["argv"][-5:], ["shell", "dumpsys", "dropbox", "--print", "data_app_anr"])
                 if name == "denied":
                     self.assertEqual(traces[0]["returncode"], 1)
                     self.assertIn("permission denied", (smoke.output / "last-anr-traces.stderr.txt").read_text())
@@ -378,6 +503,13 @@ class ObservationDeadlines(unittest.TestCase):
                     self.assertTrue(traces[0]["timed_out"])
                     self.assertIn("Partial global trace", (smoke.output / "last-anr-traces.txt").read_text())
                     self.assertIn("still being read", (smoke.output / "last-anr-traces.stderr.txt").read_text())
+                if name == "dropbox-denied":
+                    self.assertEqual(dropbox[0]["returncode"], 1)
+                    self.assertIn("permission denied", (smoke.output / "dropbox-data-app-anr.stderr.txt").read_text())
+                if name == "dropbox-timeout":
+                    self.assertTrue(dropbox[0]["timed_out"])
+                    self.assertIn("Partial data_app_anr entry", (smoke.output / "dropbox-data-app-anr.txt").read_text())
+                    self.assertIn("still being read", (smoke.output / "dropbox-data-app-anr.stderr.txt").read_text())
                 self.assertTrue((smoke.output / "final-activities.txt").is_file())
                 self.assertTrue(any(row["argv"][-3:] == ["rm", "-f", smoke.remote_xml] for row in commands))
 

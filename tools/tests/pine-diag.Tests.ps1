@@ -245,13 +245,38 @@ try {
         $pending = $runspace.BeginInvoke()
         $limit = [DateTime]::UtcNow.AddSeconds(15)
         do {
-            $saved = @(Get-ChildItem $cancelOutput -Filter '*.jsonl' -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
-            # All three fixture sessions appear after the UTF8 base event, so
-            # cancellation necessarily exercises an open, populated writer.
-            if ((Test-Path $env:PINE_FAKE_ADB_PID) -and $saved.Count -eq 3) { break }
+            $saved = @(Get-ChildItem $cancelOutput -Filter '*.jsonl' -ErrorAction SilentlyContinue)
+            $savedRecords = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            foreach ($file in $saved) {
+                # Windows directory enumeration can report a stale Length while
+                # a writer is open. Read the actual bytes, sharing its write access.
+                $reader = $null
+                try {
+                    $stream = [IO.File]::Open($file.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+                    try {
+                        $reader = New-Object System.IO.StreamReader($stream, [Text.Encoding]::UTF8)
+                        $text = $reader.ReadToEnd()
+                    } finally {
+                        if ($reader) { $reader.Dispose() } else { $stream.Dispose() }
+                    }
+                    foreach ($line in ($text -split '\r?\n')) {
+                        if ($fixtureLines -ccontains $line) { [void]$savedRecords.Add($line) }
+                    }
+                } catch [IO.IOException] { }
+            }
+            # Wait for the full real-sink corpus, including all three summaries,
+            # to exercise cancellation with populated, still-open writers.
+            if ((Test-Path $env:PINE_FAKE_ADB_PID) -and $saved.Count -eq 3 -and $savedRecords.Count -eq $fixtureLines.Length) { break }
             Start-Sleep -Milliseconds 50
         } while ([DateTime]::UtcNow -lt $limit)
-        Assert ((Test-Path $env:PINE_FAKE_ADB_PID) -and $saved.Count -eq 3) 'Cancellation fixture never saved all native sessions'
+        if (-not ((Test-Path $env:PINE_FAKE_ADB_PID) -and $saved.Count -eq 3 -and $savedRecords.Count -eq $fixtureLines.Length)) {
+            $fileDetails = @($saved | ForEach-Object { $_.Name + ':' + $_.Length }) -join ', '
+            $errors = @($runspace.Streams.Error | ForEach-Object { $_.ToString() }) -join ' | '
+            throw ('Cancellation fixture never saved all native sessions; state={0}; files=[{1}]; completeRecords={2}/{3}; errors=[{4}]' -f $runspace.InvocationStateInfo.State, $fileDetails, $savedRecords.Count, $fixtureLines.Length, $errors)
+        }
+        $directorySizes = @($saved | ForEach-Object { $_.Length }) -join ','
+        Write-Host ('CANCELLATION FIXTURE READY state={0}; completeRecords={1}/{2}; directorySizes=[{3}]' -f $runspace.InvocationStateInfo.State, $savedRecords.Count, $fixtureLines.Length, $directorySizes)
+        Assert ($runspace.InvocationStateInfo.State -eq [System.Management.Automation.PSInvocationState]::Running) 'Cancellation must stop a still-running collector'
         $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
     } finally {
         $runspace.Stop()

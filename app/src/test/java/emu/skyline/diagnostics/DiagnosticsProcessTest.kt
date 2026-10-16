@@ -2,7 +2,6 @@
 package emu.skyline.diagnostics
 
 import android.app.Application
-import emu.skyline.R
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -10,8 +9,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowApplication
-import org.xmlpull.v1.XmlPullParser
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, manifest = Config.NONE, sdk = [29])
@@ -19,14 +19,19 @@ class DiagnosticsProcessTest {
     @Test fun settingsSearchCanTraverseDiagnosticsEntryAsCategory() {
         // SettingsActivity's search traverses every root item as a category.
         // A standalone diagnostic Preference here used to crash that search.
-        val parser = RuntimeEnvironment.getApplication().resources.getXml(R.xml.app_preferences)
+        val source = File("src/main/res/xml/app_preferences.xml")
+        assertTrue("Run this test with the app Gradle unit-test task", source.isFile)
+        val document = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(source)
         var foundEntry = false
-        parser.use {
-            while (it.next() != XmlPullParser.END_DOCUMENT) {
-                if (it.eventType != XmlPullParser.START_TAG) continue
-                if (it.depth == 2) assertEquals("PreferenceCategory", it.name)
-                if (it.getAttributeValue("http://schemas.android.com/apk/res/android", "key") == "developer_diagnostics") {
-                    assertEquals(3, it.depth)
+        val categories = document.documentElement.childNodes
+        for (index in 0 until categories.length) {
+            val category = categories.item(index) as? Element ?: continue
+            assertEquals("PreferenceCategory", category.tagName)
+            val entries = category.childNodes
+            for (entryIndex in 0 until entries.length) {
+                val entry = entries.item(entryIndex) as? Element ?: continue
+                if (entry.getAttributeNS("http://schemas.android.com/apk/res/android", "key") == "developer_diagnostics") {
                     foundEntry = true
                 }
             }

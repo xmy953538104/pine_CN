@@ -63,6 +63,8 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'app-pids', config.get('app_pids', '1234')
             elif args == ['shell', 'dumpsys', 'activity', 'lastanr']:
                 operation, output = 'lastanr', config.get('lastanr_result', 'ANR in io.github.pine.emu.diagnostics')
+            elif args == ['shell', 'dumpsys', 'activity', 'lastanr-traces']:
+                operation, output = 'lastanr-traces', config.get('lastanr_traces_result', 'Global fixture ANR traces')
             elif args == ['shell', 'dumpsys', 'activity', 'activities']:
                 operation, output = 'activities', 'Final activity evidence'
             elif args[:2] == ['logcat', '-b']:
@@ -128,7 +130,7 @@ class ObservationDeadlines(unittest.TestCase):
             '''))
         self.fake.chmod(0o755)
 
-    def smoke(self, name, delays, allow_platform_anr=False):
+    def smoke(self, name, delays, allow_platform_anr=False, collect_system_anr=False):
         self.config.write_text(json.dumps({"session": SESSION, **delays}))
         self.fake.with_suffix('.state.json').unlink(missing_ok=True)
         # Short fixture budgets keep these real subprocess tests fast while
@@ -138,7 +140,7 @@ class ObservationDeadlines(unittest.TestCase):
             adb=str(self.fake), serial="offline-fixture", apk=self.root / "absent.apk",
             expected_commit="a" * 40, output=self.root / name,
             command_timeout=2.5, ui_timeout=1, boot_timeout=2.5, install_timeout=2.5,
-            wait_known_platform_anr=allow_platform_anr))
+            wait_known_platform_anr=allow_platform_anr, collect_system_last_anr_traces=collect_system_anr))
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
@@ -336,14 +338,48 @@ class ObservationDeadlines(unittest.TestCase):
                 smoke.finish()
                 self.assertFalse(any("run-as" in row["argv"] for row in self.commands(smoke)))
                 self.assertEqual(smoke.summary["overall"], "blocked")
-        smoke = self.smoke("verified", {})
+        smoke = self.smoke("verified", {}, collect_system_anr=True)
         smoke.installed = True
         smoke.results.update({name: {"status": "pass"} for name in MODULE["REQUIRED"]})
         smoke.write_summary()
         smoke.finish()
-        self.assertFalse(any("pidof" in row["argv"] or "lastanr" in row["argv"] or
+        self.assertFalse(any("pidof" in row["argv"] or "lastanr" in row["argv"] or "lastanr-traces" in row["argv"] or
                              "run-as" in row["argv"] for row in self.commands(smoke)))
         self.assertEqual(smoke.summary["overall"], "pass")
+
+    def test_system_anr_traces_are_opt_in_and_capture_errors_preserve_failure_and_cleanup(self):
+        for name, enabled, config in (
+            ("default", False, {}),
+            ("denied", True, {"lastanr_traces_result": {"code": 1, "stderr": "ANR trace permission denied"}}),
+            ("timeout", True, {"lastanr_traces_result": {"stdout": "Partial global trace", "stderr": "Trace still being read"},
+                               "lastanr-traces": 2, "emit_before_delay": "lastanr-traces"}),
+        ):
+            with self.subTest(case=name):
+                smoke = self.smoke("system-traces-" + name, {"xml_sequence": [PINE_ANR_XML], "app_pids": "", **config},
+                                   collect_system_anr=enabled)
+                smoke.step("settings_entry", lambda: smoke.wait_ui("pine-anr", lambda value: True))
+                before = json.loads(json.dumps(smoke.results))
+                smoke.installed = True
+                smoke.args.command_timeout = .6
+                smoke.finish()
+                self.assertEqual(smoke.results, before)
+                report = json.loads((smoke.output / "runtime-report.json").read_text())
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["system_last_anr_traces_enabled"], enabled)
+                self.assertIn("not filtered to Pine", report["system_last_anr_traces_scope"])
+                commands = self.commands(smoke)
+                traces = [row for row in commands if "lastanr-traces" in row["argv"]]
+                self.assertEqual(len(traces), int(enabled))
+                self.assertEqual((smoke.output / "last-anr-traces.txt").exists(), enabled)
+                if name == "denied":
+                    self.assertEqual(traces[0]["returncode"], 1)
+                    self.assertIn("permission denied", (smoke.output / "last-anr-traces.stderr.txt").read_text())
+                if name == "timeout":
+                    self.assertTrue(traces[0]["timed_out"])
+                    self.assertIn("Partial global trace", (smoke.output / "last-anr-traces.txt").read_text())
+                    self.assertIn("still being read", (smoke.output / "last-anr-traces.stderr.txt").read_text())
+                self.assertTrue((smoke.output / "final-activities.txt").is_file())
+                self.assertTrue(any(row["argv"][-3:] == ["rm", "-f", smoke.remote_xml] for row in commands))
 
     def assert_gate_only(self, smoke, status):
         self.assertEqual(set(smoke.results), {"device_ready"})

@@ -165,6 +165,8 @@ class Smoke:
             "platform_anr_wait_enabled": bool(getattr(args, "wait_known_platform_anr", False)),
             "platform_anr_wait_limit": 2,
             "platform_anr_waits": [],
+            "system_last_anr_traces_enabled": bool(getattr(args, "collect_system_last_anr_traces", False)),
+            "system_last_anr_traces_scope": "Latest system-wide ANR trace file; not filtered to Pine and may include other processes.",
         }
         runner_source = Path(__file__).read_bytes()
         self.summary["runner_sha256"] = digest(runner_source)
@@ -198,6 +200,8 @@ class Smoke:
             "platform_anr_wait_enabled": self.summary["platform_anr_wait_enabled"],
             "platform_anr_wait_limit": self.summary["platform_anr_wait_limit"],
             "platform_anr_waits": self.summary["platform_anr_waits"],
+            "system_last_anr_traces_enabled": self.summary["system_last_anr_traces_enabled"],
+            "system_last_anr_traces_scope": self.summary["system_last_anr_traces_scope"],
             "possible_platform_cause": self.summary.get("possible_platform_cause", []),
             "limitations": self.summary["limitations"],
             "evidence": sorted(p.name for p in self.output.iterdir() if p.is_file() and not p.name.endswith(".tmp")),
@@ -907,6 +911,10 @@ class Smoke:
                 })
                 return b""
 
+        if self.summary["system_last_anr_traces_enabled"]:
+            # This reads the system-wide latest file, without package filtering.
+            # Only fresh, job-owned AVDs should opt in to this broader evidence.
+            capture("last-anr-traces", 15, "shell", "dumpsys", "activity", "lastanr-traces")
         capture("last-anr", 15, "shell", "dumpsys", "activity", "lastanr")
         raw = capture("pine-process-ids", 5, "shell", "pidof", PACKAGE)
         pids = decode(raw).split()
@@ -992,6 +1000,8 @@ def main():
     parser.add_argument("--install-timeout", type=int, default=300)
     parser.add_argument("--wait-known-platform-anr", action="store_true",
                         help="Fresh owned test devices only: at most two normal Wait taps on exact observed System UI/process-system ANR dialogs; never Close app or a Pine/unknown title")
+    parser.add_argument("--collect-system-last-anr-traces", action="store_true",
+                        help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace file; not filtered to Pine and may include other processes")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_commit):
         parser.error("--expected-commit must be a full lowercase 40-character Git commit")

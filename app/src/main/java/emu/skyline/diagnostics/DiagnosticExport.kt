@@ -22,8 +22,8 @@ object DiagnosticExport {
     private const val MAX_RECORD_BYTES = 64 * 1024
     private const val MAX_IDENTITIES = 65536
     private val json = Json { isLenient = false }
-    private val uri = Regex("(?i)(?:[a-z][a-z0-9+.-]*://)[^\\s\"<>]+")
-    private val privatePath = Regex("(?i)(?:/(?:storage|sdcard|data|mnt|home|Users)(?:/[^\\s\"<>]*)?|[A-Z]:[\\\\/][^\\s\"<>]+)")
+    private val locationStart = Regex("""(?i)(?:(?<uri>[a-z][a-z0-9+.-]*://|(?:file|content):(?=/|[A-Z]:[\\/]))|(?<![\p{L}\p{N}_./\\-])(?<unix>/(?:storage|sdcard|data|mnt|home|Users)(?=[/\\\s"'<>]|$))|(?<![a-z0-9_./\\-])(?:[a-z]:[\\/]|\\\\(?=[^\\\s])))""")
+    private val guestMountPrefix = Regex("""(?i)(?:^|[^a-z0-9_+.-])(?:rom|romfs|sdmc):$""")
     private val sensitiveName = Regex("(?i)(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)")
     private val credentialLine = Regex("(?i)(?:prod\\.keys|title\\.keys|\\b(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)\\b[\\s=:])")
     private val snapshotId = Regex("snapshot-[0-9a-f-]{36}")
@@ -31,10 +31,19 @@ object DiagnosticExport {
         (0..7).map { "${scope}diagnostics-$it.jsonl" }
     } + "emulation.log")
 
-    /** For plain text and individual JSON string values; never run a regexp across JSON syntax. */
+    /**
+     * For plain text and decoded JSON string values, never serialized JSON syntax. A location may
+     * contain spaces or quotes, so preserve preceding context and conservatively omit the line tail.
+     */
     fun redact(text: String): String = text.lineSequence().joinToString("\n") { line ->
         if (credentialLine.containsMatchIn(line)) "[REDACTED_CREDENTIAL_LINE]"
-        else privatePath.replace(uri.replace(line, "[REDACTED_URI]"), "[REDACTED_PATH]")
+        else {
+            val location = locationStart.findAll(line).firstOrNull { match ->
+                match.groups["unix"] == null || !guestMountPrefix.containsMatchIn(line.take(match.range.first))
+            }
+            if (location == null) line
+            else line.take(location.range.first) + if (location.groups["uri"] != null) "[REDACTED_URI]" else "[REDACTED_PATH]"
+        }
     }
 
     fun redactJson(record: JsonObject): JsonObject = redactElement(record) as JsonObject

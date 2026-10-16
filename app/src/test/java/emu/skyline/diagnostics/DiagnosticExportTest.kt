@@ -75,6 +75,59 @@ class DiagnosticExportTest {
         assertFalse(safe.contains("rest-of-line"))
     }
 
+    @Test fun redactsWholeLocationTailWithSpacesQuotesAndUtf8AtRealBoundaries() {
+        val locations = listOf(
+            "/storage/emulated/0/Alice Smith/秘密 \"save\".nsp" to "[REDACTED_PATH]",
+            "/data/user/0/app/Private Name/O'Connor 秘密.nsp" to "[REDACTED_PATH]",
+            "C:\\Users\\Alice Smith\\秘密 \"save\".nsp" to "[REDACTED_PATH]",
+            "D:/Private Name/O'Connor 秘密.nsp" to "[REDACTED_PATH]",
+            "\\\\server\\Private Share\\秘密 file.nsp" to "[REDACTED_PATH]",
+            "content://provider/Private Name/秘密 \"save\".nsp" to "[REDACTED_URI]",
+            "file:///storage/emulated/0/Private Name/O'Connor 秘密.nsp" to "[REDACTED_URI]",
+            "file:/storage/emulated/0/Private Name/秘密 file.nsp" to "[REDACTED_URI]",
+            "file:C:\\Users\\Private Name\\秘密 file.nsp" to "[REDACTED_URI]"
+        )
+        for ((location, marker) in locations) {
+            for (prefix in listOf("open failed: ", "读取失败：", "path=(", "path=\"", "path='", "path:", "std::filesystem::path:", "ns::")) {
+                assertEquals(prefix + marker, DiagnosticExport.redact(prefix + location + "'\" trailing detail"))
+            }
+            if (!location.startsWith("/")) assertEquals("正在打开" + marker, DiagnosticExport.redact("正在打开" + location))
+        }
+        val relative = "scripts/data/a.lua ./data/a.lua ../data/a.lua 脚本/data/a.lua scripts/storage/a.lua /database/a.lua /datafile/a.lua rom:/data/a.lua romfs:/storage/a.lua sdmc:/data/a.lua ns::rom:/data/a.lua"
+        assertEquals(relative, DiagnosticExport.redact(relative))
+    }
+
+    @Test fun archiveRedactsSpacedLocationsWithoutChangingOtherJsonFields() = sandbox { logs, textLog, cache, _ ->
+        val relative = "世界 scripts/data/a.lua rom:/data/a.lua"
+        val messages = listOf(
+            "open failed: /storage/emulated/0/Alice Smith/秘密 \"save\".nsp",
+            "open failed: 'C:\\Users\\Alice Smith\\秘密 O'Connor.nsp'",
+            "open failed: content://provider/Alice Smith/秘密 \"save\".nsp"
+        )
+        val records = messages.mapIndexed { index, message -> buildJsonObject {
+            put("schema", 1); put("session_id", "spaced-paths"); put("sequence", index + 1)
+            put("category", "content"); put("event", "DLC_RUNTIME_ERROR"); put("level", "ERROR")
+            putJsonObject("fields") { put("message", message); put("relative", relative); put("count", 7); put("known", true) }
+        } }
+        log(logs, "main/diagnostics-0.jsonl", records.joinToString("\n", postfix = "\n"))
+        textLog.writeText(messages.joinToString("\n", postfix = "\n"))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1\nerror=/data/user/0/Alice Smith/秘密 \"save\"").use { snapshot ->
+            val entries = archive(snapshot)
+            assertFalse(entries.values.any { text -> listOf("Alice", "Smith", "秘密", "Connor", "save").any { it in text } })
+            val exported = entries.getValue("main/diagnostics-0.jsonl").lineSequence().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.toList()
+            assertEquals(records.size, exported.size)
+            exported.forEachIndexed { index, value ->
+                assertEquals(records[index].keys, value.keys)
+                val fields = value.getValue("fields").jsonObject
+                assertEquals(relative, fields.getValue("relative").jsonPrimitive.content)
+                assertEquals(7, fields.getValue("count").jsonPrimitive.int)
+                assertTrue(fields.getValue("known").jsonPrimitive.boolean)
+                assertTrue(fields.getValue("message").jsonPrimitive.content.startsWith("open failed: "))
+            }
+            assertTrue(entries.getValue("session-metadata.txt").contains("DLC_RUNTIME_ERROR"))
+        }
+    }
+
     @Test fun exportUsesOnlyFixedNamesAcrossBothProcessesAndLegacy() = sandbox { logs, textLog, cache, _ ->
         log(logs, "diagnostics-0.jsonl", record("legacy", 1))
         log(logs, "main/diagnostics-0.jsonl", record("main", 1, detail = "世界 content://private/game"))
@@ -230,8 +283,8 @@ class DiagnosticExportTest {
     }
 
     @Test fun redactionExpansionStillObeysByteLimitAtCompleteJsonBoundaries() = sandbox { logs, textLog, cache, _ ->
-        val line = buildJsonObject { put("message", "/data/x ".repeat(6000)) }.toString() + "\n"
-        val source = log(logs, "main/diagnostics-0.jsonl", line.repeat(170))
+        val line = buildJsonObject { putJsonArray("paths") { repeat(6000) { add("/data/x") } } }.toString() + "\n"
+        val source = log(logs, "main/diagnostics-0.jsonl", line.repeat(130))
         assertTrue(source.length() <= DiagnosticExport.MAX_FILE_BYTES)
         DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
             val entries = archive(snapshot)

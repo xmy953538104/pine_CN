@@ -14,7 +14,7 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Two independent process sinks with concurrent rotation | Passed real fork/exec test | Android process lifecycle still needs runtime checks |
 | Native ASan/UBSan and core ThreadSanitizer | Passed local review runs | Host tools, not an Android sanitizer APK |
 | NSP selection/catch policy, production Backing/IStorage/PatchManager and BKTR/CTR/Region/OS compositions | Passed controlled host tests | Crypto keys, full NSP parsing and commercial files are not exercised |
-| Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 21/21 passed actual Gradle task at `00811378` | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
+| Android/JVM exporter, selection, process directory/session behavior and settings-search hierarchy | 23/23 passed actual Gradle task for the path-redaction fix: 16 exporter, 4 selection and 3 process/settings tests | Local JitPack proxy was unavailable; pinned upstream dependencies were rebuilt outside checkout for this supplemental run |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
 | Windows PS5.1/pwsh ADB | Full suite passed at `d859e3b5`, including native EOF, complete shared-file records and cancellation cleanup | Windows physical-keyboard Ctrl+C still needs manual acceptance; actual POSIX PTY Ctrl+C passed separately |
@@ -76,6 +76,9 @@ attempted APK, runtime outcome and remaining limitations for that exact commit.
    destination in Android's document picker. The ZIP must contain only metadata,
    fixed JSONL filenames in `main/`, `emulation/` or the legacy root, and optionally
    redacted `emulation.log`. It never recursively packages app storage.
+   Recognized private locations are redacted through the line end, including quoted
+   filenames with spaces; preceding context and independent JSON fields survive,
+   but later same-line detail is omitted.
 5. Parse each exported JSONL line. Invalid, oversized, incomplete or duplicate
    records are omitted with counts in metadata. Snapshots are live and can omit
    concurrent rotation/queued records. Exported logs are capped40MiB plus1MiB

@@ -1081,6 +1081,7 @@ class Smoke:
     def saf_save(self):
         screen = self.screen("export-confirm")
         self.reject_app_anr(screen)
+        self.reject_unhandled_anr(screen)
         button = screen.find_button("Export", exact=True)
         if button is None:
             raise Blocked("Prepared preview Export action is unavailable; use retained preview XML/screenshot for manual handoff")

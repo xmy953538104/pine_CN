@@ -480,6 +480,26 @@ class ObservationDeadlines(unittest.TestCase):
                     smoke.seek("Preview and export", name, button=True)
                 self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
 
+    def test_saf_confirmation_under_anr_never_taps_or_runs_recovery(self):
+        for name, overlay, expected in (
+                ('system-ui', PLATFORM_ANR_XML, 'blocked'),
+                ('wellbeing', SYSTEM_ANR_XML, 'blocked'),
+                ('unknown', SYSTEM_ANR_XML.replace('Digital Wellbeing', 'Unknown App'), 'blocked'),
+                ('pine', PINE_ANR_XML, 'fail')):
+            with self.subTest(name=name):
+                root = ET.fromstring(ui_xml({'class': 'android.widget.Button', 'text': 'EXPORT',
+                    'resource-id': 'android:id/button1', 'clickable': 'true'}))
+                root.extend(ET.fromstring(overlay))
+                smoke = self.smoke('saf-anr-' + name, {'xml_sequence': [ET.tostring(root, encoding='unicode')]},
+                    allow_platform_anr=True, dismiss_platform_crash=True, close_system_anr=True)
+                smoke.step('saf_save', smoke.saf_save)
+                self.assertEqual(smoke.results['saf_save']['status'], expected)
+                self.assertFalse(any('input' in row['argv'] for row in self.commands(smoke)))
+                for key in ('platform_anr_waits', 'platform_crash_dismissals', 'system_anr_closes'):
+                    self.assertEqual(smoke.summary[key], [])
+                if name == 'pine':
+                    self.assertIn('Pine application ANR observed', smoke.results['saf_save']['reason'])
+
     def test_all_caps_export_confirmation_reaches_the_unchanged_saf_observation(self):
         smoke = self.smoke("export-confirm-caps", {"xml_sequence": [
             ui_xml({"class": "android.widget.Button", "text": "EXPORT", "resource-id": "android:id/button1"}),

@@ -74,6 +74,33 @@ class MetadataJniMappingTest {
         MetadataNativeBridge.resolveForLaunch(Diagnostics::class.java, 102, 0)
         assertEquals("", Diagnostics.currentAssociation().title)
     }
+    @Test fun nativeIdentityCallbackSerializesWithLaunchReplacementOnTheSameMonitor() {
+        Diagnostics.beginLaunch(null, 201)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val finished = java.util.concurrent.CountDownLatch(1)
+        val failed = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        val worker = Thread({
+            entered.countDown()
+            try { MetadataNativeBridge.resolveForLaunch(Diagnostics::class.java, 201, 1) }
+            catch (error: Throwable) { failed.set(error) }
+            finally { finished.countDown() }
+        }, "ControlledNativeIdentity")
+        try {
+            synchronized(Diagnostics) {
+                worker.start()
+                assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2)
+                while (finished.count != 0L && worker.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.yield()
+                assertEquals("native callback cannot complete while a launch transition owns the monitor", 1L, finished.count)
+                assertEquals("callback cannot mutate protected identity before replacement", "", Diagnostics.currentAssociation().title)
+                Diagnostics.beginLaunch(null, 202)
+            }
+        } finally { worker.join(3000) }
+        assertFalse(worker.isAlive); assertNull(failed.get())
+        assertEquals("old callback rejected after B transition", "", Diagnostics.currentAssociation().title)
+        MetadataNativeBridge.resolveForLaunch(Diagnostics::class.java, 202, 0)
+        assertEquals(app, Diagnostics.currentAssociation().title)
+    }
     @Test fun legacySerializationKeepsItsWireFormatAndCachedObservationIsExplicit() {
         val entry = populate(0)
         val bytes = java.io.ByteArrayOutputStream().also { output ->

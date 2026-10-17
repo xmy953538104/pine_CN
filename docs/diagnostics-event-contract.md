@@ -271,7 +271,9 @@ UUIDs, source commit, known application Title, scope and observation flags. PDX2
 uses one reserved byte for the closed native identity source. The initial launch
 summary has no application Title until the synchronous runtime loader callback
 resolves it; that callback also runs with diagnostics off for a later opt-in.
-The TLS observer belongs only to the ordinary JNI launch caller, holds no global
+The Java callback uses the same Diagnostics instance monitor as launch begin/end
+and failure capture; a static synchronized Class monitor would not protect that
+state transition. The TLS observer belongs only to the ordinary JNI launch caller, holds no global
 Java references, and notifies Java after releasing the sink mutex. Old PDX1
 summaries retain their anonymous session/launch association but their untyped
 Title is deliberately unknown, since it may be a shared SaveDataOwnerId. The

@@ -117,15 +117,17 @@ object Diagnostics {
         if (active) appContext?.let(::publishAssociation)
     }
     /** Called on the ordinary JNI launch thread, after the sink releases its mutex. */
-    @JvmStatic @Synchronized fun onNativeContentIdentity(owner: Long, titleId: String, source: String) {
-        if (!launch.active || !launch.belongsTo(owner)) return
-        val id = normalizedTitleId(titleId)
-        val knownSource = source in setOf("cnmt_application", "cnmt_patch_parent", "cnmt_aoc_parent", "program_header")
-        applicationTitleId = if (knownSource) id else ""
-        applicationIdentitySource = if (knownSource && id.isNotEmpty()) source else "unknown"
-        if (active) {
-            launchFailureBoundary.get()?.takeIf { it.owner == owner }?.observed = currentAssociation()
-            appContext?.let(::publishAssociation)
+    @JvmStatic fun onNativeContentIdentity(owner: Long, titleId: String, source: String) {
+        synchronized(this) { // Same instance monitor as begin/end and failure capture.
+            if (!launch.active || !launch.belongsTo(owner)) return
+            val id = normalizedTitleId(titleId)
+            val knownSource = source in setOf("cnmt_application", "cnmt_patch_parent", "cnmt_aoc_parent", "program_header")
+            applicationTitleId = if (knownSource) id else ""
+            applicationIdentitySource = if (knownSource && id.isNotEmpty()) source else "unknown"
+            if (active) {
+                launchFailureBoundary.get()?.takeIf { it.owner == owner }?.observed = currentAssociation()
+                appContext?.let(::publishAssociation)
+            }
         }
     }
     @Synchronized internal fun currentAssociation() = ProcessAssociation(processRunId, launch.id, sessionId,

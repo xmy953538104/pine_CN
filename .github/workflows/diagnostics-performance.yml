@@ -18,6 +18,7 @@ jobs:
       - name: Native flag rejection tests and controlled host comparisons
         run: |
           python3 tools/tests/test-native-debug-flags.py
+          python3 tools/tests/test-apk-signer.py
           python3 tools/tests/benchmark-diagnostics-performance.py --output "$RUNNER_TEMP/host-comparison"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -31,6 +32,20 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Require and decode the repository's existing CI signer
+        env:
+          KEYSTORE_ENCODED: ${{ secrets.KEYSTORE }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_ENCODED" || -z "$SIGNING_STORE_PASSWORD" || -z "$SIGNING_KEY_ALIAS" || -z "$SIGNING_KEY_PASSWORD" ]]; then
+            echo 'Existing CI signing configuration unavailable; candidate build stopped without a fallback signer.' >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_ENCODED" | base64 --decode > "$RUNNER_TEMP/pine-ci-signing.jks"
+          test -s "$RUNNER_TEMP/pine-ci-signing.jks"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -49,18 +64,25 @@ jobs:
         run: git submodule update --init --recursive --depth 1 --jobs 8
       - name: JVM tests and explicit optimized Debug candidate
         env:
-          IS_BUILD_SIGNED: 'false'
-          SIGNING_STORE_PATH: unused.jks
+          IS_BUILD_SIGNED: 'true'
+          SIGNING_STORE_PATH: ${{ runner.temp }}/pine-ci-signing.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_COMPILERCHECK: 'string:27.3.13750724'
         run: ./gradlew --no-daemon -PpineNativeDebugOptimization=2 testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
+      - name: Remove the temporary signing file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/pine-ci-signing.jks"
       - name: Verify actual compiler flags, APK and matching symbols
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           apk=app/build/outputs/apk/full/debug/app-full-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"
+          python3 tools/verify-apk-signer.py --apk "$apk" --commit "$EXPECTED_COMMIT" \
+            --apksigner "$ANDROID_HOME/build-tools/35.0.0/apksigner"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/full/debug/apk-badging.txt
           python3 tools/verify-diagnostics-apk.py "$apk" "$EXPECTED_COMMIT"
           python3 tools/verify-native-debug-flags.py --optimization 2 --apk "$apk" --output app/build/outputs/apk/full/debug/native-build-flags.json

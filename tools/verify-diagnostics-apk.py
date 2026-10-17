@@ -55,5 +55,11 @@ metadata = {
     "release_emulation_process_manifest_verified": True,
     "runtime_validation": "See docs/diagnostics-validation.md; build verification is not device execution.",
 }
+signer_manifest = apk.with_name("signer-identity.json")
+if signer_manifest.is_file():
+    signer = json.loads(signer_manifest.read_text(encoding="utf-8"))
+    assert signer["source_commit"] == actual and signer["apk_sha256"] == metadata["sha256"]
+    assert signer["signature_verified"] is True
+    metadata["certificate_sha256"] = signer["certificate_sha256"]
 apk.with_name("build-identity.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 print(json.dumps(metadata, sort_keys=True))

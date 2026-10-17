@@ -81,6 +81,37 @@ changed. All18 functional checks and original deadlines are retained. Report the
 system failures even if later functional checks pass. This is translated APK
 execution, not physical ARM64/NCE/game-speed validation.
 
+## Reuse the existing CI signer
+
+New O0 and O2 candidate builds use the repository's existing `KEYSTORE` and
+`SIGNING_*` CI configuration. Missing configuration stops the build; there is
+no generated key or random Debug-signer fallback. CI decodes the existing signer
+only into an owner-readable temporary file outside the checkout and caches,
+removes it after the build even on failure, and never uploads it. Fork PRs cannot
+run the signed-APK job. These changes do not read key material into an agent,
+create Secrets, resign old artifacts, publish a release or alter main.
+
+The public certificate pin is
+`70edcdc802bb16afe9665ecd3d342ea74b217a79b6efb4dbdfbb3ea3eddf16c1`.
+It was independently read from the existing signed O0 APK in run39043871038,
+artifact12105432966, APK SHA256
+`e087533f923e38f49fd9e535d2adf9537c220d7190b2eb93a9a8dd9ec73806d6`,
+by [public-only audit39050605173](https://github.com/xmy953538104/pine_CN/actions/runs/39050605173).
+`verify-apk-signer.py` requires official `apksigner verify` success and exactly
+that one signer; it writes `signer-identity.json` bound to the new source commit
+and APK SHA256. Each new build has its own tests, actual optimization manifest,
+APK hash, native Build ID and matching symbols. The original26a198…07bf O2
+and its blocked runtime evidence remain unchanged.
+
+This stabilizes signatures between future candidates. The published991 v1.3
+Preview uses certificate `0ecefc03…7e47`, which differs from the existing CI
+signer. It cannot be updated in place by these candidates while keeping the same
+package. Do not uninstall or clear an owner's app automatically. An initial
+migration needs the owner's backup and installation choice; subsequent candidates
+with this same package/certificate can use Android's normal update mechanism.
+Formal Pine's package remains separate. No claim of save/cache preservation on
+an owner device is made by a public-certificate check alone.
+
 ## Device comparison still required
 
 Keep compilation and diagnostic settings as two independent axes: O0/off,

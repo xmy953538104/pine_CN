@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "certificate_sha256": "70edcdc802bb16afe9665ecd3d342ea74b217a79b6efb4dbdfbb3ea3eddf16c1",
+  "reference_run": 39043871038,
+  "reference_artifact": 12105432966,
+  "reference_apk_sha256": "e087533f923e38f49fd9e535d2adf9537c220d7190b2eb93a9a8dd9ec73806d6",
+  "public_certificate_audit": "https://github.com/xmy953538104/pine_CN/actions/runs/39050605173",
+  "scope": "Public certificate of the repository's existing CI signer. No key or Secret material. New candidates must be built with the existing CI signing configuration, not resigned old artifacts."
+}

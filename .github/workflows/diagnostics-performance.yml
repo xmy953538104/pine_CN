@@ -4,6 +4,7 @@ on:
     branches: [feat/diagnostics-perf-candidate]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: diagnostics-performance-${{ github.sha }}
   cancel-in-progress: false
@@ -84,3 +85,55 @@ jobs:
         with:
           name: diagnostics-O2-jvm-reports-${{ github.sha }}
           path: app/build/reports/tests/
+  optimized-runtime:
+    needs: optimized-apk
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools emulator
+      - run: sdkmanager 'system-images;android-35;google_apis;x86_64'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pine-diagnostics-O2-debug-candidate-${{ github.sha }}
+          path: runtime-apk
+      - name: Actual ARM64 APK settings, native diagnostics and SAF export
+        run: bash tools/tests/attempt-android-runtime.sh runtime-apk/app-full-debug.apk '${{ github.sha }}' runtime-evidence
+      - name: Retain every outcome and scoped system-dialog action
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          root=Path('runtime-evidence')
+          report=root/'runtime-report.json'
+          result=json.loads(report.read_text()) if report.is_file() else {}
+          print(report.read_text() if report.is_file() else 'No runtime report: no APK runtime success claimed.')
+          for name in ('host.txt','accel-check.txt','first-boot/first-boot-result.json'):
+              p=root/name
+              if p.is_file(): print(name+'\n'+p.read_text(errors='replace')[:16000])
+          if result.get('status')!='verified':
+              for p in sorted(root.glob('[0-9][0-9][0-9]-settings.xml'))[-6:]:
+                  try:
+                      nodes=[dict(n.attrib) for n in ET.parse(p).iter('node') if n.get('text')]
+                      print(p.name+' '+json.dumps(nodes[:30],ensure_ascii=False))
+                  except ET.ParseError: pass
+              for name in ('last-anr.txt','final-activities.txt','crash-buffer.txt','runtime-logcat.txt'):
+                  p=root/name
+                  if p.is_file(): print(name+'\n'+p.read_text(errors='replace')[:48000])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostics-O2-macos-runtime-${{ github.sha }}
+          path: runtime-evidence/

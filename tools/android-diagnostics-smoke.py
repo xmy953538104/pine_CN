@@ -32,6 +32,11 @@ from pathlib import Path
 PACKAGE = "io.github.pine.emu.diagnostics.preview"
 APP_LABEL = "Pine Diagnostics Preview"
 SETTINGS = PACKAGE + "/emu.skyline.settings.SettingsActivity"
+# Only these two system-app ANRs have been identified in retained CI evidence.
+SYSTEM_ANR_TARGETS = {
+    "Pixel Launcher isn't responding": "com.google.android.apps.nexuslauncher",
+    "Digital Wellbeing isn't responding": "com.google.android.apps.wellbeing",
+}
 UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 LOG_NAME = re.compile(r"(?:(?:main|emulation)/)?diagnostics-[0-7]\.jsonl")
 CRITICAL_NAMES = {prefix + "critical-state.jsonl" for prefix in ("", "main/", "emulation/")}
@@ -197,6 +202,9 @@ class Smoke:
             "platform_crash_dismiss_enabled": bool(getattr(args, "dismiss_known_platform_crash", False)),
             "platform_crash_dismiss_limit": 1,
             "platform_crash_dismissals": [],
+            "system_anr_close_enabled": bool(getattr(args, "close_known_system_anr", False)),
+            "system_anr_close_limit_per_package": 1,
+            "system_anr_closes": [],
             "settings_back_recovery_limit": 1,
             "settings_back_recoveries": [],
             "storage_readiness_required": bool(getattr(args, "require_ready_storage", False)),
@@ -205,6 +213,8 @@ class Smoke:
         }
         if self.summary["platform_crash_dismiss_enabled"]:
             self.summary["limitations"].append("One ordinary Bluetooth crash-dialog close is permitted during settings observation; it does not establish platform stability.")
+        if self.summary["system_anr_close_enabled"]:
+            self.summary["limitations"].append("One ordinary Close app per identified Pixel Launcher/Digital Wellbeing system package is permitted during initial Settings observation. ANR evidence and actions are retained; no platform-stability or Pine recovery is inferred from a tap.")
         runner_source = Path(__file__).read_bytes()
         self.summary["runner_sha256"] = digest(runner_source)
         (self.output / "runner-source.py").write_bytes(runner_source)
@@ -241,6 +251,10 @@ class Smoke:
             "platform_crash_dismiss_limit": self.summary["platform_crash_dismiss_limit"],
             "platform_crash_dismissals": self.summary["platform_crash_dismissals"],
             "platform_crash_dismiss_blocker": self.summary.get("platform_crash_dismiss_blocker"),
+            "system_anr_close_enabled": self.summary["system_anr_close_enabled"],
+            "system_anr_close_limit_per_package": self.summary["system_anr_close_limit_per_package"],
+            "system_anr_closes": self.summary["system_anr_closes"],
+            "system_anr_close_blocker": self.summary.get("system_anr_close_blocker"),
             "settings_back_recovery_limit": self.summary["settings_back_recovery_limit"],
             "settings_back_recoveries": self.summary["settings_back_recoveries"],
             "settings_back_recovery_blocker": self.summary.get("settings_back_recovery_blocker"),
@@ -379,6 +393,9 @@ class Smoke:
                 if self.wait_known_platform_dialog(last, deadline):
                     self.pause(deadline)
                     continue
+                if self.close_known_system_anr(label, last, deadline):
+                    self.pause(deadline)
+                    continue
                 if self.dismiss_known_platform_crash(label, last, deadline):
                     self.pause(deadline)
                     continue
@@ -407,6 +424,94 @@ class Smoke:
                node.get("text") == APP_LABEL + " isn't responding"
                for node in screen.root.iter("node")):
             raise AppAnr(f"Pine application ANR observed: {APP_LABEL} isn't responding; see {screen.xml.name}")
+
+    def close_known_system_anr(self, label, screen, deadline):
+        """Close only a positively identified, focused, preinstalled system ANR.
+
+        Explicit opt-in is for this job's temporary AVD. Package, title, dialog
+        controls and window must agree; ambiguous/stale observations never tap.
+        No force-stop, package disabling, data clearing or security changes.
+        """
+        if label != "settings" or not self.summary["system_anr_close_enabled"]:
+            return False
+        self.reject_app_anr(screen)
+        titles = [node for node in screen.root.iter("node")
+                  if node.get("resource-id") == "android:id/alertTitle"]
+        if len(titles) != 1:
+            return False
+        title = titles[0]
+        package = SYSTEM_ANR_TARGETS.get(title.get("text"))
+        if (not package or title.get("package") != "android" or
+                title.get("class") != "android.widget.TextView" or
+                title.get("enabled") != "true" or not Screen.bounds(title)):
+            return False
+        container = next((node for node in screen.root.iter() if title in list(node)), None)
+        if container is None or container.get("package") != "android" or not Screen.bounds(container):
+            return False
+        controls = {}
+        for resource, text in (("android:id/aerr_close", "Close app"), ("android:id/aerr_wait", "Wait")):
+            nodes = [node for node in container if node.get("resource-id") == resource]
+            if len(nodes) != 1:
+                return False
+            node = nodes[0]
+            if (node.get("package") != "android" or node.get("class") != "android.widget.Button" or
+                    node.get("enabled") != "true" or node.get("clickable") != "true" or
+                    node.get("text") != text or not Screen.bounds(node)):
+                return False
+            controls[resource] = node
+        prefix = f"{screen.number:03d}-system-anr"
+        def focused_owner(suffix):
+            raw = decode(self.adb("shell", "dumpsys", "activity", "activities",
+                                  timeout=self.budget(deadline, "System ANR window identity"),
+                                  save=prefix + suffix + "-activities.txt"))
+            windows = re.findall(r"^\s*(mCurrentFocus|mFocusedWindow)=Window\{([^}\n]+)\}\s*$", raw, re.MULTILINE)
+            owners = [re.fullmatch(r"([0-9a-f]+) u0 Application Not Responding: ([\w.:]+)", value)
+                      for _, value in windows]
+            if any(match and (match[2] == PACKAGE or match[2].startswith(PACKAGE + ":")) for match in owners):
+                raise AppAnr("Focused ANR belongs to Pine; system recovery refused; see " + prefix + suffix + "-activities.txt")
+            # Both independent focus fields must identify the same ANR window.
+            return (len(windows) == 2 and {name for name, _ in windows} == {"mCurrentFocus", "mFocusedWindow"}
+                    and all(match and match[2] == package for match in owners)
+                    and owners[0][1] == owners[1][1])
+        if not focused_owner(""):
+            return False
+        listing = decode(self.adb("shell", "cmd", "package", "list", "packages", "-s", package,
+                                  timeout=self.budget(deadline, "System ANR package identity"),
+                                  save=prefix + "-system-package.txt"))
+        if listing.strip() != "package:" + package:
+            return False
+        attempts = self.summary["system_anr_closes"]
+        if sum(row["package"] == package for row in attempts) >= self.summary["system_anr_close_limit_per_package"]:
+            reason = "Identified system ANR persists after its single ordinary Close app: " + package
+            self.summary["system_anr_close_blocker"] = {"source_xml": screen.xml.name, "package": package, "reason": reason}
+            self.write_summary()
+            raise PlatformCrashBlocked(reason)
+        # Retain the system-wide trace before ordinary Close app changes state.
+        self.adb("shell", "dumpsys", "activity", "lastanr-traces", check=False,
+                 timeout=min(10, self.budget(deadline, "Pre-close system ANR trace")), save=prefix + "-traces.txt")
+        # Revalidate focus and the exact hierarchy after potentially slow probes.
+        fresh = self.screen("system-anr-confirm", deadline=deadline)
+        self.reject_app_anr(fresh)
+        if ET.tostring(fresh.root) != ET.tostring(screen.root) or not focused_owner("-confirm"):
+            return False
+        button = controls["android:id/aerr_close"]
+        row = {"source_xml": screen.xml.name, "confirm_xml": fresh.xml.name, "package": package,
+               "title": title.get("text"), "button_resource": button.get("resource-id"),
+               "bounds": button.get("bounds"), "action": "Close app", "status": "attempted",
+               "focus_evidence": [prefix + "-activities.txt", prefix + "-confirm-activities.txt"],
+               "package_evidence": prefix + "-system-package.txt", "trace_evidence": prefix + "-traces.txt",
+               "utc": datetime.now(timezone.utc).isoformat(), "command_number": self.command_number + 1}
+        attempts.append(row)
+        try:
+            self.tap(button, deadline=deadline)
+            self.budget(deadline, "Identified system ANR Close app")
+            row["status"] = "close_sent"
+        except Blocked as error:
+            row.update(status="blocked", reason=str(error))
+            raise PlatformCrashBlocked(str(error)) from error
+        finally:
+            self.write_summary()
+        return True
 
     def dismiss_known_platform_crash(self, label, screen, deadline):
         """One opt-in Close app on the exact observed Bluetooth system dialog.
@@ -1048,7 +1153,8 @@ class Smoke:
         except (AppAnr, SettingsBackBlocked, PlatformCrashBlocked):
             raise
         except (Blocked, AssertionError):
-            if self.summary["settings_back_recoveries"] or self.summary["platform_crash_dismissals"]:
+            if (self.summary["settings_back_recoveries"] or self.summary["platform_crash_dismissals"] or
+                    self.summary["system_anr_closes"]):
                 raise
             self.adb("shell", "input", "keyevent", "KEYCODE_BACK", check=False)
             self.open_settings(cleanup=True)
@@ -1199,6 +1305,8 @@ def main():
                         help="Fresh owned test devices only: at most two normal Wait taps on exact observed System UI/process-system ANR dialogs; never Close app or a Pine/unknown title")
     parser.add_argument("--dismiss-known-platform-crash", action="store_true",
                         help="Fresh job-owned CI AVDs only: during the initial settings observation, at most one ordinary Close app on the exact Android Bluetooth keeps stopping dialog; never Pine, unknown titles, ANRs or App info; does not prove platform stability")
+    parser.add_argument("--close-known-system-anr", action="store_true",
+                        help="Temporary job-owned AVDs only: during initial Settings observation, one ordinary Close app per exactly identified Pixel Launcher/Digital Wellbeing system ANR; requires matching focused package, preinstalled-system identity and Android ANR UI, retains traces and actions; Pine ANRs fail, unknown dialogs remain blocked")
     parser.add_argument("--collect-system-last-anr-traces", action="store_true",
                         help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace and retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated")
     parser.add_argument("--require-ready-storage", action="store_true",

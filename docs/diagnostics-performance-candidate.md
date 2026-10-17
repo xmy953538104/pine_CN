@@ -50,6 +50,37 @@ The performance workflow publishes the controlled O2 candidate, its101 JVM tests
 actual flags and matching symbols. The ordinary Diagnostics workflow still
 builds O0 and audits its actual commands. No candidate release is published.
 
+## Official emulator recovery
+
+Retain both original O2 attempts:39045248440 and39047747847. Each installed
+the exact26a198…07bf ARM64 APK but stopped at5/18 observed checks with13 blocked;
+neither enabled diagnostics. The latter captured an actual successful
+`lib/arm64/libskyline.so` load, but native session metadata remained unobserved.
+Their covering ANRs belonged to Pixel Launcher and Digital Wellbeing respectively;
+this is not evidence of a Pine crash or successful Settings observation.
+
+The recovery host has4 logical CPUs, approximately14GiB RAM, working
+Hypervisor.Framework; its AVD uses4 cores and6GiB with software graphics. The
+selected cloud executor has neither `/dev/kvm` nor `/dev/dri`. Keep the official
+API35 Google APIs x86_64 image with observed `libndk_translation.so` ARM64 support.
+Do not mechanically add resources or substitute an x86 APK. Official
+[ATD documentation](https://developer.android.com/studio/test/managed-devices#use-atd)
+describes removed system apps/services; an alternate image's ARM64 translation
+and complete DocumentsUI/SAF support have not been verified here. Its reduced
+surface cannot stand in for this export acceptance.
+
+For fresh job-owned AVDs only, `--close-known-system-anr` permits one ordinary
+Close app per identified `com.google.android.apps.nexuslauncher` or
+`com.google.android.apps.wellbeing` ANR during initial Settings observation.
+The exact Android title and Close/Wait controls, matching current/focused ANR
+window and preinstalled system-package identity must agree. Save the trace,
+revalidate the hierarchy and focus, record all evidence and taps, then require a
+fresh successful Settings observation. Pine ANRs fail, unknown/persistent system
+ANRs remain blocked. No packages are disabled, data cleared or security settings
+changed. All18 functional checks and original deadlines are retained. Report the
+system failures even if later functional checks pass. This is translated APK
+execution, not physical ARM64/NCE/game-speed validation.
+
 ## Device comparison still required
 
 Keep compilation and diagnostic settings as two independent axes: O0/off,

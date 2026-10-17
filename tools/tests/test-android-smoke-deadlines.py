@@ -26,6 +26,14 @@ PLATFORM_ANR_XML = '''<hierarchy><node package="android" bounds="[48,313][431,51
  class="android.widget.Button" enabled="true" clickable="true" bounds="[64,438][415,486]"/>
 </node></hierarchy>'''
 PINE_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Pine Diagnostics Preview isn't responding")
+SYSTEM_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Digital Wellbeing isn't responding").replace(
+    '</node></hierarchy>', '<node text="Close app" resource-id="android:id/aerr_close" package="android" '
+    'class="android.widget.Button" enabled="true" clickable="true" bounds="[64,380][415,428]"/></node></hierarchy>')
+
+
+def anr_focus(package="com.google.android.apps.wellbeing", window="e7bb3d6"):
+    value = f"Window{{{window} u0 Application Not Responding: {package}}}"
+    return f"  mCurrentFocus={value}\n    mFocusedWindow={value}\n"
 BLUETOOTH_CRASH_XML = '''<hierarchy><node package="android" class="android.widget.FrameLayout" bounds="[48,301][431,498]">
 <node text="Bluetooth keeps stopping" resource-id="android:id/alertTitle" class="android.widget.TextView"
  package="android" enabled="true" bounds="[88,335][391,363]"/>
@@ -110,7 +118,11 @@ class ObservationDeadlines(unittest.TestCase):
             elif args == ['shell', 'dumpsys', 'dropbox', '--print', 'data_app_anr']:
                 operation, output = 'dropbox', config.get('dropbox_result', 'Retained data_app_anr fixture entry')
             elif args == ['shell', 'dumpsys', 'activity', 'activities']:
-                operation, output = 'activities', 'Final activity evidence'
+                operation, output = 'activities', next_result('activities_sequence', 'Final activity evidence')
+            elif args[:7] == ['shell', 'cmd', 'package', 'list', 'packages', '-s', 'com.google.android.apps.wellbeing']:
+                operation, output = 'system-package', config.get('system_package_result', 'package:com.google.android.apps.wellbeing')
+            elif args[:7] == ['shell', 'cmd', 'package', 'list', 'packages', '-s', 'com.google.android.apps.nexuslauncher']:
+                operation, output = 'system-package', config.get('system_package_result', 'package:com.google.android.apps.nexuslauncher')
             elif args == ['logcat', '-d', '-v', 'raw', 'PineDiag:V', '*:S']:
                 operation, output = 'pine-logcat', json.dumps({'schema':1,'session_id':config['session'],'sequence':1,'event':'SESSION_METADATA','fields':{'commit':'a'*40}})
             elif args[:2] == ['logcat', '-b']:
@@ -209,7 +221,7 @@ class ObservationDeadlines(unittest.TestCase):
         self.fake.chmod(0o755)
 
     def smoke(self, name, delays, allow_platform_anr=False, collect_system_anr=False, require_storage=False,
-              dismiss_platform_crash=False):
+              dismiss_platform_crash=False, close_system_anr=False):
         self.config.write_text(json.dumps({"session": SESSION, **delays}))
         self.fake.with_suffix('.state.json').unlink(missing_ok=True)
         # Short fixture budgets keep these real subprocess tests fast while
@@ -220,7 +232,8 @@ class ObservationDeadlines(unittest.TestCase):
             expected_commit="a" * 40, output=self.root / name,
             command_timeout=2.5, ui_timeout=1, boot_timeout=2.5, install_timeout=2.5,
             wait_known_platform_anr=allow_platform_anr, collect_system_last_anr_traces=collect_system_anr,
-            require_ready_storage=require_storage, dismiss_known_platform_crash=dismiss_platform_crash))
+            require_ready_storage=require_storage, dismiss_known_platform_crash=dismiss_platform_crash,
+            close_known_system_anr=close_system_anr))
 
     def commands(self, smoke):
         return [json.loads(line) for line in (smoke.output / "commands.jsonl").read_text().splitlines()]
@@ -619,6 +632,84 @@ class ObservationDeadlines(unittest.TestCase):
         # Even successful helper recovery is no APK/native/export check pass.
         self.assertEqual(smoke.results, {})
         self.assertEqual(smoke.summary["overall"], "blocked")
+
+    def test_system_anr_close_requires_package_and_fresh_settings_after_action(self):
+        for title, package in MODULE['SYSTEM_ANR_TARGETS'].items():
+            with self.subTest(package=package):
+                xml = SYSTEM_ANR_XML.replace("Digital Wellbeing isn't responding", title)
+                smoke = self.smoke(package, {'xml_sequence': [xml, xml, READY_XML],
+                    'activities_sequence': [anr_focus(package)], 'system_package_result': 'package:' + package},
+                    close_system_anr=True)
+                smoke.args.ui_timeout = 4
+                observed = smoke.wait_ui('settings', lambda value: value.find('Ready') is not None)
+                self.assertEqual(observed.number, 3)
+                row, = smoke.summary['system_anr_closes']
+                self.assertEqual((row['package'], row['status']), (package, 'close_sent'))
+                self.assertEqual(row['source_xml'], '001-settings.xml')
+                self.assertEqual(row['confirm_xml'], '002-system-anr-confirm.xml')
+                self.assertTrue((smoke.output / row['trace_evidence']).is_file())
+                taps = [r for r in self.commands(smoke) if 'tap' in r['argv']]
+                self.assertEqual(len(taps), 1)
+                self.assertEqual(taps[0]['number'], row['command_number'])
+                self.assertEqual(taps[0]['argv'][-2:], ['239', '404'])
+                report = json.loads((smoke.output / 'runtime-report.json').read_text())
+                self.assertEqual(report['system_anr_closes'], [row])
+                # This fixture is neither APK execution nor a Diagnostics pass.
+                self.assertEqual((smoke.results, smoke.summary['overall']), ({}, 'blocked'))
+
+    def test_system_anr_close_refuses_unconfirmed_or_changed_identity(self):
+        fixtures = {
+            'default': ({}, False, 'settings', SYSTEM_ANR_XML),
+            'wrong-phase': ({}, True, 'saf-return', SYSTEM_ANR_XML),
+            'unknown-title': ({}, True, 'settings', SYSTEM_ANR_XML.replace('Digital Wellbeing', 'Unknown App')),
+            'wrong-owner': ({'activities_sequence': [anr_focus('fixture.other')]}, True, 'settings', SYSTEM_ANR_XML),
+            'partial-owner': ({'activities_sequence': [anr_focus().splitlines()[0]]}, True, 'settings', SYSTEM_ANR_XML),
+            'disagreeing-focus': ({'activities_sequence': [anr_focus().replace('mFocusedWindow=Window{e7bb3d6', 'mFocusedWindow=Window{abcd')]}, True, 'settings', SYSTEM_ANR_XML),
+            'not-system': ({'system_package_result': ''}, True, 'settings', SYSTEM_ANR_XML),
+            'extra-system': ({'system_package_result': 'package:com.google.android.apps.wellbeing\npackage:fixture.other'}, True, 'settings', SYSTEM_ANR_XML),
+            'focus-changed': ({'activities_sequence': [anr_focus(), anr_focus('fixture.other')]}, True, 'settings', SYSTEM_ANR_XML),
+            'ui-changed': ({'xml_sequence': [SYSTEM_ANR_XML, READY_XML]}, True, 'settings', SYSTEM_ANR_XML),
+        }
+        for resource in ('android:id/alertTitle', 'android:id/aerr_close', 'android:id/aerr_wait'):
+            for attr, value in (('package', 'fixture.other'), ('enabled', 'false'), ('bounds', '[0,0][0,0]')):
+                root = ET.fromstring(SYSTEM_ANR_XML)
+                next(n for n in root.iter('node') if n.get('resource-id') == resource).set(attr, value)
+                fixtures[resource + attr] = ({}, True, 'settings', ET.tostring(root, encoding='unicode'))
+        fixtures['wrong-control'] = ({}, True, 'settings', SYSTEM_ANR_XML.replace('android:id/aerr_close', 'android:id/aerr_app_info'))
+        for name, (config, enabled, label, xml) in fixtures.items():
+            with self.subTest(name=name):
+                smoke = self.smoke('system-guard-' + name.replace('/', '_'), {
+                    'xml_sequence': [xml], 'activities_sequence': [anr_focus()], **config}, close_system_anr=enabled)
+                screen = smoke.screen('settings')
+                self.assertFalse(smoke.close_known_system_anr(label, screen, time.monotonic() + 3))
+                self.assertFalse(any('tap' in row['argv'] for row in self.commands(smoke)))
+                self.assertEqual(smoke.summary['system_anr_closes'], [])
+
+    def test_system_anr_close_never_masks_pine_anr_or_retries(self):
+        for name, xml, focus in (('title', PINE_ANR_XML, anr_focus()),
+                                 ('owner', SYSTEM_ANR_XML, anr_focus(MODULE['PACKAGE'])),
+                                 ('emulation-owner', SYSTEM_ANR_XML, anr_focus(MODULE['PACKAGE'] + ':emulationProcess'))):
+            smoke = self.smoke('system-pine-' + name, {'xml_sequence': [xml], 'activities_sequence': [focus]}, close_system_anr=True)
+            screen = smoke.screen('settings')
+            with self.assertRaises(MODULE['AppAnr']):
+                smoke.close_known_system_anr('settings', screen, time.monotonic() + 2)
+            self.assertFalse(any('tap' in row['argv'] for row in self.commands(smoke)))
+        smoke = self.smoke('system-persistent', {'xml_sequence': [SYSTEM_ANR_XML],
+            'activities_sequence': [anr_focus()]}, close_system_anr=True)
+        smoke.args.ui_timeout = 5
+        with self.assertRaisesRegex(MODULE['PlatformCrashBlocked'], 'single ordinary Close app'):
+            smoke.wait_ui('settings', lambda _: False)
+        self.assertEqual(len(smoke.summary['system_anr_closes']), 1)
+        self.assertEqual(len([r for r in self.commands(smoke) if 'tap' in r['argv']]), 1)
+
+    def test_system_anr_close_timeout_is_recorded_and_not_repeated(self):
+        smoke = self.smoke('system-slow-tap', {'xml_sequence': [SYSTEM_ANR_XML],
+            'activities_sequence': [anr_focus()], 'tap': 2.5}, close_system_anr=True)
+        screen = smoke.screen('settings')
+        with self.assertRaises(MODULE['PlatformCrashBlocked']):
+            smoke.close_known_system_anr('settings', screen, time.monotonic() + 1)
+        self.assertEqual(smoke.summary['system_anr_closes'][0]['status'], 'blocked')
+        self.assertEqual(len([r for r in self.commands(smoke) if 'tap' in r['argv']]), 1)
 
     def test_opt_in_bluetooth_close_requires_a_fresh_settings_observation(self):
         smoke = self.smoke("bluetooth-settings", {"xml_sequence": [BLUETOOTH_CRASH_XML, READY_XML]},

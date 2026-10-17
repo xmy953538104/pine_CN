@@ -22,6 +22,7 @@ jobs:
           bash tools/tests/run-native-diagnostics.sh
           bash tools/tests/run-content-diagnostics.sh
           python3 tools/tests/test-preview-gates.py
+          python3 tools/tests/test-native-symbols.py
           python3 tools/tests/test-android-smoke-deadlines.py
           python3 tools/tests/test-android-first-boot.py
           python3 tools/tests/test-android-startup-probe.py
@@ -85,6 +86,22 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/full/debug/apk-badging.txt
           python3 tools/verify-diagnostics-apk.py "$apk" "$EXPECTED_COMMIT"
+      - name: Match and archive unstripped native symbols
+        env:
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 tools/archive-native-symbols.py \
+            app/build/outputs/apk/full/debug/app-full-debug.apk "$EXPECTED_COMMIT" \
+            app/build/outputs/diagnostics-symbols \
+            --root app/build/intermediates/cxx --root app/.cxx \
+            --readelf "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+      - name: Upload matching unstripped native symbols
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
+        uses: actions/upload-artifact@v4
+        with:
+          name: pine-diagnostics-native-symbols-${{ github.event.pull_request.head.sha || github.sha }}
+          path: app/build/outputs/diagnostics-symbols/
+          if-no-files-found: error
       - name: Upload Debug APK
         if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
         uses: actions/upload-artifact@v4

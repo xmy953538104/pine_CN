@@ -39,8 +39,9 @@ struct LoaderFailure : std::runtime_error {
 };
 struct Slots {
     std::optional<Candidate> program, control, meta, publicData;
+    skyline::loader::NspSelectionNames names;
     template<class MakeCandidate> void load(std::string_view name, MakeCandidate &&make) {
-        skyline::loader::LoadNspContent<LoaderFailure>(name, std::forward<MakeCandidate>(make), program, control, meta, publicData);
+        skyline::loader::LoadNspContent<LoaderFailure>(name, std::forward<MakeCandidate>(make), program, control, meta, publicData, &names);
     }
 };
 int main() {
@@ -93,6 +94,15 @@ int main() {
         assert(replacement.fields.at("replaced_title_id") == ContentTitleId((index - 8) * 0x100 + 1));
         assert(replacement.fields.at("title_id") == ContentTitleId(candidates[index].header.titleId));
     }
+
+    traced.load("/private/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.nca", [&] { return candidates[0]; });
+    assert(traced.names.program == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    traced.load("/private/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB.nca", [&] { return candidates[1]; });
+    assert(traced.names.program == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // ineligible is not selected
+    traced.load("/private/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.nca", [&] { return candidates[9]; });
+    assert(traced.names.program == "cccccccccccccccccccccccccccccccc");
+    assert(observations.back().fields.at("nca_content_id") == traced.names.program);
+    assert(observations.back().fields.at("full_content_hash_verified") == "false");
 
     // A standard failure is observed, then the following candidate can replace the slot.
     traced.load("broken.nca", []() -> Candidate { throw std::runtime_error("controlled malformed NCA"); });

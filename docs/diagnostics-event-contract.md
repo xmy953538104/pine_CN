@@ -21,6 +21,26 @@ Event-specific values live in `fields` and are strings. Empty or absent values
 mean unknown/not supplied. Consumers must tolerate additional fields and events.
 `last_stage` is the most recently recorded successful stage, not a complete stack.
 
+Root `title_id` remains the application filter for schema-1 consumers;
+`application_title_id` is its explicit equivalent. `program_id` is the selected
+base Program NCA header ID, `cnmt_title_id` its selected CNMT ID (which may be a
+Patch), and `program_nca_id` its 32-hex archive entry stem when available.
+An Application CNMT or a Patch CNMT's typed parent establishes the application
+relation; otherwise the UI association or known Program ID is used. Save ownership
+and bit masking do not establish that relation. Per-event `fields.title_id` still
+identifies the content being observed, including DLC. Base and Update selection
+fields retain their own Program IDs. Unknown NCA IDs stay empty: an entry stem is
+not a verified full-content hash and matching Title/version does not prove equal bytes.
+
+`launch_id` groups one emulation attempt across diagnostic session/level changes;
+a subsequent launch gets a new ID. `process_run_id` identifies the emitting process
+incarnation. Both are anonymous and absent before observed initialization. Enabling
+diagnostics during an existing launch emits `LAUNCH_CONTEXT_OBSERVED` with
+`start_observed=false`, without fabricating a launch-begin event. Old fields remain
+readable. The ADB collector prefers `application_title_id`, falls back to legacy
+root/field Title IDs, and optionally filters `-LaunchId`; it never guesses an old
+Patch-to-application relation by clearing bits.
+
 ## Content events and their meaning
 
 | Event | Evidence required |

@@ -14,6 +14,7 @@ param(
     [string]$Serial,
     [string]$SessionId,
     [string]$TitleId,
+    [string]$LaunchId,
     [string]$OutputDirectory = (Join-Path (Get-Location) 'pine-diagnostics'),
     [switch]$ListDevices,
     [switch]$NonInteractive,
@@ -142,10 +143,17 @@ try {
         try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
         if (-not $event -or -not $event.PSObject.Properties['session_id'] -or $event.session_id -isnot [string] -or [string]::IsNullOrWhiteSpace($event.session_id)) { continue }
         if ($SessionId -and $event.session_id -cne $SessionId) { continue }
+        if ($LaunchId) {
+            $launch = $event.PSObject.Properties['launch_id']
+            if (-not $launch -or $launch.Value -isnot [string] -or $launch.Value -cne $LaunchId) { continue }
+        }
         if ($TitleId) {
             # New sink records carry the base launch context at top level. A DLC
             # event's fields.title_id is its own Data ID, not the base title.
-            $title = $event.PSObject.Properties['title_id']
+            $title = $event.PSObject.Properties['application_title_id']
+            if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value)) {
+                $title = $event.PSObject.Properties['title_id']
+            }
             if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value) -or $title.Value -ieq 'unknown') {
                 # Older records and observations before a base is known can
                 # still expose an event-specific content identity.

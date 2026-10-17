@@ -39,6 +39,26 @@ inline std::string ContentTitleId(std::uint64_t id) {
         result[i - 1] = digits[id & 0xF];
     return result;
 }
+enum class ApplicationIdentityKind { Unknown, Application, Patch };
+inline std::string ResolveApplicationTitle(std::string_view associated, std::string_view program,
+                                         std::string_view cnmt, std::string_view parent, ApplicationIdentityKind kind) {
+    auto valid = [](std::string_view value) {
+        return value.size() == 16 && value != "0000000000000000" && value.find_first_not_of("0123456789abcdefABCDEF") == std::string_view::npos;
+    };
+    // CNMT's typed parent is an application relation. A save owner is not one.
+    if (kind == ApplicationIdentityKind::Application && valid(cnmt)) return std::string(cnmt);
+    if (kind == ApplicationIdentityKind::Patch && valid(parent)) return std::string(parent);
+    if (valid(associated)) return std::string(associated);
+    if (valid(program)) return std::string(program);
+    return {};
+}
+inline std::string NcaContentId(std::string_view name) {
+    name = ContentBasename(name);
+    if (name.size() != 36 || name.substr(32) != ".nca" || name.substr(0, 32).find_first_not_of("0123456789abcdefABCDEF") != std::string_view::npos) return {};
+    std::string value(name.substr(0, 32));
+    for (auto &c : value) if (c >= 'A' && c <= 'F') c += 'a' - 'A';
+    return value;
+}
 }
 
 // Argument formatting is diagnostic work too: allocation failures must never alter emulation.

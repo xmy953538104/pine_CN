@@ -310,6 +310,23 @@ try {
     $unknownLines = @([IO.File]::ReadAllLines($unknownFiles[0].FullName, [Text.Encoding]::UTF8))
     Assert ($unknownLines.Count -eq 1 -and $unknownLines[0] -ceq $fixtureLines[10]) 'Fallback must preserve the native unknown-base content record only'
 
+    # Controlled schema inputs only: canonical application identity must beat a
+    # Patch CNMT legacy root, while the old root fallback remains supported.
+    $identityFixture = Join-Path $temp 'identity.jsonl'
+    [IO.File]::WriteAllLines($identityFixture, @(
+        '{"session_id":"identity","launch_id":"one","title_id":"0100751007ADA800","application_title_id":"0100751007ADA000","event":"DLC_DATA_READ","fields":{"title_id":"0100751007ADB001"}}',
+        '{"session_id":"identity","launch_id":"two","title_id":"0100751007ADA000","application_title_id":"0100751007ADA000","event":"OTHER_LAUNCH","fields":{}}',
+        '{"session_id":"identity","launch_id":"one","title_id":"0100751007ADA000","event":"LEGACY_ROOT","fields":{}}'
+    ), (New-Object System.Text.UTF8Encoding($false)))
+    $originalFixture = $env:PINE_FAKE_ADB_FIXTURE
+    try {
+        $env:PINE_FAKE_ADB_FIXTURE = $identityFixture
+        $identityOutput = Join-Path $temp 'identity'
+        & $collector -AdbPath $fake -Serial second-device -TitleId 0100751007ADA000 -LaunchId one -OutputDirectory $identityOutput -DurationSeconds 3 | Out-Null
+        $identityRows = @(Get-ChildItem $identityOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) | ForEach-Object { $_ | ConvertFrom-Json } })
+        Assert ($identityRows.Count -eq 2 -and $identityRows[0].event -eq 'DLC_DATA_READ' -and $identityRows[1].event -eq 'LEGACY_ROOT') 'Application/CNMT or launch filtering lost or misattributed records'
+    } finally { $env:PINE_FAKE_ADB_FIXTURE = $originalFixture }
+
     $env:PINE_FAKE_ADB_MODE = 'sessions'
     $grouped = Join-Path $temp 'grouped'
     & $collector -AdbPath $fake -NonInteractive -OutputDirectory $grouped -DurationSeconds 3 | Out-Null

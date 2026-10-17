@@ -17,6 +17,7 @@ struct Config {
     bool verbose{};
     // Empty selects all. Comma-separated category tokens; lifecycle always included.
     std::string categories;
+    std::string processRunId{};
 };
 struct Statistics { uint64_t accepted{}, dropped{}, written{}, diskErrors{}; };
 bool Enabled() noexcept;
@@ -34,6 +35,10 @@ void Emit(std::string_view category, std::string_view event,
 // Ordinary threads only. Current-game identity is retained while diagnostics are
 // disabled and across Start/Stop; subsequent records inherit it. Empty is unknown.
 void SetTitleId(std::string_view titleId) noexcept;
+void SetContentIdentity(std::string_view applicationId, std::string_view programId,
+                        std::string_view cnmtId, std::string_view programContentId = {}) noexcept;
+std::string ApplicationTitleId();
+void SetLaunchId(std::string_view launchId, bool newLaunch = false) noexcept;
 // True game boundaries only: clear at launch and after the final session drains.
 void ClearTitleId() noexcept;
 void Stage(std::string_view stage) noexcept;

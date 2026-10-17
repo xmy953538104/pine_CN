@@ -324,6 +324,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             runningGeneration = token
             if (!generations.session(token) {
                 emu.skyline.diagnostics.Diagnostics.apply(this)
+                emu.skyline.diagnostics.Diagnostics.beginLaunch(diagnosticTitle)
                 emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED", diagnosticTitle) { "phase=ui_association execution_confirmed=false format=$diagnosticFormat" }
                 emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED", diagnosticTitle) { "phase=ui_association execution_confirmed=false update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
             }) {

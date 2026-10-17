@@ -24,7 +24,7 @@ using Clock = std::chrono::steady_clock;
 constexpr uint64_t ProducersClosed = uint64_t{1} << 63;
 struct Record {
     uint64_t sequence{}, wall{}, mono{}, dropped{};
-    std::string category, event, level, thread, stage, titleId;
+    std::string category, event, level, thread, stage, titleId, programId, cnmtId, programContentId, launchId;
     std::vector<std::pair<std::string, std::string>> fields;
 };
 struct Sink {
@@ -40,6 +40,7 @@ struct Sink {
     std::string stage;
     // Game identity outlives a logging session; only true game boundaries clear it.
     std::string activeTitleId;
+    std::string activeProgramId, activeCnmtId, activeProgramContentId, activeLaunchId;
     bool stopping{};
     std::thread worker;
     ~Sink();
@@ -85,7 +86,10 @@ std::string Serialize(const Record &r, const Config &c) {
         + ",\"wall_clock_ms\":" + std::to_string(r.wall) + ",\"monotonic_us\":" + std::to_string(r.mono)
         + ",\"dropped_count\":" + std::to_string(r.dropped) + ",\"thread\":" + Quote(r.thread)
         + ",\"category\":" + Quote(r.category) + ",\"event\":" + Quote(r.event) + ",\"level\":" + Quote(r.level)
-        + ",\"last_stage\":" + Quote(r.stage) + ",\"title_id\":" + Quote(r.titleId) + ",\"fields\":{";
+        + ",\"last_stage\":" + Quote(r.stage) + ",\"title_id\":" + Quote(r.titleId)
+        + ",\"application_title_id\":" + Quote(r.titleId) + ",\"program_id\":" + Quote(r.programId)
+        + ",\"cnmt_title_id\":" + Quote(r.cnmtId) + ",\"program_nca_id\":" + Quote(r.programContentId)
+        + ",\"launch_id\":" + Quote(r.launchId) + ",\"process_run_id\":" + Quote(c.processRunId) + ",\"fields\":{";
     bool first = true;
     for (const auto &[key, value] : r.fields) { if (!first) out += ','; first = false; out += Quote(key) + ':' + Quote(value); }
     return out + "}}\n";
@@ -158,7 +162,9 @@ void Run(Sink &s) noexcept {
         summary.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
         summary.dropped = s.dropped;
         summary.category = "lifecycle"; summary.event = "SESSION_SUMMARY"; summary.level = "INFO"; summary.thread = "diagnostic-writer";
-        { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.titleId = s.activeTitleId; }
+        { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.titleId = s.activeTitleId;
+          summary.programId = s.activeProgramId; summary.cnmtId = s.activeCnmtId;
+          summary.programContentId = s.activeProgramContentId; summary.launchId = s.activeLaunchId; }
         summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())}, {"disk_errors", std::to_string(s.diskErrors.load())}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
@@ -206,6 +212,7 @@ void Enqueue(Sink &s, std::string_view category, std::string_view event,
         if (s.queue.size() >= s.config.queueCapacity) { ++s.dropped; return; }
         Record r;
         r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16); r.stage = s.stage; r.titleId = s.activeTitleId;
+        r.programId = s.activeProgramId; r.cnmtId = s.activeCnmtId; r.programContentId = s.activeProgramContentId; r.launchId = s.activeLaunchId;
         char name[16]{}; pthread_getname_np(pthread_self(), name, sizeof(name));
         std::ostringstream thread; thread << name << ':' << std::this_thread::get_id(); r.thread = Sanitize(thread.str(), 128);
         r.wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -328,7 +335,7 @@ bool Start(const Config &config) noexcept {
         std::lock_guard life(s.lifecycle); StopLocked(s);
         if (config.directory.empty() || config.sessionId.empty() || !config.queueCapacity || config.queueCapacity > 65536 || config.maxFiles < 1 || config.maxFiles > 16 || config.maxFileBytes < 65536) return false;
         try {
-            { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.queue.clear(); s.stage.clear(); s.stopping = false; }
+            { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.clear(); s.stage.clear(); s.stopping = false; }
             s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0; s.verbose = config.verbose;
             s.producers.store(0, std::memory_order_release);
             s.worker = std::thread([&s] { Run(s); });
@@ -372,7 +379,22 @@ void ClearTitleId() noexcept {
         auto &s = Get();
         std::lock_guard lock(s.mutex);
         s.activeTitleId.clear();
+        s.activeProgramId.clear(); s.activeCnmtId.clear(); s.activeProgramContentId.clear();
     } catch (...) {}
+}
+void SetContentIdentity(std::string_view applicationId, std::string_view programId,
+                        std::string_view cnmtId, std::string_view programContentId) noexcept {
+    try {
+        auto app = Sanitize(applicationId, 32), program = Sanitize(programId, 32);
+        auto cnmt = Sanitize(cnmtId, 32), content = Sanitize(programContentId, 64);
+        auto &s = Get(); std::lock_guard lock(s.mutex);
+        s.activeTitleId = std::move(app); s.activeProgramId = std::move(program);
+        s.activeCnmtId = std::move(cnmt); s.activeProgramContentId = std::move(content);
+    } catch (...) {}
+}
+std::string ApplicationTitleId() { auto &s = Get(); std::lock_guard lock(s.mutex); return s.activeTitleId; }
+void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
+    try { auto value = Sanitize(launchId, 128); auto &s = Get(); std::lock_guard lock(s.mutex); s.activeLaunchId = std::move(value); if (newLaunch) s.stage.clear(); } catch (...) {}
 }
 void Stage(std::string_view stage) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return;

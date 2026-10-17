@@ -29,18 +29,23 @@ namespace skyline::loader {
         ExtractTickets(nsp, keyStore);
 
         auto root{nsp->OpenDirectory("", {false, true})};
+        NspSelectionNames selectedNames;
         for (const auto &entry : root->Read()) {
             if (entry.name.substr(entry.name.find_last_of('.') + 1) != "nca")
                 continue;
 
             LoadNspContent<loader_exception>(entry.name, [&] { return vfs::NCA(nsp->OpenFile(entry.name), keyStore); },
-                programNca, controlNca, metaNca, publicNca);
+                programNca, controlNca, metaNca, publicNca, &selectedNames);
         }
 
+        const std::array names{&selectedNames.program, &selectedNames.control, &selectedNames.meta, &selectedNames.publicData};
+        size_t selectedIndex{};
         for (const auto *selected : {&programNca, &controlNca, &metaNca, &publicNca}) {
             if (*selected)
-                PINE_DIAG_CONTENT("NCA_FINAL_SELECTION", {"nca_type", fmt::format("{}", static_cast<int>((*selected)->contentType))}, {"title_id", fmt::format("{:016X}", (*selected)->header.titleId)});
+                PINE_DIAG_CONTENT("NCA_FINAL_SELECTION", {"nca_type", fmt::format("{}", static_cast<int>((*selected)->contentType))}, {"title_id", fmt::format("{:016X}", (*selected)->header.titleId)}, {"nca_content_id", *names[selectedIndex]}, {"content_id_source", "nsp_entry_stem"});
+            ++selectedIndex;
         }
+        diagnosticProgramContentId = std::move(selectedNames.program);
         if (programNca)
             romFs = programNca->romFs;
 

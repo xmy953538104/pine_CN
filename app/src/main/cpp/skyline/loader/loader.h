@@ -99,6 +99,7 @@ namespace skyline::loader {
         std::optional<vfs::NACP> nacp;
         std::optional<vfs::CNMT> cnmt;
         std::optional<vfs::NCA> programNca; //!< The main program NCA within the NSP
+        std::string diagnosticProgramContentId; //!< NSP entry identifier only, not a verified full-file hash
         std::optional<vfs::NCA> controlNca; //!< The main control NCA within the NSP
         std::optional<vfs::NCA> publicNca;
         std::shared_ptr<vfs::Backing> romFs;

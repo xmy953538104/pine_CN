@@ -13,12 +13,15 @@ object Diagnostics {
     private var signature = ""
     @Volatile private var sessionId = ""
     private var exitHistoryQueried = false
+    private val launch = LaunchIdentity()
+    private val processRunId: String by lazy { UUID.randomUUID().toString() }
     val processScope: String get() = if (Application.getProcessName().endsWith(":emulationProcess")) "emulation" else "main"
     fun preferences(context: Context) = context.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
     fun rootDirectory(context: Context) = File(context.filesDir.canonicalFile, "diagnostics")
     fun directory(context: Context) = File(rootDirectory(context), processScope)
     fun exportDirectory(context: Context) = File(context.cacheDir.canonicalFile, "diagnostics-exports")
-    @JvmStatic external fun configureNative(path: String, enabled: Boolean, verbose: Boolean, maxFiles: Int, session: String, categories: String): Boolean
+    @JvmStatic external fun configureNative(path: String, enabled: Boolean, verbose: Boolean, maxFiles: Int, session: String, categories: String, processRunId: String): Boolean
+    @JvmStatic external fun setLaunchNative(launchId: String, applicationTitleId: String, newLaunch: Boolean)
     @JvmStatic external fun statusNative(): LongArray
     @JvmStatic external fun flushNative(): Boolean
     @JvmStatic external fun stopNative()
@@ -30,7 +33,10 @@ object Diagnostics {
         val nextSignature = "$categories:$enabled:${prefs.getBoolean("verbose", false)}:${prefs.getInt("files", 4)}"
         if (signature == nextSignature && (!enabled || status().enabled)) return
         active = false
+        val launchObservedLate = enabled && launch.active && launch.id.isEmpty()
         if (enabled) {
+            val launchId = launch.observe(true)
+            runCatching { setLaunchNative(launchId, "", false) }
             sessionId = UUID.randomUUID().toString()
             // Each process owns one directory. Never share a rotating writer across processes.
             runCatching {
@@ -42,12 +48,13 @@ object Diagnostics {
             }
         }
         active = runCatching {
-            configureNative(if (enabled) directory(context).absolutePath else "", enabled, prefs.getBoolean("verbose", false), prefs.getInt("files", 4), sessionId, categories)
+            configureNative(if (enabled) directory(context).absolutePath else "", enabled, prefs.getBoolean("verbose", false), prefs.getInt("files", 4), sessionId, categories, if (enabled) processRunId else "")
         }.getOrDefault(false)
         signature = if (enabled && !active) "" else nextSignature
         if (active) event("lifecycle", "SESSION_METADATA") {
-            "process=$processScope session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT}"
+            "process=$processScope process_run_id=$processRunId session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT} launch_start_observed=${launch.startObserved}"
         }
+        if (active && launchObservedLate) event("lifecycle", "LAUNCH_CONTEXT_OBSERVED") { "start_observed=false" }
         if (active && !exitHistoryQueried) {
             exitHistoryQueried = true
             runCatching { PreviousProcessExit.schedule(context.applicationContext, sessionId) }
@@ -59,6 +66,11 @@ object Diagnostics {
     fun event(category: String, event: String, titleId: String? = null, detail: () -> String) {
         if (active) runCatching { emitNative(category, event, DiagnosticExport.redact(detail().take(4096)), normalizedTitleId(titleId)) }
     }
+    @Synchronized fun beginLaunch(applicationTitleId: String?) {
+        val id = launch.begin(active)
+        runCatching { setLaunchNative(id, normalizedTitleId(applicationTitleId), true) }
+        event("lifecycle", "LAUNCH_BEGIN", applicationTitleId) { "start_observed=true" }
+    }
     @Synchronized internal fun eventForSession(expected: String, category: String, event: String, detail: () -> String) {
         if (active && sessionId == expected) event(category, event, detail = detail)
     }
@@ -66,6 +78,7 @@ object Diagnostics {
         runCatching { stopNative() }
         active = false
         signature = ""
+        launch.end()
     }
     fun installExceptionObserver() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()

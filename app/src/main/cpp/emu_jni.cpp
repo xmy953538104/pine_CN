@@ -191,6 +191,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     skyline::diagnostics::Stage("EMULATION_ENDED");
     skyline::diagnostics::Stop();
     skyline::diagnostics::ClearTitleId();
+    skyline::diagnostics::SetLaunchId({});
     skyline::AsyncLogger::Finalize(true);
     close(romFd);
 
@@ -339,7 +340,7 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_EmulationActivity_setAnisotro
 
 // Diagnostics lifecycle calls run only on normal Java threads, never signal handlers.
 extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_configureNative(
-    JNIEnv *env, jclass, jstring path, jboolean enabled, jboolean verbose, jint maxFiles, jstring session, jstring categories) {
+    JNIEnv *env, jclass, jstring path, jboolean enabled, jboolean verbose, jint maxFiles, jstring session, jstring categories, jstring processRunId) {
     try {
     skyline::diagnostics::Stop();
     if (!enabled) return false;
@@ -348,10 +349,23 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_c
     config.sessionId = ConvertDiagnosticJString(env, session);
     config.verbose = verbose;
     config.categories = ConvertDiagnosticJString(env, categories);
+    config.processRunId = ConvertDiagnosticJString(env, processRunId);
     config.maxFiles = static_cast<size_t>(std::clamp(maxFiles, 2, 8));
     if (env->ExceptionCheck()) return false;
     return skyline::diagnostics::Start(config);
     } catch (...) { return false; }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_setLaunchNative(
+    JNIEnv *env, jclass, jstring launchId, jstring applicationTitleId, jboolean newLaunch) {
+    try {
+        const auto launch = ConvertDiagnosticJString(env, launchId);
+        const auto title = ConvertDiagnosticJString(env, applicationTitleId);
+        if (env->ExceptionCheck()) return;
+        if (newLaunch) skyline::diagnostics::ClearTitleId();
+        skyline::diagnostics::SetLaunchId(launch, newLaunch);
+        if (newLaunch) skyline::diagnostics::SetTitleId(title);
+    } catch (...) {}
 }
 
 extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitNative(

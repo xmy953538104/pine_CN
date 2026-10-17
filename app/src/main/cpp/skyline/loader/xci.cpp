@@ -2,6 +2,7 @@
 // Copyright © 2021 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <common.h>
+#include <diagnostics/content.h>
 #include <kernel/types/KProcess.h>
 #include <vfs/region_backing.h>
 #include "nca.h"
@@ -38,8 +39,10 @@ namespace skyline::loader {
                 try {
                     auto nca{vfs::NCA(secure->OpenFile(entry.name), keyStore, true)};
 
-                    if (nca.contentType == vfs::NCAContentType::Program && nca.romFs != nullptr && nca.exeFs != nullptr)
+                    if (nca.contentType == vfs::NCAContentType::Program && nca.romFs != nullptr && nca.exeFs != nullptr) {
                         programNca = std::move(nca);
+                        try { diagnosticProgramContentId = diagnostics::NcaContentId(entry.name); } catch (...) { diagnosticProgramContentId.clear(); }
+                    }
                     else if (nca.contentType == vfs::NCAContentType::Control && nca.romFs != nullptr)
                         controlNca = std::move(nca);
                     else if (nca.contentType == vfs::NCAContentType::Meta)

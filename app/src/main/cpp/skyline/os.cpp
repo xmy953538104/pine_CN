@@ -60,20 +60,31 @@ namespace skyline::kernel {
         // Remember the selected base even when logging is off so live enabling
         // can correlate the running game without loading its metadata again.
         try {
-            if (state.loader->cnmt)
-                diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->cnmt->header.id));
-            else if (state.loader->programNca)
-                diagnostics::SetTitleId(diagnostics::ContentTitleId(state.loader->programNca->header.titleId));
+            const auto program = state.loader->programNca ? diagnostics::ContentTitleId(state.loader->programNca->header.titleId) : std::string{};
+            const auto cnmt = state.loader->cnmt ? state.loader->cnmt->GetTitleId() : std::string{};
+            auto kind = diagnostics::ApplicationIdentityKind::Unknown;
+            std::string parent;
+            if (state.loader->cnmt) {
+                if (state.loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Application) kind = diagnostics::ApplicationIdentityKind::Application;
+                if (state.loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch) {
+                    kind = diagnostics::ApplicationIdentityKind::Patch;
+                    parent = state.loader->cnmt->GetParentTitleId();
+                }
+            }
+            diagnostics::SetContentIdentity(diagnostics::ResolveApplicationTitle(diagnostics::ApplicationTitleId(), program, cnmt, parent, kind),
+                program, cnmt, state.loader->diagnosticProgramContentId);
         } catch (...) {}
         diagnostics::Stage("base_loader_ready");
-        PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"},
+        PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"program_id", state.loader->programNca ? diagnostics::ContentTitleId(state.loader->programNca->header.titleId) : "unknown"},
+            {"program_nca_id", state.loader->diagnosticProgramContentId}, {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"},
             {"cnmt_version", state.loader->cnmt ? std::to_string(state.loader->cnmt->header.version) : "unknown"},
             {"display_version", state.loader->nacp ? state.loader->nacp->GetApplicationVersion() : "unknown"});
 
         if (updateFd > 0) {
             state.updateLoader = loadContent(updateFd, "update");
             diagnostics::Stage("update_loader_ready");
-            PINE_DIAG_CONTENT("PATCH_SELECTED", {"source", "update"}, {"selection", "provided_fd_gt_zero"}, {"rom_format_source", "base"},
+            PINE_DIAG_CONTENT("PATCH_SELECTED", {"source", "update"}, {"program_id", state.updateLoader->programNca ? diagnostics::ContentTitleId(state.updateLoader->programNca->header.titleId) : "unknown"},
+                {"program_nca_id", state.updateLoader->diagnosticProgramContentId}, {"selection", "provided_fd_gt_zero"}, {"rom_format_source", "base"},
                 {"title_id", state.updateLoader->cnmt ? state.updateLoader->cnmt->GetTitleId() : "unknown"},
                 {"parent_title_id", state.updateLoader->cnmt && state.updateLoader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch ? state.updateLoader->cnmt->GetParentTitleId() : "unknown"},
                 {"cnmt_version", state.updateLoader->cnmt ? std::to_string(state.updateLoader->cnmt->header.version) : "unknown"},

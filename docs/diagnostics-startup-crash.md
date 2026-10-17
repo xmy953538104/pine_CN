@@ -12,6 +12,11 @@ opener also rejects missing/revoked/provider-failed Base/Update/DLC descriptors,
 records `CONTENT_OPEN_FAILED`, closes partial descriptor sets, and returns from
 the Activity without starting native emulation or killing the application.
 This SAF failure is independent of the GPU allocation assertion.
+Both AppItem launches and ACTION_VIEW metadata fallback reject unavailable
+content before a new native launch. Missing/empty display-name queries and null
+descriptors are explicit file failures. A rejected early Activity also skips
+emulation-only pause/resume/PiP/clock cleanup. URI replacement is validated again
+before launching; its associations are rebuilt without retaining old DLC URIs.
 
 ## Execution order
 

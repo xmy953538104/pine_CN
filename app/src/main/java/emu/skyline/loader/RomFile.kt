@@ -46,12 +46,10 @@ enum class RomType(val value: Int) {
  * @param contentResolver The instance of ContentResolver associated with the current context
  */
 fun getRomFormat(uri : Uri, contentResolver : ContentResolver) : RomFormat {
-    var uriStr = ""
-    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+    val uriStr = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
         val nameIndex : Int = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-        cursor.moveToFirst()
-        uriStr = cursor.getString(nameIndex)
-    }
+        if (nameIndex < 0 || !cursor.moveToFirst() || cursor.isNull(nameIndex)) null else cursor.getString(nameIndex)
+    } ?: throw java.io.FileNotFoundException("Provider returned no content display name")
     return RomFormat.valueOf(uriStr.substring(uriStr.lastIndexOf(".") + 1).uppercase(Locale.ROOT))
 }
 
@@ -201,7 +199,8 @@ internal class RomFile(context : Context, format : RomFormat, uri : Uri, systemL
         get() = result == LoaderResult.Success
 
     init {
-        context.contentResolver.openFileDescriptor(uri, "r")!!.use {
+        (context.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw java.io.FileNotFoundException("Provider returned no content descriptor")).use {
             result = LoaderResult.get(populate(format.ordinal, it.fd, "${context.filesDir.canonicalPath}/keys/", systemLanguage))
         }
 

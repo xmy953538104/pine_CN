@@ -312,12 +312,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             }
         } catch (error: emu.skyline.emulation.ContentOpenFailure) {
             generations.destroy(token)
-            emu.skyline.diagnostics.Diagnostics.event("exception", "CONTENT_OPEN_FAILED", diagnosticTitle) {
-                "source=${error.source} index=${error.index} reason=${error.reason} " +
-                    "exception_type=${error.original.javaClass.name} cause_type=${error.original.cause?.javaClass?.name ?: "none"}"
-            }
-            Toast.makeText(this, R.string.content_open_failed, Toast.LENGTH_LONG).show()
-            finish()
+            rejectContentOpen(error, diagnosticTitle)
             return // No native launch, process kill, or use of a partial descriptor set.
         }
         val romFd = contentFiles.base
@@ -348,34 +343,65 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
     /**
      * Populates the [item] member with data from the intent
      */
-    private fun populateAppItem() {
+    private fun rejectContentOpen(error: emu.skyline.emulation.ContentOpenFailure, titleId: String? = null) {
+        emu.skyline.diagnostics.Diagnostics.event("exception", "CONTENT_OPEN_FAILED", titleId) {
+            "source=${error.source} index=${error.index} reason=${error.reason} " +
+                "exception_type=${error.original.javaClass.name} cause_type=${error.original.cause?.javaClass?.name ?: "none"}"
+        }
+        Toast.makeText(this, R.string.content_open_failed, Toast.LENGTH_LONG).show()
+        finish()
+    }
+
+    private fun populateAppItem(): Boolean {
         val intentItem = intent.serializable(AppItemTag) as AppItem?
         if (intentItem != null) {
             item = intentItem
             updateUri = item.getEnabledUpdate()?.uri ?: Uri.EMPTY
             dlcUris = item.getEnabledDlcs().map { it.uri }.toCollection(ArrayList())
-            return
+            return true
         }
 
         // The intent did not contain an app item, fall back to the data URI
-        val uri = intent.data!!
-        val romFormat = getRomFormat(uri, contentResolver)
-        val romFile = RomFile(this, romFormat, uri, EmulationSettings.global.systemLanguage)
+        var metadataTitleId: String? = null
+        try {
+            val uri = intent.data ?: throw java.io.FileNotFoundException("Launch intent has no content URI")
+            val romFormat = getRomFormat(uri, contentResolver)
+            val romFile = RomFile(this, romFormat, uri, EmulationSettings.global.systemLanguage)
+            if (!romFile.valid) {
+                emu.skyline.diagnostics.Diagnostics.event("exception", "CONTENT_METADATA_FAILED") {
+                    "entry=uri_fallback loader_result=${romFile.result}"
+                }
+                Toast.makeText(this, AppItem(romFile.appEntry, emptyList(), emptyList()).loaderResultString(this), Toast.LENGTH_LONG).show()
+                finish()
+                return false
+            }
 
-        item = AppItem(romFile.takeIf { it.valid }!!.appEntry, emptyList(), emptyList())
+            item = AppItem(romFile.appEntry, emptyList(), emptyList())
+            metadataTitleId = item.titleId
 
-        val contents = ContentsHelper(this@EmulationActivity)
+            val contents = ContentsHelper(this@EmulationActivity)
 
-        val selection = emu.skyline.data.selectUriContent(item.titleId, contents.loadContents())
-        updateUri = selection.updateUri
-        dlcUris.addAll(selection.dlcUris)
-        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED", item.titleId) { "phase=ui_association execution_confirmed=false entry=uri_fallback policy=last_match selected_title_id=${selection.updateTitleId} selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
+            val selection = emu.skyline.data.selectUriContent(item.titleId, contents.loadContents())
+            updateUri = selection.updateUri
+            dlcUris = selection.dlcUris.toCollection(ArrayList())
+            emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED", item.titleId) { "phase=ui_association execution_confirmed=false entry=uri_fallback policy=last_match selected_title_id=${selection.updateTitleId} selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
+            return true
+        } catch (error: Exception) {
+            when (error) {
+                is java.io.IOException, is SecurityException, is IllegalArgumentException -> {
+                    rejectContentOpen(emu.skyline.emulation.ContentOpenFailure("uri_metadata", 0, error),
+                        metadataTitleId)
+                    return false
+                }
+                else -> throw error
+            }
+        }
     }
 
     @SuppressLint("SetTextI18n", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState : Bundle?) {
         super.onCreate(savedInstanceState)
-        populateAppItem()
+        if (!populateAppItem()) return
         emulationSettings = EmulationSettings.forEmulation(item.titleId ?: item.key())
 
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -653,6 +679,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
     override fun onPause() {
         super.onPause()
+        if (!::emulationSettings.isInitialized) return
 
         if (emulationSettings.forceMaxGpuClocks)
             GpuDriverHelper.forceMaxGpuClocks(false)
@@ -674,6 +701,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
     override fun onStart() {
         super.onStart()
+        if (!::emulationSettings.isInitialized) return
 
         onBackPressedDispatcher.addCallback(object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -688,6 +716,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
     override fun onResume() {
         super.onResume()
+        if (!::emulationSettings.isInitialized) return
 
         resumeEmulator()
 
@@ -936,11 +965,14 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         super.onNewIntent(intent!!)
         if (getIntent().data != intent.data) {
             setIntent(intent)
+            if (!populateAppItem()) return
+            emulationSettings = EmulationSettings.forEmulation(item.titleId ?: item.key())
             executeApplication(intent)
         }
     }
 
     override fun onUserLeaveHint() {
+        if (!::pictureInPictureParamsBuilder.isInitialized) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !isInPictureInPictureMode)
             enterPictureInPictureMode(pictureInPictureParamsBuilder.build())
     }
@@ -953,10 +985,12 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         super.onDestroy()
 
         // Stop forcing 60Hz on exit to allow the skyline UI to run at high refresh rates
-        getSystemService<DisplayManager>()?.unregisterDisplayListener(this)
-        force60HzRefreshRate(false)
-        if (emulationSettings.forceMaxGpuClocks)
-            GpuDriverHelper.forceMaxGpuClocks(false)
+        if (::emulationSettings.isInitialized) {
+            getSystemService<DisplayManager>()?.unregisterDisplayListener(this)
+            force60HzRefreshRate(false)
+            if (emulationSettings.forceMaxGpuClocks)
+                GpuDriverHelper.forceMaxGpuClocks(false)
+        }
 
         if (stopCurrentGame && generations.ownsNativeGame(token)) stopEmulationForDestruction(false)
         vibrators.forEach { (_, vibrator) -> vibrator.cancel() }

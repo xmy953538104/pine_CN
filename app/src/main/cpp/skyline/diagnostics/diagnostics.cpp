@@ -290,11 +290,11 @@ bool CategorySelected(std::string_view selected, std::string_view category) {
         selected.remove_prefix(end + 1);
     }
 }
-void Enqueue(Sink &s, std::string_view category, std::string_view event,
-             std::initializer_list<std::pair<std::string_view, std::string_view>> fields,
+bool Enqueue(Sink &s, std::string_view category, std::string_view event,
+             std::span<const std::pair<std::string_view, std::string_view>> fields,
              std::string_view level, const std::string_view *stage = nullptr) noexcept {
     Producer producer(s);
-    if (!producer) return;
+    if (!producer) return false;
     const bool critical = CriticalEvent(category, event, level);
     auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
     try {
@@ -303,10 +303,10 @@ void Enqueue(Sink &s, std::string_view category, std::string_view event,
         const auto nextStage = stage ? Sanitize(*stage, 128) : std::string{};
         {
             std::unique_lock lock(s.mutex, std::try_to_lock);
-            if (!lock.owns_lock()) { drop(s.droppedContention); return; }
-            if (!IsEnabled(s) || s.stopping || !CategorySelected(s.config.categories, category)) return;
+            if (!lock.owns_lock()) { drop(s.droppedContention); return false; }
+            if (!IsEnabled(s) || s.stopping || !CategorySelected(s.config.categories, category)) return false;
             if (stage) s.stage = nextStage;
-            if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return; }
+            if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return false; }
             r.stage = s.stage; r.titleId = s.activeTitleId; r.programId = s.activeProgramId;
             r.cnmtId = s.activeCnmtId; r.programContentId = s.activeProgramContentId; r.launchId = s.activeLaunchId;
         }
@@ -318,12 +318,12 @@ void Enqueue(Sink &s, std::string_view category, std::string_view event,
         size_t budget = 4096;
         for (auto &[key, value] : fields) { if (r.fields.size() == 16 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
         std::unique_lock lock(s.mutex, std::try_to_lock);
-        if (!lock.owns_lock()) { drop(s.droppedContention); return; }
-        if (!IsEnabled(s) || s.stopping) return;
-        if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return; }
+        if (!lock.owns_lock()) { drop(s.droppedContention); return false; }
+        if (!IsEnabled(s) || s.stopping) return false;
+        if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return false; }
         r.sequence = s.accepted.load() + 1; CopyDropCounts(r, s);
-        s.queue.push_back(std::move(r)); ++s.accepted; lock.unlock(); s.wake.notify_one();
-    } catch (...) { drop(s.droppedAllocation); }
+        s.queue.push_back(std::move(r)); ++s.accepted; lock.unlock(); s.wake.notify_one(); return true;
+    } catch (...) { drop(s.droppedAllocation); return false; }
 }
 }
 std::string Sanitize(std::string_view input, size_t limit) {
@@ -468,7 +468,12 @@ bool Flush(uint32_t timeoutMilliseconds) noexcept {
 }
 void Emit(std::string_view category, std::string_view event, std::initializer_list<std::pair<std::string_view, std::string_view>> fields, std::string_view level) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return;
-    Enqueue(s, category, event, fields, level);
+    Enqueue(s, category, event, {fields.begin(), fields.size()}, level);
+}
+bool EmitFields(std::string_view category, std::string_view event,
+                std::span<const std::pair<std::string_view, std::string_view>> fields, std::string_view level) noexcept {
+    auto &s = Get(); if (!IsEnabled(s)) return false;
+    return Enqueue(s, category, event, fields, level);
 }
 void SetTitleId(std::string_view titleId) noexcept {
     try {
@@ -502,7 +507,8 @@ void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
 }
 void Stage(std::string_view stage) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return;
-    Enqueue(s, "lifecycle", "STAGE_COMPLETED", {{"stage", stage}}, "INFO", &stage);
+    const std::pair<std::string_view, std::string_view> fields[]{ {"stage", stage} };
+    Enqueue(s, "lifecycle", "STAGE_COMPLETED", fields, "INFO", &stage);
 }
 std::string LastStage() { auto &s = Get(); std::lock_guard lock(s.mutex); return s.stage; }
 Statistics Stats() noexcept { auto &s = Get(); return {s.accepted.load(), s.dropped.load(), s.written.load(), s.diskErrors.load(),

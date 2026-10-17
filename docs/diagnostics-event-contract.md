@@ -253,3 +253,44 @@ sequence but counts state separately, without replaying errors or crashes.
 Snapshot failures disable only that optional writer and increment
 `snapshot_errors`; no producer or signal handler writes files. There is no
 lossless persistence or filesystem durability guarantee across sudden death.
+
+## Process association and historical native traces
+
+On API 30+, an enabled process coalesces anonymous state into the platform's
+`ActivityManager.setProcessStateSummary`: 84 bytes containing process/launch/session
+UUIDs, source commit, known application Title, scope and observation flags. The
+single daemon issues at most one call per second; a blocked Binder call keeps only
+one pending replacement. No sensitive text, document location, PID or credentials
+are encoded. Default-off startup creates no publisher thread or Binder call.
+Updates are asynchronous and best effort: a rapid crash can leave an older or
+absent association. Disabling requests clearing, without waiting on the UI.
+
+Historical own-package/UID exits carry a stable anonymous `exit_record_id`,
+`historical_record=true` and explicit `association_status`. Known previous IDs
+are in `previous_*` fields; the root session/launch still belongs to the importer.
+A private try-locked 128-entry store deduplicates successful written imports across
+processes/restarts. Failed/busy persistence is reported and can allow re-import;
+export also deduplicates known exit IDs across logging sessions. Older records
+without IDs cannot be safely merged. Historical crash observations are counted
+separately from current-session error records; neither count is a complete crash
+count when logs are missing.
+
+On API 31+, at most one most-recent own native exit per process is queried for a
+trace. The platform may return null because its shared circular buffer was
+reused. `PREVIOUS_NATIVE_TRACE` explicitly reports null, unsupported, read limit,
+timeout, ownership mismatch, malformed input or a safe summary. The observer waits
+at most 1500 ms for that task, reads at most 256 KiB, and parses a fixed-depth AOSP
+protobuf subset with an operation budget. An uninterruptible platform task can
+remain as one daemon until process death; the UI and session shutdown never join it.
+
+Only fault-thread module basenames from a fixed list, relative PCs and validated
+hex Build IDs are kept (up to 16 frames and 1700 bytes). Build IDs remain observed,
+not authenticated module provenance. Known abort text can map to an enum such as
+`ART_GC_INVALID_REFERENCE`, without exporting the text. Raw input is never saved
+or included in ZIPs: no registers, absolute PCs, memory/stack dumps, maps, FDs,
+command lines, fingerprint, user paths or raw abort message. These summaries do
+not identify the corrupting writer and do not change signal/JNI/VMM handling.
+No new permission, protobuf dependency, root setting or system security change is
+required. The [Android API](https://developer.android.com/reference/android/app/ApplicationExitInfo#getTraceInputStream())
+and [AOSP schema](https://android.googlesource.com/platform/system/core/+/refs/heads/master/debuggerd/proto/tombstone.proto)
+define the supported source; unavailable trace data is never replaced by invented frames.

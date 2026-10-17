@@ -3,6 +3,7 @@
 
 #include <string>
 #include <algorithm>
+#include <array>
 #include "skyline/diagnostics/diagnostics.h"
 #include "skyline/diagnostics/utf16.h"
 #include "skyline/diagnostics/initialization.h"
@@ -380,6 +381,35 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitN
         skyline::diagnostics::Emit(categoryText, eventText, {{"detail", detailText}, {"title_id", titleText}},
                                    eventText == "ANDROID_UNCAUGHT_EXCEPTION" || eventText == "PREVIOUS_PROCESS_CRASH" || eventText == "CONTENT_OPEN_FAILED" || eventText == "CONTENT_METADATA_FAILED" ? "ERROR" : "INFO");
     } catch (...) { /* Diagnostics must never change guest error propagation. */ }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitFieldsNative(
+    JNIEnv *env, jclass, jstring category, jstring event, jstring level, jobjectArray keys, jobjectArray values) {
+    try {
+        if (!skyline::diagnostics::Enabled() || !keys || !values) return false;
+        const auto count = env->GetArrayLength(keys);
+        if (env->ExceptionCheck() || count > 16 || env->GetArrayLength(values) != count || env->ExceptionCheck()) return false;
+        const auto categoryText = ConvertDiagnosticJString(env, category);
+        const auto eventText = ConvertDiagnosticJString(env, event);
+        const auto levelText = ConvertDiagnosticJString(env, level);
+        std::array<std::string, 16> ownedKeys, ownedValues;
+        std::array<std::pair<std::string_view, std::string_view>, 16> fields;
+        for (jsize i = 0; i < count; ++i) {
+            const auto index = static_cast<size_t>(i);
+            auto key = static_cast<jstring>(env->GetObjectArrayElement(keys, i));
+            if (env->ExceptionCheck()) return false;
+            auto value = static_cast<jstring>(env->GetObjectArrayElement(values, i));
+            if (env->ExceptionCheck()) { if (key) env->DeleteLocalRef(key); return false; }
+            ownedKeys[index] = ConvertDiagnosticJString(env, key);
+            ownedValues[index] = ConvertDiagnosticJString(env, value);
+            if (key) env->DeleteLocalRef(key);
+            if (value) env->DeleteLocalRef(value);
+            if (env->ExceptionCheck()) return false;
+            fields[index] = {ownedKeys[index], ownedValues[index]};
+        }
+        if (env->ExceptionCheck()) return false;
+        return skyline::diagnostics::EmitFields(categoryText, eventText, {fields.data(), static_cast<size_t>(count)}, levelText);
+    } catch (...) { return false; }
 }
 
 extern "C" JNIEXPORT jlongArray JNICALL Java_emu_skyline_diagnostics_Diagnostics_statusNative(JNIEnv *env, jclass) {

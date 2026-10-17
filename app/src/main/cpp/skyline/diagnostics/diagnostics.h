@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
+#include <span>
 #include <utility>
 
 namespace skyline::diagnostics {
@@ -35,6 +36,10 @@ bool Flush(uint32_t timeoutMilliseconds = 250) noexcept;
 void Emit(std::string_view category, std::string_view event,
           std::initializer_list<std::pair<std::string_view, std::string_view>> fields = {},
           std::string_view level = "INFO") noexcept;
+// Dynamic fields use the same bounded copied admission path; false means not accepted.
+bool EmitFields(std::string_view category, std::string_view event,
+                std::span<const std::pair<std::string_view, std::string_view>> fields,
+                std::string_view level = "INFO") noexcept;
 // Ordinary threads only. Current-game identity is retained while diagnostics are
 // disabled and across Start/Stop; subsequent records inherit it. Empty is unknown.
 void SetTitleId(std::string_view titleId) noexcept;

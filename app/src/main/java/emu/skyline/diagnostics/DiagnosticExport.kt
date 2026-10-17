@@ -16,6 +16,8 @@ import java.util.zip.ZipOutputStream
 
 /** Only fixed log names in the two known process directories (and the v1 legacy directory). */
 object DiagnosticExport {
+    private const val MAX_CRITICAL_BYTES = 64 * 1024
+    private fun fileLimit(name: String) = if (name.endsWith("critical-state.jsonl")) MAX_CRITICAL_BYTES else MAX_FILE_BYTES
     const val MAX_FILE_BYTES = 8 * 1024 * 1024
     const val MAX_SNAPSHOT_BYTES = 40 * 1024 * 1024
     const val MAX_METADATA_BYTES = 1024 * 1024
@@ -97,7 +99,7 @@ object DiagnosticExport {
         val id: String get() = directory.name
         val entries: List<Entry> get() = archiveNames.mapNotNull { name ->
             val file = File(directory, name)
-            val limit = if (name == "session-metadata.txt") MAX_METADATA_BYTES else MAX_FILE_BYTES
+            val limit = if (name == "session-metadata.txt") MAX_METADATA_BYTES else fileLimit(name)
             if (isSafeFile(file) && file.length() <= limit) Entry(name, file.length()) else null
         }
         internal fun file(name: String) = File(directory, name)
@@ -129,7 +131,7 @@ object DiagnosticExport {
     }
 
     fun files(directory: File, textLog: File): List<File> = sources(directory, textLog)
-        .map { it.second }.filter { isSafeFile(it) && it.length() <= MAX_FILE_BYTES }
+        .map { it.second }.filter { isSafeFile(it) && it.length() <= fileLimit(it.name) }
 
     fun restore(cacheDirectory: File, id: String): Snapshot? {
         if (!snapshotId.matches(id)) return null
@@ -180,8 +182,8 @@ object DiagnosticExport {
                 }
                 channel.use {
                     val length = channel.size()
-                    if (length > MAX_FILE_BYTES) {
-                        summary.omissions.add("$name: exceeds $MAX_FILE_BYTES bytes")
+                    if (length > fileLimit(name)) {
+                        summary.omissions.add("$name: exceeds ${fileLimit(name)} bytes")
                     } else {
                         val destination = snapshot.file(name)
                         check(destination.parentFile!!.isDirectory || destination.parentFile!!.mkdirs())
@@ -270,6 +272,9 @@ object DiagnosticExport {
         val omissions = mutableListOf<String>()
         private val identities = HashSet<Triple<String, String, Long>>()
         private var criticalSnapshots = 0L
+        private val historicalIdentities = hashSetOf<Pair<String, String>>()
+        private var historicalDuplicates = 0L
+        private var historicalCrashes = 0L
         private val criticalRows = ArrayDeque<String>()
         private val dropReasons = linkedMapOf<String, MutableMap<String, Long>>()
         private var dedupLimit = false
@@ -283,6 +288,12 @@ object DiagnosticExport {
             var startedSequence: Long = -1, var startedStage: String = "")
         private val observations = linkedMapOf<String, SessionObservation>()
         fun accept(record: JsonObject): Boolean {
+            val event = (record["event"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val exitId = ((record["fields"] as? JsonObject)?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull
+            if (event in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE") &&
+                exitId != null && Regex("[0-9a-f]{64}").matches(exitId) && (event to exitId) in historicalIdentities) {
+                historicalDuplicates++; return false
+            }
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull
             val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull
             if (session != null && session.length <= 128 && sequence != null) {
@@ -310,15 +321,25 @@ object DiagnosticExport {
                     if (count != null && count >= 0) reasons[key] = maxOf(reasons[key] ?: 0, count)
                 }
             }
+            val observation = if (session.isNotEmpty() && (session in observations || observations.size < 64))
+                observations.getOrPut(session) { SessionObservation() } else null
+            (record["dropped_count"] as? JsonPrimitive)?.longOrNull?.takeIf { it >= 0 }?.let { dropped ->
+                observation?.let { it.dropped = maxOf(it.dropped, dropped) }
+            }
             if ((record["record_kind"] as? JsonPrimitive)?.contentOrNull == "critical_snapshot") {
                 criticalSnapshots++
                 if (criticalRows.size == 32) criticalRows.removeFirst()
-                criticalRows.addLast(record.toString().take(2048))
+                val text = record.toString()
+                criticalRows.addLast(if (text.length <= 2048) text else buildJsonObject {
+                    put("record_kind", "critical_snapshot"); put("summary_truncated", true); put("excerpt", text.take(1024))
+                }.toString())
                 return // State rows are not new error/content/lifecycle events or crash counts.
             }
             records++
-            val observation = if (session.isNotEmpty() && (session in observations || observations.size < 64))
-                observations.getOrPut(session) { SessionObservation() } else null
+            val historical = event in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE")
+            val exitId = ((record["fields"] as? JsonObject)?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull
+            if (historical && exitId != null && exitId.length == 64 && historicalIdentities.size < MAX_IDENTITIES) historicalIdentities.add(event to exitId)
+            if (event == "PREVIOUS_PROCESS_CRASH") historicalCrashes++
             observation?.let {
                 val dropped = (record["dropped_count"] as? JsonPrimitive)?.longOrNull
                 if (dropped != null && dropped >= 0) it.dropped = maxOf(it.dropped, dropped)
@@ -349,7 +370,7 @@ object DiagnosticExport {
                 if (content.size == 64) content.removeFirst()
                 content.addLast(row)
             }
-            if (level in listOf("ERROR", "CRITICAL", "FATAL") || event.contains("EXCEPTION") || event.endsWith("_ERROR")) {
+            if (!historical && (level in listOf("ERROR", "CRITICAL", "FATAL") || event.contains("EXCEPTION") || event.endsWith("_ERROR"))) {
                 errorCount++
                 if (errors.size == 32) errors.removeFirst()
                 errors.addLast(row)
@@ -399,6 +420,9 @@ object DiagnosticExport {
             appendLine("last_observed_stages=${stages.entries.joinToString { "${it.key}:${it.value.second}" }}")
             appendLine("observed_content_summary=up to 64 most recently captured content events, in snapshot read order")
             content.forEach(::appendLine)
+            appendLine("historical_crash_observations=$historicalCrashes")
+            appendLine("omitted_duplicate_historical_records=$historicalDuplicates")
+            appendLine("historical_crash_scope=system history imports, not new crashes in the exporting session; known exit_record_id deduplicated across sessions")
             appendLine("observed_error_count=$errorCount")
             appendLine("observed_error_count_scope=exported records only; zero does not imply no crash or successful initialization")
             appendLine("observed_error_summary=up to 32 most recently captured errors, in snapshot read order")

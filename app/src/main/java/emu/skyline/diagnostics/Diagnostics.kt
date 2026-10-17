@@ -14,6 +14,8 @@ object Diagnostics {
     @Volatile private var sessionId = ""
     private var exitHistoryQueried = false
     private val launch = LaunchIdentity()
+    private var applicationTitleId = ""
+    private var appContext: Context? = null
     private val processRunId: String by lazy { UUID.randomUUID().toString() }
     val processScope: String get() = if (Application.getProcessName().endsWith(":emulationProcess")) "emulation" else "main"
     fun preferences(context: Context) = context.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
@@ -26,7 +28,18 @@ object Diagnostics {
     @JvmStatic external fun flushNative(): Boolean
     @JvmStatic external fun stopNative()
     @JvmStatic external fun emitNative(category: String, event: String, detail: String, titleId: String)
+    @JvmStatic external fun emitFieldsNative(category: String, event: String, level: String, keys: Array<String>, values: Array<String>): Boolean
+    fun fieldsEvent(category: String, event: String, level: String = "INFO", fields: () -> Map<String, String>): Boolean {
+        if (!active) return false
+        return runCatching {
+            val bounded = fields().entries.take(16).associate { it.key.take(64) to DiagnosticExport.redact(it.value.take(2048)) }
+            emitFieldsNative(category, event, level, bounded.keys.toTypedArray(), bounded.values.toTypedArray())
+        }.getOrDefault(false)
+    }
+    @Synchronized internal fun fieldsForSession(expected: String, event: String, level: String = "INFO", fields: () -> Map<String, String>): Boolean =
+        active && sessionId == expected && fieldsEvent("lifecycle", event, level, fields)
     @Synchronized fun apply(context: Context) {
+        appContext = context.applicationContext
         val prefs = preferences(context)
         val enabled = prefs.getBoolean("enabled", false)
         val categories = prefs.getString("categories", "") ?: ""
@@ -54,6 +67,7 @@ object Diagnostics {
         if (active) event("lifecycle", "SESSION_METADATA") {
             "process=$processScope process_run_id=$processRunId session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT} launch_start_observed=${launch.startObserved}"
         }
+        if (active) publishAssociation(context) else runCatching { ProcessStateAssociation.clear() }
         if (active && launchObservedLate) event("lifecycle", "LAUNCH_CONTEXT_OBSERVED") { "start_observed=false" }
         if (active && !exitHistoryQueried) {
             exitHistoryQueried = true
@@ -68,9 +82,17 @@ object Diagnostics {
     }
     @Synchronized fun beginLaunch(applicationTitleId: String?) {
         val id = launch.begin(active)
+        this.applicationTitleId = normalizedTitleId(applicationTitleId)
         runCatching { setLaunchNative(id, normalizedTitleId(applicationTitleId), true) }
         event("lifecycle", "LAUNCH_BEGIN", applicationTitleId) { "start_observed=true" }
+        if (active) appContext?.let(::publishAssociation)
     }
+    private fun publishAssociation(context: Context) {
+        runCatching { ProcessStateAssociation.offer(context, ProcessAssociation(processRunId, launch.id, sessionId,
+            BuildConfig.DIAGNOSTICS_COMMIT, applicationTitleId, processScope, active, launch.startObserved)) }
+    }
+    internal fun flushForSession(expected: String): Boolean = active && sessionId == expected &&
+        runCatching { flushNative() }.getOrDefault(false) && active && sessionId == expected
     @Synchronized internal fun eventForSession(expected: String, category: String, event: String, detail: () -> String) {
         if (active && sessionId == expected) event(category, event, detail = detail)
     }
@@ -79,6 +101,8 @@ object Diagnostics {
         active = false
         signature = ""
         launch.end()
+        applicationTitleId = ""
+        runCatching { ProcessStateAssociation.clear() }
     }
     fun installExceptionObserver() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()

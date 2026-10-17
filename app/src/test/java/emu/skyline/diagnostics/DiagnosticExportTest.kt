@@ -35,6 +35,22 @@ class DiagnosticExportTest {
         }
     }
 
+    @Test fun repeatedHistoricalImportAcrossSessionsDoesNotInventNewCrashes() = sandbox { logs, textLog, cache, _ ->
+        fun historical(session: String) = buildJsonObject {
+            put("session_id", session); put("sequence", 3); put("category", "lifecycle")
+            put("event", "PREVIOUS_PROCESS_CRASH"); put("level", "ERROR")
+            putJsonObject("fields") { put("historical_record", "true"); put("exit_record_id", "a".repeat(64)) }
+        }.toString() + "\n"
+        log(logs, "main/diagnostics-0.jsonl", historical("one"))
+        log(logs, "emulation/diagnostics-0.jsonl", historical("two"))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val metadata = archive(snapshot).getValue("session-metadata.txt")
+            assertTrue(metadata.contains("historical_crash_observations=1"))
+            assertTrue(metadata.contains("omitted_duplicate_historical_records=1"))
+            assertTrue(metadata.contains("observed_error_count=0"))
+        }
+    }
+
     @Test fun malformedStagePayloadCannotBreakSafeExportOrInventNormalEnd() = sandbox { logs, textLog, cache, _ ->
         log(logs, "main/diagnostics-0.jsonl", """{"session_id":"synthetic","sequence":1,"event":"STAGE_COMPLETED","fields":{"stage":["EMULATION_ENDED"]}}""" + "\n")
         DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->

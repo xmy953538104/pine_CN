@@ -372,6 +372,61 @@ class ObservationDeadlines(unittest.TestCase):
         listings = [row for row in self.commands(smoke) if "ls" in row["argv"]]
         self.assertEqual(listings[-1]["argv"][-3:], ["ls", "-1", "cache/diagnostics-exports"])
 
+    def critical_export_fixture(self, name, critical_name, critical_size=None):
+        # Actual production-sink row; normalize only the controlled session to Android's UUID shape.
+        row = json.loads((Path(__file__).resolve().parent / "fixtures/native-trace-snapshot.jsonl").read_text())
+        row["session_id"] = SESSION
+        files = {"session-metadata.txt": "exporter_commit=" + "a" * 40 + "\nconfigured_enabled=true\nsink_active=true\n",
+                 "main/diagnostics-0.jsonl": json.dumps({"schema": 1, "session_id": SESSION, "sequence": 1,
+                     "event": "SESSION_METADATA", "fields": {"commit": "a" * 40}}) + "\n",
+                 critical_name: json.dumps(row) + "\n"}
+        lines = [entry + " (" + str(critical_size if entry == critical_name and critical_size is not None else len(data.encode())) + " bytes)"
+                 for entry, data in files.items()]
+        smoke = self.smoke(name, {"snapshot_files": files, "xml_sequence": [
+            ui_xml({"text": "PREVIEW AND EXPORT / 预览并导出", "class": "android.widget.Button"}),
+            ui_xml({"text": "Export snapshot / 导出快照"}, {"text": "\n".join(lines)})]})
+        smoke.session = SESSION
+        return smoke, files
+
+    def test_exact_critical_state_names_survive_preview_snapshot_and_zip_verification(self):
+        for index, prefix in enumerate(("", "main/", "emulation/")):
+            with self.subTest(scope=prefix):
+                name = prefix + "critical-state.jsonl"
+                smoke, files = self.critical_export_fixture("critical-" + str(index), name)
+                smoke.export_preview()
+                smoke.export_snapshot()
+                with zipfile.ZipFile(smoke.output / "exported-diagnostics.zip", "w") as archive:
+                    for entry, data in smoke.snapshot_bytes.items():
+                        archive.writestr(entry, data)
+                self.assertTrue(smoke.verify_zip()["preview_bytes_match"])
+                row = json.loads(smoke.snapshot_bytes[name])
+                self.assertEqual(row["fields"]["frames_seen"], "16")
+                self.assertEqual(row["snapshot_metadata"]["fields_omitted"], 0)
+                self.assertEqual(smoke.snapshot_bytes[name], files[name].encode())
+
+    def test_critical_name_allowlist_does_not_accept_paths_keys_or_backups(self):
+        for index, name in enumerate(("other/critical-state.jsonl", "main/sub/critical-state.jsonl",
+                                      "../critical-state.jsonl", "main/critical-state.jsonl.bak", "prod.keys")):
+            with self.subTest(name=name):
+                smoke, _ = self.critical_export_fixture("critical-reject-" + str(index), name)
+                with self.assertRaisesRegex(AssertionError, "non-allowlisted"):
+                    smoke.export_preview()
+
+    def test_critical_state_keeps_its_64k_bound_in_preview_and_zip(self):
+        smoke, files = self.critical_export_fixture("critical-large", "main/critical-state.jsonl", 65537)
+        with self.assertRaisesRegex(AssertionError, "per-entry export bound"):
+            smoke.export_preview()
+        row = json.loads(files["main/critical-state.jsonl"])
+        row["padding"] = "x" * 65536
+        files["main/critical-state.jsonl"] = json.dumps(row) + "\n"
+        smoke.snapshot_bytes = {name: data.encode() for name, data in files.items()}
+        smoke.preview_entries = {name: len(data) for name, data in smoke.snapshot_bytes.items()}
+        with zipfile.ZipFile(smoke.output / "exported-diagnostics.zip", "w") as archive:
+            for name, data in smoke.snapshot_bytes.items():
+                archive.writestr(name, data)
+        with self.assertRaisesRegex(AssertionError, "per-entry export bound"):
+            smoke.verify_zip()
+
     def test_observed_all_caps_buttons_work_in_retention_category_and_preview_flows(self):
         labels = {
             "retention_setting": "RETENTION / 保留: 2, 4 OR 8 × 2 MIB PER PROCESS",

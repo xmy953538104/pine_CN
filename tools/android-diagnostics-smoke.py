@@ -34,10 +34,17 @@ APP_LABEL = "Pine Diagnostics Preview"
 SETTINGS = PACKAGE + "/emu.skyline.settings.SettingsActivity"
 UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 LOG_NAME = re.compile(r"(?:(?:main|emulation)/)?diagnostics-[0-7]\.jsonl")
-ALLOWED = {"session-metadata.txt", "emulation.log"} | {
+CRITICAL_NAMES = {prefix + "critical-state.jsonl" for prefix in ("", "main/", "emulation/")}
+ALLOWED = {"session-metadata.txt", "emulation.log"} | CRITICAL_NAMES | {
     prefix + "diagnostics-" + str(index) + ".jsonl"
     for prefix in ("", "main/", "emulation/") for index in range(8)
 }
+
+def export_entry_limit(name):
+    if name == "session-metadata.txt":
+        return 1024 * 1024
+    return 64 * 1024 if name in CRITICAL_NAMES else 8 * 1024 * 1024
+
 REQUIRED = (
     "apk_identity", "device_ready", "fresh_install", "installed_apk_identity",
     "settings_entry", "default_off", "enable_and_session", "native_jsonl",
@@ -927,6 +934,8 @@ class Smoke:
             r"(?m)^([^\n]+) \((\d+) bytes\)$", screen.text()))
         require("session-metadata.txt" in entries, "Actual export preview lacks metadata entry")
         require(set(entries) <= ALLOWED, "Actual preview contains a non-allowlisted filename")
+        require(all(size <= export_entry_limit(name) for name, size in entries.items()),
+                "Actual preview exceeds a per-entry export bound")
         require(any(LOG_NAME.fullmatch(name) for name in entries), "Actual preview contains no structured native logs")
         self.preview_entries = entries
         return {"entries": entries, "screen": screen.xml.name}
@@ -1014,7 +1023,7 @@ class Smoke:
             require(len(names) == len(set(names)), "Saved ZIP contains duplicate entry names")
             require(set(names) == set(self.preview_entries), "Saved ZIP entries differ from the real preview")
             require(set(names) <= ALLOWED, "Saved ZIP contains non-allowlisted entries")
-            require(all(item.file_size <= (1024 * 1024 if item.filename == "session-metadata.txt" else 8 * 1024 * 1024)
+            require(all(item.file_size <= export_entry_limit(item.filename)
                         for item in archive.infolist()), "Saved ZIP exceeds a per-entry export bound")
             require(sum(item.file_size for item in archive.infolist() if item.filename != "session-metadata.txt") <= 40 * 1024 * 1024,
                     "Saved ZIP exceeds the 40 MiB log-snapshot bound")

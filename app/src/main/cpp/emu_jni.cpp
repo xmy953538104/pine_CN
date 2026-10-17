@@ -364,7 +364,7 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitN
     const auto titleText{ConvertDiagnosticJString(env, titleId)};
     if (!env->ExceptionCheck())
         skyline::diagnostics::Emit(categoryText, eventText, {{"detail", detailText}, {"title_id", titleText}},
-                                   eventText == "ANDROID_UNCAUGHT_EXCEPTION" || eventText == "PREVIOUS_PROCESS_CRASH" ? "ERROR" : "INFO");
+                                   eventText == "ANDROID_UNCAUGHT_EXCEPTION" || eventText == "PREVIOUS_PROCESS_CRASH" || eventText == "CONTENT_OPEN_FAILED" ? "ERROR" : "INFO");
     } catch (...) { /* Diagnostics must never change guest error propagation. */ }
 }
 

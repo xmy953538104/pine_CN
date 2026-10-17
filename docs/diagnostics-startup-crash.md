@@ -6,6 +6,13 @@ runtime failure until a device crash report or a controlled reproduction
 identifies it. These changes improve diagnostic coverage; they are not evidence
 that a particular device's startup crash has been repaired.
 
+The subsequently confirmed preview abort is covered by the separate
+[mapped VMA allocation fix](diagnostics-vma-startup-fix.md). The startup file
+opener also rejects missing/revoked/provider-failed Base/Update/DLC descriptors,
+records `CONTENT_OPEN_FAILED`, closes partial descriptor sets, and returns from
+the Activity without starting native emulation or killing the application.
+This SAF failure is independent of the GPU allocation assertion.
+
 ## Execution order
 
 At preview source `e9de48c1`, `JNI_ENTERED` was emitted after JVM/settings,

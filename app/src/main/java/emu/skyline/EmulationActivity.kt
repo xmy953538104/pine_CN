@@ -306,18 +306,23 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         val rom = item.uri
         val romType = item.format.ordinal
 
-        @SuppressLint("Recycle")
-        val romFd = contentResolver.openFileDescriptor(rom, "r")!!
-
-        var dlcFds : IntArray? = null
-        if (dlcUris.isNotEmpty())
-            dlcFds = dlcUris.map { contentResolver.openFileDescriptor(it, "r")!!.detachFd() }.toIntArray()
-
-        var updateFd : Int = -1
-        if (updateUri != Uri.EMPTY) {
-            @SuppressLint("Recycle")
-            updateFd = contentResolver.openFileDescriptor(updateUri, "r")!!.detachFd()
+        val contentFiles = try {
+            emu.skyline.emulation.openContentFiles(rom, dlcUris, updateUri) { uri ->
+                contentResolver.openFileDescriptor(uri, "r")
+            }
+        } catch (error: emu.skyline.emulation.ContentOpenFailure) {
+            generations.destroy(token)
+            emu.skyline.diagnostics.Diagnostics.event("exception", "CONTENT_OPEN_FAILED", diagnosticTitle) {
+                "source=${error.source} index=${error.index} reason=${error.reason} " +
+                    "exception_type=${error.original.javaClass.name} cause_type=${error.original.cause?.javaClass?.name ?: "none"}"
+            }
+            Toast.makeText(this, R.string.content_open_failed, Toast.LENGTH_LONG).show()
+            finish()
+            return // No native launch, process kill, or use of a partial descriptor set.
         }
+        val romFd = contentFiles.base
+        val dlcFds = contentFiles.dlcs.takeIf { it.isNotEmpty() }?.map { it.detachFd() }?.toIntArray()
+        val updateFd = contentFiles.update?.detachFd() ?: -1
 
         GpuDriverHelper.ensureFileRedirectDir(this)
         emulationThread = Thread {
@@ -565,6 +570,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         }
         setInsets()
         executeApplication(intent!!)
+        if (isFinishing) return
         if (emulationSettings.enableAmbientMode) {
             binding.gameView.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
                 override fun onPreDraw(): Boolean {

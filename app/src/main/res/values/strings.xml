@@ -3,6 +3,7 @@
     <!-- Common -->
     <string name="search">Search</string>
     <string name="error">An error has occurred</string>
+    <string name="content_open_failed">The selected game or associated content could not be opened. Check file access and select it again.</string>
     <string name="warning">Warning</string>
     <string name="fetching">Fetching</string>
     <string name="downloading">Downloading</string>

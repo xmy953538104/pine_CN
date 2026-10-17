@@ -25,6 +25,11 @@ jobs:
           python3 tools/tests/test-android-smoke-deadlines.py
           python3 tools/tests/test-android-first-boot.py
           python3 tools/tests/test-android-startup-probe.py
+      - name: Pinned VMA allocation contract regression
+        run: |
+          git submodule update --init --depth 1 app/libraries/vkma app/libraries/vkhpp
+          git -C app/libraries/vkhpp submodule update --init --depth 1 Vulkan-Headers
+          bash tools/tests/run-mapped-vma.sh
   adb:
     runs-on: windows-latest
     steps:

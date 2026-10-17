@@ -3,6 +3,7 @@
 
 #include <gpu.h>
 #include "memory_manager.h"
+#include "mapped_allocation.h"
 
 namespace skyline::gpu::memory {
     /**
@@ -83,11 +84,7 @@ namespace skyline::gpu::memory {
             .queueFamilyIndexCount = 1,
             .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex,
         };
-        VmaAllocationCreateInfo allocationCreateInfo{
-            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            .preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT, // may increase performance
-        };
+        auto allocationCreateInfo{MappedStagingAllocationInfo()};
 
         VkBuffer buffer;
         VmaAllocation allocation;
@@ -105,11 +102,7 @@ namespace skyline::gpu::memory {
             .queueFamilyIndexCount = 1,
             .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex,
         };
-        VmaAllocationCreateInfo allocationCreateInfo{
-            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .requiredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal),
-        };
+        auto allocationCreateInfo{MappedBufferAllocationInfo()};
 
         VkBuffer buffer;
         VmaAllocation allocation;

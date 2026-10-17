@@ -25,9 +25,12 @@ Root `title_id` remains the application filter for schema-1 consumers;
 `application_title_id` is its explicit equivalent. `program_id` is the selected
 base Program NCA header ID, `cnmt_title_id` its selected CNMT ID (which may be a
 Patch), and `program_nca_id` its 32-hex archive entry stem when available.
-An Application CNMT or a Patch CNMT's typed parent establishes the application
-relation; otherwise the UI association or known Program ID is used. Save ownership
-and bit masking do not establish that relation. Per-event `fields.title_id` still
+An Application CNMT or a Patch/AOC CNMT's typed parent establishes the application
+relation; otherwise a known Program header ID is used. Save ownership, an untyped
+UI association and bit masking do not establish that relation. The root
+`application_identity_source` distinguishes native CNMT/Program resolution from an
+early `ui_metadata_hint_not_runtime_verified`; cached UI metadata is not evidence
+of the runtime loader's choice. Per-event `fields.title_id` still
 identifies the content being observed, including DLC. Base and Update selection
 fields retain their own Program IDs. Unknown NCA IDs stay empty: an entry stem is
 not a verified full-content hash and matching Title/version does not prove equal bytes.
@@ -195,7 +198,10 @@ checks the generation again on the main thread. A replacement game invalidates
 old completions immediately. Activity destruction closes that generation to new
 completion requests before asking native emulation to stop, including callbacks
 made synchronously by that stop. If a normal ending was already accepted, its
-owned drain and exit survive Activity destruction or coroutine cancellation.
+owned drain and exit survive Activity destruction or coroutine cancellation. The
+actual JNI return/failure also ends the Kotlin launch by generation ownership,
+independently of whether navigation was accepted. A destroyed A cannot resurrect
+its launch UUID on a later settings apply, or clear the identity of replacement B.
 Destruction must not create a new ending. Late same-game apply and duplicate
 endings are rejected. This preserves orderly shutdown without letting an old
 game's suspended completion stop or kill its replacement.
@@ -215,7 +221,9 @@ diagnostic session or a completed initialization stage invented after the fault.
 The main and release emulation Android processes use fixed `main/` and
 `emulation/` subdirectories, each with its own session and bounded rotation. The
 settings screen identifies current-process stats and lists the other scope's last
-observed session separately. Changes apply to the next emulation process start.
+observed session separately. Debug shares the main process, so settings reconfigure
+that live sink. Release's separate emulation process reads changes at its next start;
+there is no live cross-process settings IPC.
 The export includes only fixed filenames from these scopes and legacy diagnostics,
 with per-value JSON redaction; incomplete/malformed records are counted/omitted.
 Recognized private locations are removed through their decoded string's line end,
@@ -259,7 +267,14 @@ lossless persistence or filesystem durability guarantee across sudden death.
 
 On API 30+, an enabled process coalesces anonymous state into the platform's
 `ActivityManager.setProcessStateSummary`: 84 bytes containing process/launch/session
-UUIDs, source commit, known application Title, scope and observation flags. The
+UUIDs, source commit, known application Title, scope and observation flags. PDX2
+uses one reserved byte for the closed native identity source. The initial launch
+summary has no application Title until the synchronous runtime loader callback
+resolves it; that callback also runs with diagnostics off for a later opt-in.
+The TLS observer belongs only to the ordinary JNI launch caller, holds no global
+Java references, and notifies Java after releasing the sink mutex. Old PDX1
+summaries retain their anonymous session/launch association but their untyped
+Title is deliberately unknown, since it may be a shared SaveDataOwnerId. The
 single daemon issues at most one call per second; a blocked Binder call keeps only
 one pending replacement. No sensitive text, document location, PID or credentials
 are encoded. Default-off startup creates no publisher thread or Binder call.
@@ -376,3 +391,26 @@ Critical snapshots retain all accepted producer fields instead of taking the fir
 may still be evicted to satisfy 32-row/64-KiB limits. A production native 16-field
 trace fixture is generated after ordinary-log rotation and checked through the
 actual export pipeline; frames at field13 and their counts remain in the ZIP.
+
+## Separate UI metadata identities
+
+`loader_jni` still fills legacy `AppEntry.titleId` from NACP SaveDataOwnerId;
+selection, save paths and AppEntry serialization are unchanged. Diagnostic-only
+JNI fields separately carry CNMT Title/parent/version, Program header ID, save
+owner and selected Program archive entry ID through the real RomFile initializer.
+Import, association and selected-update fields use those typed identities; legacy
+values are explicitly named `legacy_*`, never called CNMT Title IDs.
+
+A diagnostics-enabled metadata parse keeps at most 256 observations in process
+memory, indexed by an internal digest of format/document location. That index is
+not exported or described as a content hash. The original AppEntry is marked
+`native_metadata_scan`; a later deserialized/same-location entry is
+`cached_metadata_scan_not_verified_current`. A fresh process, old catalog, cleared
+cache or default-off parse provides unknown diagnostic identities; no ROM is read
+again just to fill a log field. Runtime native resolution, rather than this cache,
+updates the application identity used by the platform process-state summary.
+
+`MetadataJniMappingTest` compiles controlled host JNI code using production metadata
+setters, the actual RomFile initializer and the production Java callback observer.
+It distinguishes CNMT/Program/save-owner IDs and round-trips the actual summary
+codec. It is neither an Android APK run nor a commercial NCA/cryptography test.

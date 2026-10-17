@@ -13,6 +13,7 @@
 #include "skyline/loader/nsp.h"
 #include "skyline/jvm.h"
 #include "skyline/diagnostics/content.h"
+#include "skyline/loader/metadata_jni.h"
 
 extern "C" JNIEXPORT jint JNICALL Java_emu_skyline_loader_RomFile_populate(JNIEnv *env, jobject thiz, jint jformat, jint fd, jstring appFilesPathJstring, jint systemLanguage) {
     skyline::signal::ScopedStackBlocker stackBlocker;
@@ -53,13 +54,10 @@ extern "C" JNIEXPORT jint JNICALL Java_emu_skyline_loader_RomFile_populate(JNIEn
 
     jclass clazz{env->GetObjectClass(thiz)};
     jfieldID applicationNameField{env->GetFieldID(clazz, "applicationName", "Ljava/lang/String;")};
-    jfieldID applicationTitleIdField{env->GetFieldID(clazz, "applicationTitleId", "Ljava/lang/String;")};
     jfieldID addOnContentBaseIdField{env->GetFieldID(clazz, "addOnContentBaseId", "Ljava/lang/String;")};
     jfieldID applicationAuthorField{env->GetFieldID(clazz, "applicationAuthor", "Ljava/lang/String;")};
     jfieldID rawIconField{env->GetFieldID(clazz, "rawIcon", "[B")};
     jfieldID applicationVersionField{env->GetFieldID(clazz, "applicationVersion", "Ljava/lang/String;")};
-    jfieldID romType{env->GetFieldID(clazz, "romTypeInt", "I")};
-    jfieldID parentTitleId{env->GetFieldID(clazz, "parentTitleId", "Ljava/lang/String;")};
 
     if (loader->nacp) {
         auto language{skyline::language::GetApplicationLanguage(static_cast<skyline::language::SystemLanguage>(systemLanguage))};
@@ -68,7 +66,6 @@ extern "C" JNIEXPORT jint JNICALL Java_emu_skyline_loader_RomFile_populate(JNIEn
 
         env->SetObjectField(thiz, applicationNameField, env->NewStringUTF(loader->nacp->GetApplicationName(language).c_str()));
         env->SetObjectField(thiz, applicationVersionField, env->NewStringUTF(loader->nacp->GetApplicationVersion().c_str()));
-        env->SetObjectField(thiz, applicationTitleIdField, env->NewStringUTF(loader->nacp->GetSaveDataOwnerId().c_str()));
         env->SetObjectField(thiz, addOnContentBaseIdField, env->NewStringUTF(loader->nacp->GetAddOnContentBaseId().c_str()));
         env->SetObjectField(thiz, applicationAuthorField, env->NewStringUTF(loader->nacp->GetApplicationPublisher(language).c_str()));
 
@@ -78,13 +75,7 @@ extern "C" JNIEXPORT jint JNICALL Java_emu_skyline_loader_RomFile_populate(JNIEn
         env->SetObjectField(thiz, rawIconField, iconByteArray);
     }
 
-    if (loader->cnmt) {
-        auto contentMetaType{loader->cnmt->GetContentMetaType()};
-        env->SetIntField(thiz, romType, static_cast<skyline::u8>(contentMetaType));
-
-        if (contentMetaType != skyline::vfs::ContentMetaType::Application)
-            env->SetObjectField(thiz, parentTitleId, env->NewStringUTF(loader->cnmt->GetParentTitleId().c_str()));
-    }
+    skyline::loader::PopulateLoaderTitleFields(env, thiz, clazz, *loader, skyline::diagnostics::Enabled());
 
     return static_cast<jint>(skyline::loader::LoaderResult::Success);
 }

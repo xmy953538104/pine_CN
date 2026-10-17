@@ -6,6 +6,7 @@ import android.net.Uri
 import emu.skyline.diagnostics.Diagnostics
 import emu.skyline.loader.AppEntry
 import emu.skyline.loader.RomType
+import emu.skyline.loader.diagnosticIdentity
 import java.io.Serializable
 
 /** URI launches deliberately keep the existing last-matching-update policy. */
@@ -21,7 +22,10 @@ fun selectUriContent(baseTitleId: String?, contents: List<Serializable>): UriCon
         (entry as AppEntry).uri?.let { uri ->
             if (entry.romType == RomType.DLC) dlcUris.add(uri)
             if (entry.romType == RomType.Update) {
-                Diagnostics.event("content", "PATCH_CANDIDATE") { "entry=uri_fallback policy=last_match title_id=${entry.titleId} overwrites=${updateUri != Uri.EMPTY}" }
+                Diagnostics.fieldsEvent("content", "PATCH_CANDIDATE") {
+                    emu.skyline.diagnostics.ContentDiagnosticFields.patchSelection(null, baseTitleId, entry.diagnosticIdentity,
+                        entry.titleId, "uri_fallback", "last_match") + mapOf("overwrites" to (updateUri != Uri.EMPTY).toString())
+                }
                 selectedUpdateTitle = entry.titleId
                 updateUri = uri
             }

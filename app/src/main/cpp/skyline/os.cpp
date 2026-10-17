@@ -67,19 +67,8 @@ namespace skyline::kernel {
         // Remember the selected base even when logging is off so live enabling
         // can correlate the running game without loading its metadata again.
         try {
-            const auto program = state.loader->programNca ? diagnostics::ContentTitleId(state.loader->programNca->header.titleId) : std::string{};
-            const auto cnmt = state.loader->cnmt ? state.loader->cnmt->GetTitleId() : std::string{};
-            auto kind = diagnostics::ApplicationIdentityKind::Unknown;
-            std::string parent;
-            if (state.loader->cnmt) {
-                if (state.loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Application) kind = diagnostics::ApplicationIdentityKind::Application;
-                if (state.loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch) {
-                    kind = diagnostics::ApplicationIdentityKind::Patch;
-                    parent = state.loader->cnmt->GetParentTitleId();
-                }
-            }
-            diagnostics::SetContentIdentity(diagnostics::ResolveApplicationTitle(diagnostics::ApplicationTitleId(), program, cnmt, parent, kind),
-                program, cnmt, state.loader->diagnosticProgramContentId);
+            const auto identity = diagnostics::DescribeContentIdentity(*state.loader);
+            diagnostics::SetContentIdentity(identity.application, identity.program, identity.cnmt, identity.programContent, identity.source);
         } catch (...) {}
         diagnostics::Stage("base_loader_ready");
         PINE_DIAG_CONTENT("BASE_SELECTED", {"source", "base"}, {"program_id", state.loader->programNca ? diagnostics::ContentTitleId(state.loader->programNca->header.titleId) : "unknown"},

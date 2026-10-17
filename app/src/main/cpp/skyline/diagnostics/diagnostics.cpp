@@ -17,6 +17,7 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include "identity_observer.h"
 #include <thread>
 #include <vector>
 #include <pthread.h>
@@ -31,7 +32,7 @@ constexpr uint64_t ProducersClosed = uint64_t{1} << 63;
 struct Record {
     uint64_t sequence{}, wall{}, mono{}, dropped{}, contention{}, full{}, allocation{}, disk{}, criticalDropped{};
     bool critical{};
-    std::string category, event, level, thread, stage, guestStage, titleId, programId, cnmtId, programContentId, launchId;
+    std::string category, event, level, thread, stage, guestStage, titleId, applicationSource, programId, cnmtId, programContentId, launchId;
     std::vector<std::pair<std::string, std::string>> fields;
 };
 struct Sink {
@@ -50,7 +51,7 @@ struct Sink {
     std::string stage;
     std::string guestStage{"unknown"};
     // Game identity outlives a logging session; only true game boundaries clear it.
-    std::string activeTitleId;
+    std::string activeTitleId, activeApplicationSource;
     std::string activeProgramId, activeCnmtId, activeProgramContentId, activeLaunchId;
     bool stopping{};
     std::thread worker;
@@ -104,7 +105,8 @@ std::string Serialize(const Record &r, const Config &c, bool snapshot = false,
         + ",\"category\":" + Quote(r.category) + ",\"event\":" + Quote(r.event) + ",\"level\":" + Quote(r.level)
         + ",\"last_stage\":" + Quote(r.stage) + ",\"last_load_stage\":" + Quote(r.stage)
         + ",\"last_guest_stage\":" + Quote(r.guestStage) + ",\"title_id\":" + Quote(r.titleId)
-        + ",\"application_title_id\":" + Quote(r.titleId) + ",\"program_id\":" + Quote(r.programId)
+        + ",\"application_title_id\":" + Quote(r.titleId) + ",\"application_identity_source\":" + Quote(r.applicationSource)
+        + ",\"program_id\":" + Quote(r.programId)
         + ",\"cnmt_title_id\":" + Quote(r.cnmtId) + ",\"program_nca_id\":" + Quote(r.programContentId)
         + ",\"launch_id\":" + Quote(r.launchId) + ",\"process_run_id\":" + Quote(c.processRunId)
         + (snapshot ? ",\"snapshot_metadata\":{\"observed_event\":" + Quote(observedEvent) + ",\"observed_level\":" + Quote(observedLevel)
@@ -256,7 +258,7 @@ void Run(Sink &s) noexcept {
         summary.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
         CopyDropCounts(summary, s);
         summary.category = "lifecycle"; summary.event = "SESSION_SUMMARY"; summary.level = "INFO"; summary.thread = "diagnostic-writer";
-        { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.guestStage = s.guestStage; summary.titleId = s.activeTitleId;
+        { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.guestStage = s.guestStage; summary.titleId = s.activeTitleId; summary.applicationSource = s.activeApplicationSource;
           summary.programId = s.activeProgramId; summary.cnmtId = s.activeCnmtId;
           summary.programContentId = s.activeProgramContentId; summary.launchId = s.activeLaunchId; }
         summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())},
@@ -320,7 +322,7 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
                 else if (s.guestStage == "unknown" && (event == "GUEST_DEBUG_MESSAGE" || event == "GUEST_RUNTIME_ERROR")) s.guestStage = "guest_message_observed";
             }
             if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return false; }
-            r.stage = s.stage; r.guestStage = s.guestStage; r.titleId = s.activeTitleId; r.programId = s.activeProgramId;
+            r.stage = s.stage; r.guestStage = s.guestStage; r.titleId = s.activeTitleId; r.applicationSource = s.activeApplicationSource; r.programId = s.activeProgramId;
             r.cnmtId = s.activeCnmtId; r.programContentId = s.activeProgramContentId; r.launchId = s.activeLaunchId;
         }
         r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16);
@@ -509,25 +511,29 @@ void SetTitleId(std::string_view titleId) noexcept {
         auto copy = Sanitize(titleId, 32);
         auto &s = Get();
         std::lock_guard lock(s.mutex);
-        s.activeTitleId = std::move(copy);
+        s.activeTitleId = std::move(copy); s.activeApplicationSource = s.activeTitleId.empty() ? "" : "ui_metadata_hint_not_runtime_verified";
     } catch (...) {}
 }
 void ClearTitleId() noexcept {
     try {
         auto &s = Get();
         std::lock_guard lock(s.mutex);
-        s.activeTitleId.clear();
+        s.activeTitleId.clear(); s.activeApplicationSource.clear();
         s.activeProgramId.clear(); s.activeCnmtId.clear(); s.activeProgramContentId.clear(); s.guestStage = "unknown";
     } catch (...) {}
 }
 void SetContentIdentity(std::string_view applicationId, std::string_view programId,
-                        std::string_view cnmtId, std::string_view programContentId) noexcept {
+                        std::string_view cnmtId, std::string_view programContentId, std::string_view applicationSource) noexcept {
     try {
         auto app = Sanitize(applicationId, 32), program = Sanitize(programId, 32);
         auto cnmt = Sanitize(cnmtId, 32), content = Sanitize(programContentId, 64);
-        auto &s = Get(); std::lock_guard lock(s.mutex);
-        s.activeTitleId = std::move(app); s.activeProgramId = std::move(program);
-        s.activeCnmtId = std::move(cnmt); s.activeProgramContentId = std::move(content);
+        auto source = Sanitize(applicationSource, 64);
+        {
+            auto &s = Get(); std::lock_guard lock(s.mutex);
+            s.activeTitleId = app; s.activeApplicationSource = source; s.activeProgramId = std::move(program);
+            s.activeCnmtId = std::move(cnmt); s.activeProgramContentId = std::move(content);
+        }
+        NotifyContentIdentity(app, source); // Never call Java under the sink mutex.
     } catch (...) {}
 }
 std::string ApplicationTitleId() { auto &s = Get(); std::lock_guard lock(s.mutex); return s.activeTitleId; }

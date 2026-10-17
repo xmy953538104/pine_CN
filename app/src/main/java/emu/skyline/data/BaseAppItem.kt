@@ -14,6 +14,7 @@ import emu.skyline.R
 import emu.skyline.SkylineApplication
 import emu.skyline.loader.AppEntry
 import emu.skyline.loader.LoaderResult
+import emu.skyline.loader.diagnosticIdentity
 import java.io.Serializable
 
 /**
@@ -44,6 +45,8 @@ open class BaseAppItem(private val meta : AppEntry, val enabled: Boolean = false
      * The title ID of the application
      */
     val titleId get() = meta.titleId
+
+    internal val diagnosticIdentity get() = meta.diagnosticIdentity
 
     /**
      * The application version

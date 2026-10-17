@@ -227,3 +227,22 @@ dependencies {
 kapt {
     correctErrorTypes true
 }
+
+// Controlled host JNI metadata transfer tests use production field setters and
+// the actual RomFile initializer. The fixture contains no ROM/key/parser bypass.
+def metadataHostSupported = org.gradle.internal.os.OperatingSystem.current().isLinux() || org.gradle.internal.os.OperatingSystem.current().isMacOsX()
+def metadataHostLibrary = layout.buildDirectory.file('diagnostics-host/libmetadata-fixture.so')
+def metadataHostTask = tasks.register('diagnosticsHostMetadataFixture', Exec) {
+    onlyIf { metadataHostSupported }
+    inputs.files('../tools/tests/build-host-metadata-fixture.sh', '../tests/diagnostics/metadata_jni_fixture.cpp', 'src/main/cpp/skyline/loader/metadata_jni.h',
+                 'src/main/cpp/skyline/diagnostics/content.h', 'src/main/cpp/skyline/diagnostics/identity_observer.h',
+                 'src/main/cpp/skyline/diagnostics/identity_jni.h')
+    outputs.file(metadataHostLibrary)
+    doFirst { commandLine 'bash', '../tools/tests/build-host-metadata-fixture.sh', metadataHostLibrary.get().asFile.absolutePath }
+}
+tasks.withType(Test).configureEach {
+    if (metadataHostSupported) {
+        dependsOn metadataHostTask
+        systemProperty 'pine.diagnostics.metadataFixture', metadataHostLibrary.get().asFile.absolutePath
+    }
+}

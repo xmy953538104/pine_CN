@@ -10,9 +10,28 @@ not cleared or migrated; select local content/grants in the new preview. A
 stable development signer for continuous Debug updates is not configured yet.
 
 The current startup fixes are described in [the VMA regression](diagnostics-vma-startup-fix.md)
-and [safe URI/startup checks](diagnostics-startup-crash.md). Local JVM coverage is
-67 cases, including10 real Activity URI-entry/lifecycle cases; exact-commit CI
-and device startup results remain separate from the historical table below.
+and [safe URI/startup checks](diagnostics-startup-crash.md). The latest exact-commit JVM totals, build identity and runtime result are recorded
+in the draft PR and matching artifacts; older totals below are historical evidence.
+
+## Independent review corrections
+
+The current candidate also tests retryable historical trace failures followed by
+success across process starts, success-preserving export deduplication, and an
+actual 16-field native trace surviving ordinary-log rotation into a snapshot and
+export. The retry limit is three persisted attempts, not an unbounded loop.
+
+Controlled host JNI tests use distinct CNMT/Program/NACP save-owner IDs through
+the real setters, RomFile initialization and UI field mapping. No-Meta resolution
+uses Program rather than a shared save owner, and a generation-owned native
+callback updates the exact process-summary codec. Old untyped PDX1 titles become
+unknown. The original AppEntry serialization and content selection remain intact.
+Activity tests separately execute destruction followed by the production native
+return/finally path and settings reconfiguration, and reject stale generation A's
+attempt to clear B. These are JVM/JNI/host regressions, not device execution.
+
+Debug shares the main process and can reconfigure its live sink. Release uses a
+separate emulation process and observes settings at its next start; no live
+cross-process settings IPC is implemented.
 
 ## Automated evidence
 

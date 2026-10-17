@@ -6,6 +6,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import emu.skyline.SkylineApplication
+import emu.skyline.loader.diagnosticIdentity
 import emu.skyline.getPublicFilesDir
 import java.io.*
 
@@ -21,8 +22,11 @@ class ContentsHelper(private val context: Context) {
             objectOutputStream.close()
             fileOutputStream.close()
             emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "CONTENT_ASSOCIATION_SAVED") {
+                val last = contents.lastOrNull() as? emu.skyline.loader.AppEntry
                 mapOf("status" to "stream_close_completed", "entry_count" to contents.size.toString(),
-                    "last_content_title_id" to emu.skyline.diagnostics.Diagnostics.normalizedTitleId((contents.lastOrNull() as? emu.skyline.loader.AppEntry)?.titleId))
+                    "last_content_title_id" to last?.diagnosticIdentity?.contentTitleId.orEmpty(),
+                    "last_content_identity_observation" to (last?.diagnosticIdentity?.observation ?: "not_observed_in_this_process"),
+                    "legacy_last_app_entry_title_id" to emu.skyline.diagnostics.Diagnostics.normalizedTitleId(last?.titleId))
             }
         } catch (e: IOException) {
             emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "CONTENT_ASSOCIATION_SAVE_FAILED", "ERROR") {

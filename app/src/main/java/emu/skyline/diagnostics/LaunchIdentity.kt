@@ -7,8 +7,10 @@ import java.util.UUID
 internal class LaunchIdentity {
     var id: String = ""; private set
     var active: Boolean = false; private set
+    var owner: Long = 0; private set
     var startObserved: Boolean = false; private set
-    fun begin(enabled: Boolean): String {
+    fun begin(enabled: Boolean, owner: Long = 0): String {
+        this.owner = owner
         active = true
         startObserved = enabled
         id = if (enabled) UUID.randomUUID().toString() else ""
@@ -18,5 +20,10 @@ internal class LaunchIdentity {
         if (enabled && active && id.isEmpty()) id = UUID.randomUUID().toString()
         return id
     }
-    fun end() { active = false; id = ""; startObserved = false }
+    fun belongsTo(expected: Long): Boolean = expected != 0L && owner == expected
+    fun end(expected: Long? = null): Boolean {
+        if (expected != null && (!active || !belongsTo(expected))) return false
+        active = false; id = ""; startObserved = false
+        return true
+    }
 }

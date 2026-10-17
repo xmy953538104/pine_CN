@@ -153,7 +153,25 @@ data class AppEntry(
 /**
  * This class is used as interface between libskyline and Kotlin for loaders
  */
-internal class RomFile(context : Context, format : RomFormat, uri : Uri, systemLanguage : Int) {
+internal class RomFile private constructor(format: RomFormat, uri: Uri, populateMetadata: (RomFile) -> Int) {
+    constructor(context: Context, format: RomFormat, uri: Uri, systemLanguage: Int) : this(format, uri, { file ->
+        (context.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw java.io.FileNotFoundException("Provider returned no content descriptor")).use {
+            file.populate(format.ordinal, it.fd, "${context.filesDir.canonicalPath}/keys/", systemLanguage)
+        }
+    })
+    internal companion object {
+        // Same initializer/mapper; a controlled host JNI loader supplies metadata, not a ROM parser.
+        fun fromNativeMetadata(format: RomFormat, uri: Uri, populate: (RomFile) -> Int) = RomFile(format, uri, populate)
+    }
+    private var diagnosticApplicationId: String? = null
+    private var diagnosticProgramId: String? = null
+    private var diagnosticCnmtId: String? = null
+    private var diagnosticParentId: String? = null
+    private var diagnosticSaveOwnerId: String? = null
+    private var diagnosticProgramContentId: String? = null
+    private var diagnosticCnmtVersion: String? = null
+    private var diagnosticIdentitySource: String? = null
     /**
      * @note This field is filled in by native code
      */
@@ -199,10 +217,7 @@ internal class RomFile(context : Context, format : RomFormat, uri : Uri, systemL
         get() = result == LoaderResult.Success
 
     init {
-        (context.contentResolver.openFileDescriptor(uri, "r")
-            ?: throw java.io.FileNotFoundException("Provider returned no content descriptor")).use {
-            result = LoaderResult.get(populate(format.ordinal, it.fd, "${context.filesDir.canonicalPath}/keys/", systemLanguage))
-        }
+        result = LoaderResult.get(populateMetadata(this))
 
        appEntry = AppEntry(
             applicationName ?: "",
@@ -217,6 +232,11 @@ internal class RomFile(context : Context, format : RomFormat, uri : Uri, systemL
             uri,
             result
         )
+        if (emu.skyline.diagnostics.Diagnostics.isActive()) DiagnosticIdentityStore.remember(appEntry,
+            DiagnosticContentIdentity(DiagnosticContentIdentity.id(diagnosticApplicationId), DiagnosticContentIdentity.id(diagnosticProgramId),
+                DiagnosticContentIdentity.id(diagnosticCnmtId), DiagnosticContentIdentity.id(diagnosticParentId),
+                DiagnosticContentIdentity.id(diagnosticSaveOwnerId), diagnosticProgramContentId.orEmpty(), diagnosticCnmtVersion.orEmpty(),
+                diagnosticIdentitySource.orEmpty()))
     }
 
     /**

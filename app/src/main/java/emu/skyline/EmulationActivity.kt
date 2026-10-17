@@ -63,6 +63,7 @@ import emu.skyline.data.AppItemTag
 import emu.skyline.databinding.EmuActivityBinding
 import emu.skyline.emulation.PipelineLoadingFragment
 import emu.skyline.input.*
+import emu.skyline.loader.diagnosticIdentity
 import emu.skyline.loader.RomFile
 import emu.skyline.loader.getRomFormat
 import emu.skyline.loader.AppEntry
@@ -182,7 +183,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      * @param nativeLibraryPath The full path to the app native library directory
      * @param assetManager The asset manager used for accessing app assets
      */
-    private external fun executeApplication(romUri : String, romType : Int, romFd : Int, dlcFds : IntArray?, updateFd : Int, nativeSettings : NativeSettings, publicAppFilesPath : String, privateAppFilesPath : String, nativeLibraryPath : String, assetManager : AssetManager, diagnosticTitleId: String)
+    private external fun executeApplication(romUri : String, romType : Int, romFd : Int, dlcFds : IntArray?, updateFd : Int, nativeSettings : NativeSettings, publicAppFilesPath : String, privateAppFilesPath : String, nativeLibraryPath : String, assetManager : AssetManager, diagnosticTitleId: String, generationToken: Long)
 
     /**
      * @param join If the function should only return after all the threads join or immediately
@@ -271,7 +272,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                 val navigateToMain = returnToMain
                 endingScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     generations.finish(token, {
-                        emu.skyline.diagnostics.Diagnostics.finishSession()
+                        emu.skyline.diagnostics.Diagnostics.finishSession(token)
                     }, {
                         if (navigateToMain)
                             startActivity(Intent(applicationContext, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
@@ -301,7 +302,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
         returnToMain = intent.getBooleanExtra(ReturnToMainTag, false)
 
-        val diagnosticTitle = item.titleId
+        val diagnosticTitle = item.diagnosticIdentity?.applicationId
         val diagnosticFormat = item.format
         val rom = item.uri
         val romType = item.format.ordinal
@@ -324,7 +325,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             runningGeneration = token
             if (!generations.session(token) {
                 emu.skyline.diagnostics.Diagnostics.apply(this)
-                emu.skyline.diagnostics.Diagnostics.beginLaunch(diagnosticTitle)
+                emu.skyline.diagnostics.Diagnostics.beginLaunch(diagnosticTitle, token)
                 emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED", diagnosticTitle) { "phase=ui_association execution_confirmed=false format=$diagnosticFormat" }
                 emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED", diagnosticTitle) { "phase=ui_association execution_confirmed=false update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
             }) {
@@ -332,13 +333,22 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                 runCatching { romFd.close() }
                 dlcFds?.forEach { fd -> runCatching { ParcelFileDescriptor.adoptFd(fd).close() } }
                 if (updateFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(updateFd).close() }
+                emu.skyline.diagnostics.Diagnostics.endLaunch(token)
                 return@Thread
             }
-            executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets, emu.skyline.diagnostics.Diagnostics.normalizedTitleId(diagnosticTitle))
-            returnFromEmulation(token)
+            runNativeForGeneration(token) {
+                executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets, emu.skyline.diagnostics.Diagnostics.normalizedTitleId(diagnosticTitle), token)
+            }
         }
 
         emulationThread!!.start()
+    }
+
+    /** The real JNI return/failure ends only its own launch; navigation has separate ownership. */
+    internal fun runNativeForGeneration(token: Long, execute: () -> Unit) {
+        try { execute() }
+        finally { emu.skyline.diagnostics.Diagnostics.endLaunch(token) }
+        returnFromEmulation(token)
     }
 
     /**
@@ -378,14 +388,21 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             }
 
             item = AppItem(romFile.appEntry, emptyList(), emptyList())
-            metadataTitleId = item.titleId
+            metadataTitleId = item.diagnosticIdentity?.applicationId
 
             val contents = ContentsHelper(this@EmulationActivity)
 
-            val selection = emu.skyline.data.selectUriContent(item.titleId, contents.loadContents())
+            val selectedContents = contents.loadContents()
+            val selection = emu.skyline.data.selectUriContent(item.titleId, selectedContents)
             updateUri = selection.updateUri
             dlcUris = selection.dlcUris.toCollection(ArrayList())
-            emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED", item.titleId) { "phase=ui_association execution_confirmed=false entry=uri_fallback policy=last_match selected_title_id=${selection.updateTitleId} selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
+            emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "PATCH_SELECTED") {
+                // selection.updateTitleId is the legacy AppEntry/save-owner ID.
+                val selected = selectedContents.filterIsInstance<emu.skyline.loader.AppEntry>().lastOrNull { it.uri == updateUri && it.romType == emu.skyline.loader.RomType.Update && it.parentTitleId == item.titleId }
+                emu.skyline.diagnostics.ContentDiagnosticFields.patchSelection(item.diagnosticIdentity, item.titleId,
+                    selected?.diagnosticIdentity, selection.updateTitleId, "uri_fallback", "last_match") + mapOf(
+                    "selected" to (updateUri != Uri.EMPTY).toString(), "dlc_count" to dlcUris.size.toString())
+            }
             return true
         } catch (error: Exception) {
             when (error) {

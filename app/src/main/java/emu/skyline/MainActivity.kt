@@ -44,6 +44,7 @@ import emu.skyline.data.AppItem
 import emu.skyline.data.BaseAppItem
 import emu.skyline.data.AppItemTag
 import emu.skyline.databinding.MainActivityBinding
+import emu.skyline.loader.diagnosticIdentity
 import emu.skyline.loader.AppEntry
 import emu.skyline.loader.RomType
 import emu.skyline.loader.LoaderResult
@@ -272,7 +273,7 @@ class MainActivity : AppCompatActivity() {
                     if ((appEntry as AppEntry).romType == RomType.Update) updates.add(BaseAppItem(appEntry as AppEntry, true))
                 }
                 emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "CONTENT_ASSOCIATION") {
-                    emu.skyline.diagnostics.ContentDiagnosticFields.association(entry.titleId, updates.map { it.titleId }, dlcs.map { it.titleId })
+                    emu.skyline.diagnostics.ContentDiagnosticFields.association(entry.diagnosticIdentity, entry.titleId, updates.map { it.diagnosticIdentity }, dlcs.map { it.diagnosticIdentity })
                 }
                 add(AppItem(entry, updates, dlcs).toViewItem())
             }

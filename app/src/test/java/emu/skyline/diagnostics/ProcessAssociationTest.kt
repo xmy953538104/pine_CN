@@ -10,7 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 class ProcessAssociationTest {
     private val state = ProcessAssociation("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
-        "33333333-3333-4333-8333-333333333333", "a".repeat(40), "0100751007ADA000", "emulation", true, false)
+        "33333333-3333-4333-8333-333333333333", "a".repeat(40), "0100751007ADA000", "emulation", true, false, "cnmt_application")
     @Test fun boundedAnonymousStateRoundTripsAndRejectsMalformedOrNewerFormats() {
         val bytes = ProcessAssociationCodec.encode(state)
         assertEquals(84, bytes.size); assertTrue(bytes.size <= 128)
@@ -26,8 +26,17 @@ class ProcessAssociationTest {
         assertNull(ProcessAssociationCodec.decode(bytes.copyOf().also { it[4] = 8 }))
         val unknown = ProcessAssociationCodec.encode(state.copy(title = "content://private/secret", commit = "bad", launch = "bad"))
         val decoded = ProcessAssociationCodec.decode(unknown)!!
-        assertEquals("", decoded.title); assertEquals("", decoded.commit); assertEquals("", decoded.launch)
+        assertEquals("", decoded.title); assertEquals("unknown", decoded.titleSource); assertEquals("", decoded.commit); assertEquals("", decoded.launch)
         assertFalse(String(unknown, Charsets.ISO_8859_1).contains("private"))
+    }
+    @Test fun legacyAndUntypedTitlesStayUnknownWhileAnonymousSessionAssociationIsRetained() {
+        val legacy = ProcessAssociationCodec.encode(state).also { it[3] = 0x31; it[6] = 0 }
+        val decoded = ProcessAssociationCodec.forScope(legacy, "emulation")!!
+        assertEquals(state.process, decoded.process); assertEquals(state.session, decoded.session)
+        assertEquals("", decoded.title); assertEquals("unknown", decoded.titleSource)
+        val unknown = ProcessAssociationCodec.decode(ProcessAssociationCodec.encode(state.copy(titleSource = "unknown")))!!
+        assertEquals("", unknown.title); assertEquals("unknown", unknown.titleSource)
+        assertNull(ProcessAssociationCodec.decode(ProcessAssociationCodec.encode(state).also { it[6] = 99 }))
     }
     @Test fun summaryPublisherCoalescesWhilePlatformCallIsBlockedAndKeepsOwnedBytes() {
         val started = CountDownLatch(1); val release = CountDownLatch(1); val finished = CountDownLatch(1)

@@ -39,18 +39,45 @@ inline std::string ContentTitleId(std::uint64_t id) {
         result[i - 1] = digits[id & 0xF];
     return result;
 }
-enum class ApplicationIdentityKind { Unknown, Application, Patch };
-inline std::string ResolveApplicationTitle(std::string_view associated, std::string_view program,
+enum class ApplicationIdentityKind { Unknown, Application, Patch, AddOnContent };
+inline std::string ResolveApplicationTitle(std::string_view /* legacyAssociation */, std::string_view program,
                                          std::string_view cnmt, std::string_view parent, ApplicationIdentityKind kind) {
     auto valid = [](std::string_view value) {
         return value.size() == 16 && value != "0000000000000000" && value.find_first_not_of("0123456789abcdefABCDEF") == std::string_view::npos;
     };
-    // CNMT's typed parent is an application relation. A save owner is not one.
+    // Only typed native metadata establishes this identity; an untyped UI/save-owner hint does not.
     if (kind == ApplicationIdentityKind::Application && valid(cnmt)) return std::string(cnmt);
-    if (kind == ApplicationIdentityKind::Patch && valid(parent)) return std::string(parent);
-    if (valid(associated)) return std::string(associated);
+    if ((kind == ApplicationIdentityKind::Patch || kind == ApplicationIdentityKind::AddOnContent) && valid(parent)) return std::string(parent);
     if (valid(program)) return std::string(program);
     return {};
+}
+struct ContentIdentity {
+    std::string application, program, cnmt, parent, saveOwner, programContent, cnmtVersion, source;
+};
+template<class Loader> ContentIdentity DescribeContentIdentity(Loader &loader) {
+    ContentIdentity identity;
+    if (loader.programNca) identity.program = ContentTitleId(loader.programNca->header.titleId);
+    if (loader.nacp) identity.saveOwner = loader.nacp->GetSaveDataOwnerId();
+    identity.programContent = loader.diagnosticProgramContentId;
+    auto kind = ApplicationIdentityKind::Unknown;
+    if (loader.cnmt) {
+        identity.cnmt = loader.cnmt->GetTitleId();
+        identity.cnmtVersion = std::to_string(loader.cnmt->header.version);
+        const auto type = static_cast<unsigned>(loader.cnmt->GetContentMetaType());
+        if (type == 0x80) kind = ApplicationIdentityKind::Application;
+        else if (type == 0x81 || type == 0x82) {
+            kind = type == 0x81 ? ApplicationIdentityKind::Patch : ApplicationIdentityKind::AddOnContent;
+            identity.parent = loader.cnmt->GetParentTitleId();
+        }
+    }
+    identity.application = ResolveApplicationTitle({}, identity.program, identity.cnmt, identity.parent, kind);
+    if (!identity.application.empty()) {
+        if (kind == ApplicationIdentityKind::Application && identity.application == identity.cnmt) identity.source = "cnmt_application";
+        else if (kind == ApplicationIdentityKind::Patch && identity.application == identity.parent) identity.source = "cnmt_patch_parent";
+        else if (kind == ApplicationIdentityKind::AddOnContent && identity.application == identity.parent) identity.source = "cnmt_aoc_parent";
+        else identity.source = "program_header";
+    }
+    return identity;
 }
 inline std::string NcaContentId(std::string_view name) {
     name = ContentBasename(name);

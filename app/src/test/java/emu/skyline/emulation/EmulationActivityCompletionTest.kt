@@ -11,6 +11,7 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.savedstate.SavedStateRegistryController
 import emu.skyline.EmulationActivity
 import emu.skyline.diagnostics.Diagnostics
+import emu.skyline.diagnostics.LaunchIdentity
 import emu.skyline.settings.EmulationSettings
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -40,6 +41,11 @@ class EmulationActivityCompletionTest {
     @Implements(value = Diagnostics::class, isInAndroidSdk = false)
     class NativeDiagnostics {
         companion object {
+            @JvmStatic @Implementation fun configureNative(path: String, enabled: Boolean, verbose: Boolean, files: Int, session: String, categories: String, process: String) = enabled
+            @JvmStatic @Implementation fun statusNative() = longArrayOf(1, 0, 0, 0)
+            @JvmStatic @Implementation fun setLaunchNative(id: String, title: String, newLaunch: Boolean) { }
+            @JvmStatic @Implementation fun emitFieldsNative(category: String, event: String, level: String, keys: Array<String>, values: Array<String>) = true
+            @JvmStatic @Implementation fun emitNative(category: String, event: String, detail: String, title: String) { }
             @JvmStatic @Implementation fun stopNative() {
                 drains.incrementAndGet()
                 onDrain?.invoke()
@@ -79,6 +85,9 @@ class EmulationActivityCompletionTest {
         }
         owner = ReflectionHelpers.getStaticField(EmulationActivity::class.java, "generations")
         token = owner.begin()
+        ReflectionHelpers.setField(Diagnostics, "active", false)
+        ReflectionHelpers.setField(Diagnostics, "signature", "")
+        Diagnostics.beginLaunch(null, token)
         ReflectionHelpers.setField(activity, "generationToken", token)
         ReflectionHelpers.setField(activity, "returnToMain", true)
         val constructor = EmulationSettings::class.java.getDeclaredConstructor(android.content.Context::class.java, String::class.java)
@@ -126,6 +135,36 @@ class EmulationActivityCompletionTest {
         assertNull("destroyed Activity must not navigate", shadowOf(activity).nextStartedActivity)
     }
 
+    private fun startObservedLaunch(owner: Long): String {
+        Diagnostics.preferences(activity).edit().putBoolean("enabled", true).commit()
+        Diagnostics.apply(activity)
+        Diagnostics.beginLaunch("0100751007ADA000", owner)
+        Diagnostics.onNativeContentIdentity(owner, "0100751007ADA000", "cnmt_application")
+        return ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch").id.also { assertTrue(it.isNotEmpty()) }
+    }
+    @Test fun destructionThenRealNativeReturnPathAndSettingsApplyCannotResurrectLaunch() {
+        val old = startObservedLaunch(token)
+        destroy()
+        activity.runNativeForGeneration(token) { /* JNI has returned on the actual production finally path. */ }
+        assertNoNewFinish()
+        Diagnostics.preferences(activity).edit().putBoolean("verbose", true).commit()
+        Diagnostics.apply(activity)
+        val state = ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch")
+        assertFalse(state.active); assertEquals("", state.id); assertNotEquals(old, state.id)
+        assertEquals("", ReflectionHelpers.getField<String>(Diagnostics, "applicationTitleId"))
+    }
+    @Test fun oldNativeReturnCannotEndAReplacementLaunchOrClearItsTitle() {
+        startObservedLaunch(token)
+        destroy()
+        val replacement = owner.begin()
+        val replacementId = startObservedLaunch(replacement)
+        activity.runNativeForGeneration(token) { }
+        val state = ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch")
+        assertTrue(state.active); assertEquals(replacementId, state.id); assertEquals(replacement, state.owner)
+        assertEquals("0100751007ADA000", ReflectionHelpers.getField<String>(Diagnostics, "applicationTitleId"))
+        assertFalse(ShadowProcess.wasKilled(Process.myPid()))
+    }
+
     @Test fun destructionBeforeNativeCompletionDoesNotStartNewExit() {
         destroy()
         assertEquals(1, stops.get())
@@ -171,7 +210,7 @@ class EmulationActivityCompletionTest {
         destroy()
         assertEquals("stale destruction must not stop the replacement's native game", 0, stops.get())
         assertTrue(owner.isCurrent(replacementToken))
-        assertTrue(owner.session(replacementToken) {})
+        assertTrue(owner.session(replacementToken) { Diagnostics.beginLaunch(null, replacementToken) })
         assertNull("old Activity has not navigated before B completes", shadowOf(activity).nextStartedActivity)
         replacement.returnFromEmulation()
         awaitMainCondition { ShadowProcess.wasKilled(Process.myPid()) }

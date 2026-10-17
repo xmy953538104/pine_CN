@@ -36,6 +36,7 @@ import emu.skyline.data.BaseAppItem
 import emu.skyline.data.AppItem
 import emu.skyline.data.AppItemTag
 import emu.skyline.databinding.AppDialogBinding
+import emu.skyline.loader.diagnosticIdentity
 import emu.skyline.loader.LoaderResult
 import emu.skyline.loader.RomFile
 import emu.skyline.loader.RomType
@@ -317,8 +318,8 @@ class AppDialog : BottomSheetDialogFragment() {
             val currentContents = contents.loadContents().toMutableList()
             val isDuplicate = currentContents.any { (it as AppEntry).uri == newContent.appEntry.uri }
             emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "CONTENT_IMPORT_RESULT") {
-                emu.skyline.diagnostics.ContentDiagnosticFields.imported(newContent.appEntry.titleId, newContent.appEntry.parentTitleId,
-                    item.titleId, newContent.appEntry.version, newContent.appEntry.romType.toString(), expectedContentType.toString(),
+                emu.skyline.diagnostics.ContentDiagnosticFields.imported(newContent.appEntry.diagnosticIdentity, newContent.appEntry.titleId, newContent.appEntry.parentTitleId,
+                    item.diagnosticIdentity, item.titleId, newContent.appEntry.version, newContent.appEntry.romType.toString(), expectedContentType.toString(),
                     newContent.result.toString(), newContent.result == LoaderResult.Success, isDuplicate,
                     newContent.appEntry.romType == expectedContentType, newContent.appEntry.parentTitleId == item.titleId)
             }

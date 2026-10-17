@@ -15,6 +15,7 @@ object Diagnostics {
     private var exitHistoryQueried = false
     private val launch = LaunchIdentity()
     private var applicationTitleId = ""
+    private var applicationIdentitySource = "unknown"
     private var appContext: Context? = null
     private val processRunId: String by lazy { UUID.randomUUID().toString() }
     val processScope: String get() = if (Application.getProcessName().endsWith(":emulationProcess")) "emulation" else "main"
@@ -71,7 +72,10 @@ object Diagnostics {
                 "build_type" to BuildConfig.BUILD_TYPE, "commit" to BuildConfig.DIAGNOSTICS_COMMIT,
                 "launch_id" to launch.id, "launch_start_observed" to launch.startObserved.toString())
         }
-        if (active) publishAssociation(context) else runCatching { ProcessStateAssociation.clear() }
+        if (active) publishAssociation(context) else {
+            runCatching { ProcessStateAssociation.clear() }
+            emu.skyline.loader.DiagnosticIdentityStore.clear()
+        }
         if (active && launchObservedLate) event("lifecycle", "LAUNCH_CONTEXT_OBSERVED") { "start_observed=false" }
         if (active && !exitHistoryQueried) {
             exitHistoryQueried = true
@@ -80,32 +84,56 @@ object Diagnostics {
         }
     }
     internal fun normalizedTitleId(titleId: String?): String = titleId?.uppercase(Locale.ROOT)
-        ?.takeIf { it.length == 16 && it.all { char -> char in '0'..'9' || char in 'A'..'F' } }.orEmpty()
+        ?.takeIf { it.length == 16 && it != "0000000000000000" && it.all { char -> char in '0'..'9' || char in 'A'..'F' } }.orEmpty()
     fun event(category: String, event: String, titleId: String? = null, detail: () -> String) {
         if (active) runCatching { emitNative(category, event, DiagnosticExport.redact(detail().take(4096)), normalizedTitleId(titleId)) }
     }
-    @Synchronized fun beginLaunch(applicationTitleId: String?) {
-        val id = launch.begin(active)
-        this.applicationTitleId = normalizedTitleId(applicationTitleId)
+    @Synchronized fun beginLaunch(applicationTitleId: String?, owner: Long = 0) {
+        val id = launch.begin(active, owner)
+        // A UI hint may be cached. History stays unknown until this generation
+        // reports the identity resolved by the native runtime loader.
+        this.applicationTitleId = ""
+        applicationIdentitySource = "unknown"
         runCatching { setLaunchNative(id, normalizedTitleId(applicationTitleId), true) }
         event("lifecycle", "LAUNCH_BEGIN", applicationTitleId) { "start_observed=true" }
         if (active) appContext?.let(::publishAssociation)
     }
+    /** Called on the ordinary JNI launch thread, after the sink releases its mutex. */
+    @JvmStatic @Synchronized fun onNativeContentIdentity(owner: Long, titleId: String, source: String) {
+        if (!launch.active || !launch.belongsTo(owner)) return
+        val id = normalizedTitleId(titleId)
+        val knownSource = source in setOf("cnmt_application", "cnmt_patch_parent", "cnmt_aoc_parent", "program_header")
+        applicationTitleId = if (knownSource) id else ""
+        applicationIdentitySource = if (knownSource && id.isNotEmpty()) source else "unknown"
+        if (active) appContext?.let(::publishAssociation)
+    }
+    @Synchronized internal fun currentAssociation() = ProcessAssociation(processRunId, launch.id, sessionId,
+        BuildConfig.DIAGNOSTICS_COMMIT, applicationTitleId, processScope, active, launch.startObserved, applicationIdentitySource)
     private fun publishAssociation(context: Context) {
-        runCatching { ProcessStateAssociation.offer(context, ProcessAssociation(processRunId, launch.id, sessionId,
-            BuildConfig.DIAGNOSTICS_COMMIT, applicationTitleId, processScope, active, launch.startObserved)) }
+        runCatching { ProcessStateAssociation.offer(context, currentAssociation()) }
     }
     internal fun flushForSession(expected: String): Boolean = active && sessionId == expected &&
         runCatching { flushNative() }.getOrDefault(false) && active && sessionId == expected
     @Synchronized internal fun eventForSession(expected: String, category: String, event: String, detail: () -> String) {
         if (active && sessionId == expected) event(category, event, detail = detail)
     }
-    @Synchronized fun finishSession() {
+    /** Native completion owns state cleanup even when Activity navigation was rejected. */
+    @Synchronized fun endLaunch(owner: Long): Boolean {
+        if (!launch.end(owner)) return false
+        applicationTitleId = ""
+        applicationIdentitySource = "unknown"
+        runCatching { setLaunchNative("", "", true) }
+        runCatching { ProcessStateAssociation.clear() }
+        return true
+    }
+    @Synchronized fun finishSession(owner: Long? = null) {
+        if (owner != null && !launch.belongsTo(owner)) return
         runCatching { stopNative() }
         active = false
         signature = ""
         launch.end()
         applicationTitleId = ""
+        applicationIdentitySource = "unknown"
         runCatching { ProcessStateAssociation.clear() }
     }
     fun installExceptionObserver() {

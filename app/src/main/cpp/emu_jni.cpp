@@ -7,6 +7,7 @@
 #include "skyline/diagnostics/diagnostics.h"
 #include "skyline/diagnostics/utf16.h"
 #include "skyline/diagnostics/initialization.h"
+#include "skyline/diagnostics/identity_jni.h"
 #include "skyline/nce.h"
 #include <csignal>
 #include <pthread.h>
@@ -97,9 +98,11 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     jstring privateAppFilesPathJstring,
     jstring nativeLibraryPathJstring,
     jobject assetManager,
-    jstring diagnosticTitleId
+    jstring diagnosticTitleId,
+    jlong generationToken
 ) {
     skyline::signal::ScopedStackBlocker stackBlocker; // We do not want anything to unwind past JNI code as there are invalid stack frames which can lead to a segmentation fault
+    skyline::diagnostics::ScopedJavaContentIdentityObserver identityObserver(env, generationToken);
     skyline::diagnostics::ClearTitleId();
     // UI identity is an association, available before GPU/OS construction.
     // OS::Execute still replaces it with the actually loaded content identity.

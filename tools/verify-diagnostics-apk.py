@@ -34,7 +34,7 @@ jvm["classes"] = sorted(suite.attrib["name"] for suite in suites)
 assert all(any(name.endswith(required) for name in jvm["classes"]) for required in (
     "DiagnosticExportTest", "ContentSelectionTest", "DiagnosticsProcessTest", "EmulationGenerationTest",
     "EmulationActivityCompletionTest", "StartupDiagnosticsTest", "ContentFilesTest", "UriLaunchFailureTest",
-    "LaunchIdentityTest", "ProcessAssociationTest", "NativeTraceSummaryTest", "ContentDiagnosticFieldsTest")), jvm
+    "LaunchIdentityTest", "ProcessAssociationTest", "NativeTraceSummaryTest", "NativeTraceImportTest", "MetadataJniMappingTest", "ContentDiagnosticFieldsTest")), jvm
 release_manifests = [*pathlib.Path("app/build/intermediates/merged_manifest/fullRelease").rglob("AndroidManifest.xml"),
                      *pathlib.Path("app/build/intermediates/merged_manifests/fullRelease").rglob("AndroidManifest.xml")]
 android_process = "{http://schemas.android.com/apk/res/android}process"

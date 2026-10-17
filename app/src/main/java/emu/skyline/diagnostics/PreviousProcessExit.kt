@@ -64,7 +64,7 @@ internal object PreviousProcessExit {
                             mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true", "exit_record_id" to id,
                                 "process_scope" to scope, "reason_code" to exit.reason.toString(), "status" to exit.status.toString(),
                                 "exit_wall_clock_ms" to exit.timestamp.toString(), "association_status" to relation,
-                                "previous_application_title_id" to association?.title.orEmpty(), "previous_diagnostics_enabled" to (association?.enabled?.toString() ?: "unknown"),
+                                "previous_application_title_id" to association?.title.orEmpty(), "previous_application_identity_source" to (association?.titleSource ?: "unknown"), "previous_diagnostics_enabled" to (association?.enabled?.toString() ?: "unknown"),
                                 "previous_launch_start_observed" to (association?.startObserved?.toString() ?: "unknown")) + previous()
                         }
                         if (accepted && Diagnostics.flushForSession(session)) seen.add("e:$id")
@@ -80,7 +80,8 @@ internal object PreviousProcessExit {
                         }) { trace, attempt ->
                             val accepted = event("PREVIOUS_NATIVE_TRACE") {
                                 NativeTraceImport.fields(mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true", "exit_record_id" to id,
-                                    "association_status" to relation, "previous_application_title_id" to association?.title.orEmpty()) + previous(), trace, attempt)
+                                    "association_status" to relation, "previous_application_title_id" to association?.title.orEmpty(),
+                                    "previous_application_identity_source" to (association?.titleSource ?: "unknown")) + previous(), trace, attempt)
                             }
                             accepted && Diagnostics.flushForSession(session)
                         }

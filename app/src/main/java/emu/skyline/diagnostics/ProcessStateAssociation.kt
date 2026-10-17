@@ -13,22 +13,26 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** 84 bytes, anonymous IDs only. PID, thread names, URIs and user text are never encoded. */
 internal data class ProcessAssociation(val process: String, val launch: String, val session: String,
-    val commit: String, val title: String, val scope: String, val enabled: Boolean, val startObserved: Boolean)
+    val commit: String, val title: String, val scope: String, val enabled: Boolean, val startObserved: Boolean,
+    val titleSource: String = "unknown")
 internal object ProcessAssociationCodec {
-    private const val MAGIC = 0x50445831 // PDX1
+    private const val LEGACY_MAGIC = 0x50445831 // PDX1 had an untyped title (possibly a save owner).
+    private const val MAGIC = 0x50445832 // PDX2: one reserved byte now identifies the native title source.
+    private val sources = listOf("unknown", "cnmt_application", "cnmt_patch_parent", "cnmt_aoc_parent", "program_header")
     private const val SIZE = 84
     private val uuidPattern = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
     private fun hex(value: String, size: Int): ByteArray = if (value.length == size * 2 && value.all { it in "0123456789abcdefABCDEF" })
         ByteArray(size) { value.substring(it * 2, it * 2 + 2).toInt(16).toByte() } else ByteArray(size)
     fun encode(value: ProcessAssociation): ByteArray {
         val out = ByteBuffer.allocate(SIZE)
+        val source = sources.indexOf(value.titleSource).coerceAtLeast(0)
         out.putInt(MAGIC).put((if (value.enabled) 1 else 0).or(if (value.startObserved) 2 else 0).toByte())
-            .put(if (value.scope == "emulation") 1.toByte() else 0.toByte()).putShort(0)
+            .put(if (value.scope == "emulation") 1.toByte() else 0.toByte()).put(source.toByte()).put(0)
         listOf(value.process, value.launch, value.session).forEach {
             val id = if (uuidPattern.matches(it)) UUID.fromString(it) else UUID(0, 0)
             out.putLong(id.mostSignificantBits).putLong(id.leastSignificantBits)
         }
-        out.put(hex(value.commit, 20)).put(hex(value.title, 8))
+        out.put(hex(value.commit, 20)).put(hex(if (source == 0) "" else value.title, 8))
         return out.array()
     }
     fun forScope(bytes: ByteArray?, scope: String): ProcessAssociation? = decode(bytes)?.takeIf {
@@ -37,16 +41,21 @@ internal object ProcessAssociationCodec {
     fun decode(bytes: ByteArray?): ProcessAssociation? = runCatching {
         require(bytes != null && bytes.size == SIZE)
         val input = ByteBuffer.wrap(bytes)
-        require(input.int == MAGIC)
+        val magic = input.int
+        require(magic == MAGIC || magic == LEGACY_MAGIC)
         val flags = input.get().toInt(); val scope = input.get().toInt()
-        require(flags in 0..3 && scope in 0..1 && input.short == 0.toShort())
+        val source = input.get().toInt(); val reserved = input.get().toInt()
+        require(flags in 0..3 && scope in 0..1 && reserved == 0 && source in sources.indices)
+        require(magic != LEGACY_MAGIC || source == 0)
         fun uuid(): String = UUID(input.long, input.long).let { if (it == UUID(0, 0)) "" else it.toString() }
         fun readHex(size: Int): String = ByteArray(size).also { input.get(it) }.let { data ->
             if (data.all { it == 0.toByte() }) "" else data.joinToString("") { "%02x".format(it.toInt() and 255) }
         }
         val process = uuid(); val launch = uuid(); val session = uuid()
-        ProcessAssociation(process, launch, session, readHex(20), readHex(8).uppercase(java.util.Locale.ROOT),
-            if (scope == 1) "emulation" else "main", flags and 1 != 0, flags and 2 != 0)
+        val commit = readHex(20); val title = readHex(8).uppercase(java.util.Locale.ROOT)
+        val typed = magic == MAGIC && source != 0 && title.isNotEmpty()
+        ProcessAssociation(process, launch, session, commit, if (typed) title else "",
+            if (scope == 1) "emulation" else "main", flags and 1 != 0, flags and 2 != 0, if (typed) sources[source] else "unknown")
     }.getOrNull()
 }
 

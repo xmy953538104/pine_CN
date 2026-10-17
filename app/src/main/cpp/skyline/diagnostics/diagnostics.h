@@ -44,7 +44,7 @@ bool EmitFields(std::string_view category, std::string_view event,
 // disabled and across Start/Stop; subsequent records inherit it. Empty is unknown.
 void SetTitleId(std::string_view titleId) noexcept;
 void SetContentIdentity(std::string_view applicationId, std::string_view programId,
-                        std::string_view cnmtId, std::string_view programContentId = {}) noexcept;
+                        std::string_view cnmtId, std::string_view programContentId = {}, std::string_view applicationSource = {}) noexcept;
 std::string ApplicationTitleId();
 void SetLaunchId(std::string_view launchId, bool newLaunch = false) noexcept;
 // True game boundaries only: clear at launch and after the final session drains.

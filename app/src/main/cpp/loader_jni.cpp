@@ -12,9 +12,12 @@
 #include "skyline/loader/xci.h"
 #include "skyline/loader/nsp.h"
 #include "skyline/jvm.h"
+#include "skyline/diagnostics/content.h"
 
 extern "C" JNIEXPORT jint JNICALL Java_emu_skyline_loader_RomFile_populate(JNIEnv *env, jobject thiz, jint jformat, jint fd, jstring appFilesPathJstring, jint systemLanguage) {
     skyline::signal::ScopedStackBlocker stackBlocker;
+    // Library metadata scanning is not execution of an update/program NCA.
+    skyline::diagnostics::ContentScope diagnosticScope("metadata_scan");
 
     skyline::loader::RomFormat format{static_cast<skyline::loader::RomFormat>(jformat)};
 

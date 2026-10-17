@@ -82,3 +82,11 @@ python3 tools/tests/test-ctrlc.py
 For Windows keyboard acceptance, run the collector with a device, wait for an
 event, press Ctrl+C, verify the JSONL parses and no collector adb logcat process
 remains. Fake ADB tests do not demonstrate a real Android connection or APK launch.
+# Startup crashes
+
+For an immediate process exit, start capture before launch without TitleId or
+SessionId filters: `./tools/pine-diag.ps1 -IncludeCrashLog`. This retains a separate
+bounded local main/crash-buffer trace with AndroidRuntime, DEBUG and libc as
+well as the existing PineDiag JSONL. Review the raw trace privately before
+sharing; it is not automatically redacted. No device logs are cleared.
+See [the startup investigation guide](../docs/diagnostics-startup-crash.md).

@@ -3,6 +3,7 @@
 
 #include <dlfcn.h>
 #include <adrenotools/driver.h>
+#include "diagnostics/initialization.h"
 #include "common/settings.h"
 #include "common.h"
 #include "nce.h"
@@ -63,12 +64,12 @@ namespace skyline {
 
     DeviceState::DeviceState(kernel::OS *tOs, std::shared_ptr<JvmManager> jvmManager, std::shared_ptr<Settings> tSettings)
         : os(tOs), jvm(std::move(jvmManager)), settings(std::move(tSettings)) {          
-        auto [vkGetInstanceProcAddr, adrenotoolsImportHandle]{LoadVulkanDriver(*os, *settings)};
+        auto [vkGetInstanceProcAddr, adrenotoolsImportHandle]{diagnostics::ObserveInitialization("VULKAN_DRIVER_LOAD", [&] { return LoadVulkanDriver(*os, *settings); })};
         // We assign these later as they use the state in their constructor and we don't want null pointers
-        gpu = std::make_shared<gpu::GPU>(*this, vkGetInstanceProcAddr, adrenotoolsImportHandle);
-        soc = std::make_shared<soc::SOC>(*this);
-        audio = std::make_shared<audio::Audio>(*this);
-        input = std::make_shared<input::Input>(*this);
+        gpu = diagnostics::ObserveInitialization("GPU_CONSTRUCT", [&] { return std::make_shared<gpu::GPU>(*this, vkGetInstanceProcAddr, adrenotoolsImportHandle); });
+        soc = diagnostics::ObserveInitialization("SOC_CONSTRUCT", [&] { return std::make_shared<soc::SOC>(*this); });
+        audio = diagnostics::ObserveInitialization("AUDIO_CONSTRUCT", [&] { return std::make_shared<audio::Audio>(*this); });
+        input = diagnostics::ObserveInitialization("INPUT_CONSTRUCT", [&] { return std::make_shared<input::Input>(*this); });
     }
 
     DeviceState::~DeviceState() {

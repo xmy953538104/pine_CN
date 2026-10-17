@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         if (scenario == "capture") {
             Session(root, 0, "native-adb-a", [] {
                 Record([] { diag::Emit("lifecycle", "BEFORE_TITLE", {{"message", "base is not known yet"}}); });
-                Record([] { diag::Emit("content", "CONTENT_ID_WITHOUT_CONTEXT", {{"title_id", BaseTitle}, {"message", "content identity before launch context"}}); });
+                Record([] { diag::Emit("content", "CONTENT_ID_WITHOUT_CONTEXT", {{"title_id", BaseTitle}, {"detail", "phase=ui_association execution_confirmed=false"}}); });
                 diag::SetTitleId(BaseTitle);
                 Record([] { diag::Emit("content", "BASE_SELECTED", {{"title_id", BaseTitle}, {"message", "\xe4\xb8\xad\xe6\x96\x87 \xe6\x97\xa5\xe5\xbf\x97"}}); });
                 Record([] { diag::Emit("storage", "DLC_DATA_READ", {{"title_id", DlcTitle}, {"parent_title_id", BaseTitle}, {"actual_bytes", "8"}}); });

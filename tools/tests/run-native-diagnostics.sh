@@ -15,6 +15,8 @@ fi
 "$build/process_test" "$build/process-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" -Iapp/src/main/cpp -Iapp/src/main/cpp/skyline "$build/diagnostics.o" tests/diagnostics/guest_test.cpp -o "$build/guest_test"
 "$build/guest_test" "$build/guest-logs"
+"${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/startup_test.cpp -o "$build/startup_test"
+"$build/startup_test" "$build/startup-logs"
 for test in pending_signal utf16; do
     "${CXX:-c++}" "${flags[@]}" -Iapp/src/main/cpp/skyline "tests/diagnostics/${test}_test.cpp" -o "$build/${test}_test"
     "$build/${test}_test"

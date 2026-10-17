@@ -164,6 +164,8 @@ class DiagnosticsActivity : AppCompatActivity() {
                     appendLine("android_api=${Build.VERSION.SDK_INT}")
                     appendLine("device_model=${Build.MANUFACTURER} ${Build.MODEL}")
                     appendLine("status_process=${Diagnostics.processScope}")
+                    appendLine("status_session_id=${Diagnostics.session(this@DiagnosticsActivity)}")
+                    appendLine("status_counters_scope=current process and current sink session only; exported logs may contain older sessions")
                     appendLine("status_available=${state.available}")
                     appendLine("sink_active=${state.enabled}")
                     appendLine("written=${state.written}; dropped=${state.dropped}; disk_errors=${state.diskErrors}")

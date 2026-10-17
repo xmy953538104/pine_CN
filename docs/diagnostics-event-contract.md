@@ -200,3 +200,12 @@ with per-value JSON redaction; incomplete/malformed records are counted/omitted.
 Recognized private locations are removed through their decoded string's line end,
 including filenames with spaces or quotes. Earlier context, other JSON fields
 and relative guest paths survive; later same-line detail is conservatively omitted.
+# Startup observation clarification
+
+See [startup crash evidence and acceptance](diagnostics-startup-crash.md).
+`STAGE_STARTED` means entered, not completed. `INITIALIZATION_UNWOUND` is
+unclassified unwind information and does not classify normal cancellation as
+a crash. UI selections are associations (`execution_confirmed=false`), and
+`loader_source=metadata_scan` does not establish runtime execution. Historical
+`PREVIOUS_PROCESS_EXIT`/`PREVIOUS_PROCESS_CRASH` records preserve Android's
+reported reason; the previous build/session/title are unknown.

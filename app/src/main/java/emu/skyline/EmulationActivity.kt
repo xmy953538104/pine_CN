@@ -182,7 +182,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      * @param nativeLibraryPath The full path to the app native library directory
      * @param assetManager The asset manager used for accessing app assets
      */
-    private external fun executeApplication(romUri : String, romType : Int, romFd : Int, dlcFds : IntArray?, updateFd : Int, nativeSettings : NativeSettings, publicAppFilesPath : String, privateAppFilesPath : String, nativeLibraryPath : String, assetManager : AssetManager)
+    private external fun executeApplication(romUri : String, romType : Int, romFd : Int, dlcFds : IntArray?, updateFd : Int, nativeSettings : NativeSettings, publicAppFilesPath : String, privateAppFilesPath : String, nativeLibraryPath : String, assetManager : AssetManager, diagnosticTitleId: String)
 
     /**
      * @param join If the function should only return after all the threads join or immediately
@@ -324,8 +324,8 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             runningGeneration = token
             if (!generations.session(token) {
                 emu.skyline.diagnostics.Diagnostics.apply(this)
-                emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED") { "title_id=$diagnosticTitle format=$diagnosticFormat" }
-                emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED") { "title_id=$diagnosticTitle update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
+                emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED", diagnosticTitle) { "phase=ui_association execution_confirmed=false format=$diagnosticFormat" }
+                emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED", diagnosticTitle) { "phase=ui_association execution_confirmed=false update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
             }) {
                 // Superseded before native execution took ownership of these FDs.
                 runCatching { romFd.close() }
@@ -333,7 +333,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                 if (updateFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(updateFd).close() }
                 return@Thread
             }
-            executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets)
+            executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets, emu.skyline.diagnostics.Diagnostics.normalizedTitleId(diagnosticTitle))
             returnFromEmulation(token)
         }
 
@@ -364,7 +364,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         val selection = emu.skyline.data.selectUriContent(item.titleId, contents.loadContents())
         updateUri = selection.updateUri
         dlcUris.addAll(selection.dlcUris)
-        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED") { "entry=uri_fallback policy=last_match base_title_id=${item.titleId} selected_title_id=${selection.updateTitleId} selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
+        emu.skyline.diagnostics.Diagnostics.event("content", "PATCH_SELECTED", item.titleId) { "phase=ui_association execution_confirmed=false entry=uri_fallback policy=last_match selected_title_id=${selection.updateTitleId} selected=${updateUri != Uri.EMPTY} dlc_count=${dlcUris.size}" }
     }
 
     @SuppressLint("SetTextI18n", "ClickableViewAccessibility")

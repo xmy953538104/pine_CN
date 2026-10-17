@@ -276,6 +276,9 @@ object DiagnosticExport {
         private val errors = ArrayDeque<String>()
         private var errorCount = 0L
         private val stages = linkedMapOf<String, Pair<Long, String>>()
+        private data class SessionObservation(var dropped: Long = 0, var summary: Boolean = false, var emulationEnd: Boolean = false,
+            var startedSequence: Long = -1, var startedStage: String = "")
+        private val observations = linkedMapOf<String, SessionObservation>()
         fun accept(record: JsonObject): Boolean {
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull
             val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull
@@ -294,6 +297,21 @@ object DiagnosticExport {
             val level = (record["level"] as? JsonPrimitive)?.contentOrNull
             val stage = (record["last_stage"] as? JsonPrimitive)?.contentOrNull
             val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull ?: -1L
+            val observation = if (session.isNotEmpty() && (session in observations || observations.size < 64))
+                observations.getOrPut(session) { SessionObservation() } else null
+            observation?.let {
+                val dropped = (record["dropped_count"] as? JsonPrimitive)?.longOrNull
+                if (dropped != null && dropped >= 0) it.dropped = maxOf(it.dropped, dropped)
+                if (event == "SESSION_SUMMARY") it.summary = true
+                if (event == "EMULATION_RETURNED" || event == "EMULATION_CANCELLED" ||
+                    (event == "STAGE_COMPLETED" && ((record["fields"] as? JsonObject)?.get("stage") as? JsonPrimitive)?.contentOrNull == "EMULATION_ENDED"))
+                    it.emulationEnd = true
+                if (event == "STAGE_STARTED" && sequence >= it.startedSequence) {
+                    val fields = record["fields"] as? JsonObject
+                    it.startedSequence = sequence
+                    it.startedStage = (fields?.get("stage") as? JsonPrimitive)?.contentOrNull.orEmpty().take(128)
+                }
+            }
             if (session.isNotEmpty() && sequence >= 0) {
                 if (identities.size < MAX_IDENTITIES) identities.add(session to sequence) else dedupLimit = true
             }
@@ -328,6 +346,19 @@ object DiagnosticExport {
             appendLine("snapshot_rotation=opened file descriptors; duplicate session/sequence records omitted; concurrent rotation may omit records")
             appendLine("exported_records=$records")
             appendLine("observed_sessions=${sessions.joinToString(",")}")
+            appendLine("observed_drop_scope=per-session maximum cumulative dropped_count in exported records; lower bound, not a sum of each row")
+            appendLine("observed_dropped_count_lower_bound=${observations.values.fold(0L) { total, item -> total + minOf(item.dropped, Long.MAX_VALUE - total) }}")
+            observations.forEach { (session, item) ->
+                appendLine(buildJsonObject {
+                    put("session_id", session)
+                    put("observed_dropped_count_lower_bound", item.dropped)
+                    put("session_summary_observed", item.summary)
+                    put("emulation_end_observed", item.emulationEnd)
+                    put("last_started_stage", item.startedStage)
+                }.toString())
+            }
+            appendLine("missing_session_summary=termination not observed; this alone does not distinguish crash, kill, live session or omitted/rotated records")
+            appendLine("session_summary_scope=diagnostic sink closure only; it does not prove successful game initialization or a normal process exit")
             appendLine("observed_session_build_metadata=SESSION_METADATA emitted by each captured session; current exporter build is separate")
             sessionBuilds.values.forEach(::appendLine)
             appendLine("observed_sessions_without_build_metadata=${sessions.filterNot { it in sessionBuilds }.joinToString(",")}")
@@ -345,6 +376,7 @@ object DiagnosticExport {
             appendLine("observed_content_summary=up to 64 most recently captured content events, in snapshot read order")
             content.forEach(::appendLine)
             appendLine("observed_error_count=$errorCount")
+            appendLine("observed_error_count_scope=exported records only; zero does not imply no crash or successful initialization")
             appendLine("observed_error_summary=up to 32 most recently captured errors, in snapshot read order")
             errors.forEach(::appendLine)
             appendLine("Missing events do not prove that a path was not executed. Guest text may contain personal information.")

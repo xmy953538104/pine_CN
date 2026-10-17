@@ -6,11 +6,13 @@ import android.content.Context
 import emu.skyline.BuildConfig
 import java.io.File
 import java.util.UUID
+import java.util.Locale
 
 object Diagnostics {
     @Volatile private var active = false
     private var signature = ""
     private var sessionId = ""
+    private var exitHistoryQueried = false
     val processScope: String get() = if (Application.getProcessName().endsWith(":emulationProcess")) "emulation" else "main"
     fun preferences(context: Context) = context.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
     fun rootDirectory(context: Context) = File(context.filesDir.canonicalFile, "diagnostics")
@@ -20,7 +22,7 @@ object Diagnostics {
     @JvmStatic external fun statusNative(): LongArray
     @JvmStatic external fun flushNative(): Boolean
     @JvmStatic external fun stopNative()
-    @JvmStatic external fun emitNative(category: String, event: String, detail: String)
+    @JvmStatic external fun emitNative(category: String, event: String, detail: String, titleId: String)
     @Synchronized fun apply(context: Context) {
         val prefs = preferences(context)
         val enabled = prefs.getBoolean("enabled", false)
@@ -46,9 +48,15 @@ object Diagnostics {
         if (active) event("lifecycle", "SESSION_METADATA") {
             "process=$processScope session=$sessionId version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT}"
         }
+        if (active && !exitHistoryQueried) {
+            exitHistoryQueried = true
+            PreviousProcessExit.observe(context)
+        }
     }
-    fun event(category: String, event: String, detail: () -> String) {
-        if (active) runCatching { emitNative(category, event, DiagnosticExport.redact(detail().take(4096))) }
+    internal fun normalizedTitleId(titleId: String?): String = titleId?.uppercase(Locale.ROOT)
+        ?.takeIf { it.length == 16 && it.all { char -> char in '0'..'9' || char in 'A'..'F' } }.orEmpty()
+    fun event(category: String, event: String, titleId: String? = null, detail: () -> String) {
+        if (active) runCatching { emitNative(category, event, DiagnosticExport.redact(detail().take(4096)), normalizedTitleId(titleId)) }
     }
     @Synchronized fun finishSession() {
         runCatching { stopNative() }

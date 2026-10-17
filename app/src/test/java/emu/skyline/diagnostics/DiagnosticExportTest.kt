@@ -15,6 +15,50 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 
 class DiagnosticExportTest {
+    @Test fun malformedStagePayloadCannotBreakSafeExportOrInventNormalEnd() = sandbox { logs, textLog, cache, _ ->
+        log(logs, "main/diagnostics-0.jsonl", """{"session_id":"synthetic","sequence":1,"event":"STAGE_COMPLETED","fields":{"stage":["EMULATION_ENDED"]}}""" + "\n")
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val metadata = archive(snapshot).getValue("session-metadata.txt")
+            assertTrue(metadata.contains("exported_records=1"))
+            assertTrue(metadata.contains("\"emulation_end_observed\":false"))
+        }
+    }
+
+    @Test fun historicalDropCountersRemainVisibleWhenCurrentSessionHasZero() = sandbox { logs, textLog, cache, _ ->
+        fun row(session: String, sequence: Int, dropped: Int, event: String) = buildJsonObject {
+            put("schema", 1); put("session_id", session); put("sequence", sequence)
+            put("category", "lifecycle"); put("event", event); put("level", "INFO")
+            put("dropped_count", dropped)
+            putJsonObject("fields") { put("stage", "SYNTHETIC_GPU_MEMBER") }
+        }.toString() + "\n"
+        log(logs, "main/diagnostics-0.jsonl", row("current", 1, 0, "SESSION_METADATA"))
+        log(logs, "main/diagnostics-1.jsonl", row("historical", 1, 1, "SESSION_METADATA") +
+            row("historical", 2, 2, "STAGE_STARTED") + row("historical", 3, 2, "SESSION_SUMMARY"))
+        DiagnosticExport.capture(logs, textLog, cache, "status_session_id=current\nwritten=1; dropped=0; disk_errors=0").use { snapshot ->
+            val metadata = archive(snapshot).getValue("session-metadata.txt")
+            assertTrue(metadata.contains("observed_dropped_count_lower_bound=2"))
+            val summaries = metadata.lineSequence().mapNotNull {
+                runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull()
+            }.filter { "session_summary_observed" in it }.associateBy { it.getValue("session_id").jsonPrimitive.content }
+            assertEquals(2, summaries.size)
+            assertEquals(2, summaries.getValue("historical").getValue("observed_dropped_count_lower_bound").jsonPrimitive.int)
+            assertTrue(summaries.getValue("historical").getValue("session_summary_observed").jsonPrimitive.boolean)
+            assertFalse(summaries.getValue("current").getValue("session_summary_observed").jsonPrimitive.boolean)
+            assertEquals("SYNTHETIC_GPU_MEMBER", summaries.getValue("historical").getValue("last_started_stage").jsonPrimitive.content)
+            assertTrue(metadata.contains("zero does not imply no crash"))
+            assertTrue(metadata.contains("does not distinguish crash, kill, live session"))
+        }
+    }
+
+    @Test fun observedDropCountersUseMaximumInSequenceIndependentSnapshotOrder() = sandbox { logs, textLog, cache, _ ->
+        fun row(sequence: Int, dropped: Long) = """{"session_id":"synthetic","sequence":$sequence,"dropped_count":$dropped,"fields":{}}""" + "\n"
+        log(logs, "main/diagnostics-0.jsonl", row(3, 4))
+        log(logs, "main/diagnostics-1.jsonl", row(1, 1) + row(2, -1))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            assertTrue(archive(snapshot).getValue("session-metadata.txt").contains("observed_dropped_count_lower_bound=4"))
+        }
+    }
+
     private fun sandbox(test: (logs: File, textLog: File, cache: File, root: File) -> Unit) {
         val root = Files.createTempDirectory("pine-diag-test").toFile()
         try {

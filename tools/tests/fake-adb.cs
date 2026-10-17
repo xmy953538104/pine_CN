@@ -50,6 +50,10 @@ public class FakeAdb {
         if (File.Exists(pidPath)) File.Delete(pidPath);
         File.Move(pidPath + ".tmp", pidPath);
         WriteLine(-11, "--------- beginning of main");
+        if (mode == "crash-context") {
+            WriteLine(-11, "Fatal signal 6 (SIGABRT), controlled fixture only");
+            WriteLine(-11, "FATAL EXCEPTION: synthetic thread");
+        }
         if (mode != "sessions") {
             // Malformed transport input is intentionally synthetic. Valid
             // records below are replayed byte-for-byte from the real sink.

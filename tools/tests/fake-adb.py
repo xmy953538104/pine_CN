@@ -22,6 +22,9 @@ else:
     pid_temp.write_text(str(os.getpid()))
     pid_temp.replace(pid_path)
     print('--------- beginning of main')
+    if mode == 'crash-context':
+        print('Fatal signal 6 (SIGABRT), controlled fixture only', flush=True)
+        print('FATAL EXCEPTION: synthetic thread', flush=True)
     if mode != 'sessions':
         # Only invalid input is synthetic; valid JSONL is replayed unchanged.
         for invalid in ['not JSON', '{"session_id":null}', '{"session_id":5}',

@@ -273,6 +273,7 @@ try {
     # serializer. The first BEFORE_TITLE record has neither known title field.
     for ($i = 0; $i -lt $lines.Count; $i++) { Assert ($lines[$i] -ceq $fixtureLines[$i + 1]) 'Collector altered or selected the wrong native sink record' }
     $events = @($lines | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert ($events[0].fields.detail -eq 'phase=ui_association execution_confirmed=false') 'Structured pre-native title must survive the title filter without parsing detail text'
     $event = @($events | Where-Object { $_.event -eq 'BASE_SELECTED' })[0]
     $expectedUnicode = -join ([char[]]@(0x4e2d, 0x6587, 0x20, 0x65e5, 0x5fd7))
     Assert ($event.fields.message -eq $expectedUnicode) 'UTF8 did not round trip'
@@ -285,6 +286,20 @@ try {
     $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
     Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Timed collection leaked ADB'
 
+    $env:PINE_FAKE_ADB_MODE = 'crash-context'
+    $crashOutput = Join-Path $temp 'crash-context'
+    & $collector -AdbPath $fake -NonInteractive -IncludeCrashLog -OutputDirectory $crashOutput -DurationSeconds 3 | Out-Null
+    $crashFiles = @(Get-ChildItem $crashOutput -Filter '*.log')
+    Assert ($crashFiles.Count -eq 1) 'Crash context should be saved separately from JSONL'
+    $crashText = Read-SharedText $crashFiles[0].FullName
+    Assert ($crashText.Contains('Fatal signal 6') -and $crashText.Contains('FATAL EXCEPTION: synthetic')) 'Non-JSON native/Java crash lines must survive'
+    Assert ($crashText.Contains('BEFORE_TITLE')) 'Crash context must include startup events with unknown title'
+    Assert (@(Get-ChildItem $crashOutput -Filter '*.jsonl').Count -eq 3) 'Crash capture must keep all sessions without implicit title/session filtering'
+    $arguments = [IO.File]::ReadAllText($env:PINE_FAKE_ADB_ARGS)
+    Assert ($arguments.Contains('logcat -b main -b crash -v raw PineDiag:V AndroidRuntime:V DEBUG:V libc:V *:S')) 'Crash mode must read actual main/crash buffers and fatal tags'
+    $childId = [int][IO.File]::ReadAllText($env:PINE_FAKE_ADB_PID)
+    Assert (-not (Get-Process -Id $childId -ErrorAction SilentlyContinue)) 'Crash collection leaked ADB'
+    $env:PINE_FAKE_ADB_MODE = 'multiple'
     $ownTitleOutput = Join-Path $temp 'own-title'
     & $collector -AdbPath $fake -Serial second-device -SessionId native-adb-a -TitleId 0100751007ADB001 -OutputDirectory $ownTitleOutput -DurationSeconds 3 | Out-Null
     Assert (@(Get-ChildItem $ownTitleOutput -Filter '*.jsonl').Count -eq 0) 'A distinct DLC Data ID must not override known base-title context'

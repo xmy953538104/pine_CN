@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "skyline/diagnostics/diagnostics.h"
 #include "skyline/diagnostics/utf16.h"
+#include "skyline/diagnostics/initialization.h"
 #include "skyline/nce.h"
 #include <csignal>
 #include <pthread.h>
@@ -94,16 +95,21 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     jstring publicAppFilesPathJstring,
     jstring privateAppFilesPathJstring,
     jstring nativeLibraryPathJstring,
-    jobject assetManager
+    jobject assetManager,
+    jstring diagnosticTitleId
 ) {
     skyline::signal::ScopedStackBlocker stackBlocker; // We do not want anything to unwind past JNI code as there are invalid stack frames which can lead to a segmentation fault
     skyline::diagnostics::ClearTitleId();
+    // UI identity is an association, available before GPU/OS construction.
+    // OS::Execute still replaces it with the actually loaded content identity.
+    try { skyline::diagnostics::SetTitleId(ConvertDiagnosticJString(env, diagnosticTitleId)); } catch (...) {}
     Fps = 0;
     AverageFrametimeMs = AverageFrametimeDeviationMs = 0.0f;
 
     pthread_setname_np(pthread_self(), "EmuMain");
+    skyline::diagnostics::Stage("JNI_ENTERED");
 
-    auto jvmManager{std::make_shared<skyline::JvmManager>(env, instance)};
+    auto jvmManager{skyline::diagnostics::ObserveInitialization("JNI_JVM_MANAGER", [&] { return std::make_shared<skyline::JvmManager>(env, instance); })};
 
     jsize dlcArrSize = dlcFds != nullptr ? env->GetArrayLength(dlcFds) : 0;
     std::vector<int> dlcFdsVector(dlcArrSize);
@@ -111,11 +117,11 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     if (dlcArrSize > 0)
         env->GetIntArrayRegion(dlcFds, 0, dlcArrSize, &dlcFdsVector[0]);
 
-    std::shared_ptr<skyline::Settings> settings{std::make_shared<skyline::AndroidSettings>(env, settingsInstance)};
+    std::shared_ptr<skyline::Settings> settings{skyline::diagnostics::ObserveInitialization("JNI_ANDROID_SETTINGS", [&] { return std::make_shared<skyline::AndroidSettings>(env, settingsInstance); })};
 
     skyline::JniString publicAppFilesPath(env, publicAppFilesPathJstring);
 
-    skyline::AsyncLogger::Initialize(*settings->logLevel, publicAppFilesPath + "logs/emulation.log");
+    skyline::diagnostics::ObserveInitialization("JNI_TEXT_LOGGER", [&] { skyline::AsyncLogger::Initialize(*settings->logLevel, publicAppFilesPath + "logs/emulation.log"); });
 
     auto start{std::chrono::steady_clock::now()};
 
@@ -123,17 +129,17 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     perfetto::TracingInitArgs args;
     args.backends |= perfetto::kSystemBackend;
     args.shmem_size_hint_kb = 0x200000;
-    perfetto::Tracing::Initialize(args);
-    perfetto::TrackEvent::Register();
-
-    skyline::diagnostics::Stage("JNI_ENTERED");
+    skyline::diagnostics::ObserveInitialization("JNI_TRACING", [&] {
+        perfetto::Tracing::Initialize(args);
+        perfetto::TrackEvent::Register();
+    });
     try {
         skyline::JniString nativeLibraryPath(env, nativeLibraryPathJstring);
         skyline::JniString privateAppFilesPath{env, privateAppFilesPathJstring};
 
         // Host signal handlers need to be set before NCE is initialized, this is the only place where we can do that
         skyline::signal::SetHostSignalHandler({SIGINT, SIGILL, SIGTRAP, SIGBUS, SIGFPE, SIGSEGV}, skyline::signal::ExceptionalSignalHandler);
-        auto os{std::make_shared<skyline::kernel::OS>(
+        auto os{skyline::diagnostics::ObserveInitialization("OS_CONSTRUCT", [&] { return std::make_shared<skyline::kernel::OS>(
             jvmManager,
             settings,
             publicAppFilesPath,
@@ -141,28 +147,37 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
             nativeLibraryPath,
             GetTimeZoneName(),
             std::make_shared<skyline::vfs::AndroidAssetFileSystem>(AAssetManager_fromJava(env, assetManager))
-        )};
+        ); })};
         skyline::diagnostics::Stage("OS_INITIALIZED");
         OsWeak = os;
         GpuWeak = os->state.gpu;
         AudioWeak = os->state.audio;
         InputWeak = os->state.input;
         SettingsWeak = settings;
-        jvmManager->InitializeControllers();
+        skyline::diagnostics::ObserveInitialization("CONTROLLERS_INITIALIZE", [&] { jvmManager->InitializeControllers(); });
 
         LOGDNF("Launching ROM {}", skyline::JniString(env, romUriJstring));
 
+        skyline::diagnostics::Emit("lifecycle", "STAGE_STARTED", {{"stage", "OS_EXECUTE"}});
         os->Execute(romFd, dlcFdsVector, updateFd, static_cast<skyline::loader::RomFormat>(romType));
+        skyline::diagnostics::Emit("lifecycle", "EMULATION_RETURNED");
     } catch (std::exception &e) {
         if (!dynamic_cast<const skyline::nce::NCE::ExitException *>(&e))
             skyline::diagnostics::Emit("exception", "UNHANDLED_CPP_EXCEPTION", {{"message", e.what()}}, "ERROR");
+        else
+            skyline::diagnostics::Emit("lifecycle", "EMULATION_CANCELLED", {{"reason", "ExitException"}});
+        skyline::diagnostics::Flush(250);
         LOGENF("An uncaught exception has occurred: {}", e.what());
     } catch (const skyline::signal::SignalException &e) {
         if (e.signal != SIGINT)
             skyline::diagnostics::Emit("exception", "NATIVE_SIGNAL_EXCEPTION", {{"message", e.what()}}, "ERROR");
+        else
+            skyline::diagnostics::Emit("lifecycle", "EMULATION_CANCELLED", {{"reason", "SIGINT"}});
+        skyline::diagnostics::Flush(250);
         LOGENF("An uncaught signal exception has occurred: {}", e.what());
     } catch (...) {
         skyline::diagnostics::Emit("exception", "UNKNOWN_EXCEPTION", {}, "ERROR");
+        skyline::diagnostics::Flush(250);
         LOGENF("An unknown uncaught exception has occurred");
     }
 
@@ -340,15 +355,16 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_c
 }
 
 extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitNative(
-    JNIEnv *env, jclass, jstring category, jstring event, jstring detail) {
+    JNIEnv *env, jclass, jstring category, jstring event, jstring detail, jstring titleId) {
     try {
     if (!skyline::diagnostics::Enabled()) return;
     const auto categoryText{ConvertDiagnosticJString(env, category)};
     const auto eventText{ConvertDiagnosticJString(env, event)};
     const auto detailText{ConvertDiagnosticJString(env, detail)};
+    const auto titleText{ConvertDiagnosticJString(env, titleId)};
     if (!env->ExceptionCheck())
-        skyline::diagnostics::Emit(categoryText, eventText, {{"detail", detailText}},
-                                   eventText == "ANDROID_UNCAUGHT_EXCEPTION" ? "ERROR" : "INFO");
+        skyline::diagnostics::Emit(categoryText, eventText, {{"detail", detailText}, {"title_id", titleText}},
+                                   eventText == "ANDROID_UNCAUGHT_EXCEPTION" || eventText == "PREVIOUS_PROCESS_CRASH" ? "ERROR" : "INFO");
     } catch (...) { /* Diagnostics must never change guest error propagation. */ }
 }
 

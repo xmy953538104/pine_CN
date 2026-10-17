@@ -4,6 +4,7 @@
 #include <os.h>
 #include <jvm.h>
 #include <common/settings.h>
+#include "diagnostics/initialization.h"
 #include "gpu.h"
 
 namespace skyline::gpu {
@@ -343,24 +344,24 @@ namespace skyline::gpu {
 
     GPU::GPU(const DeviceState &state, PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr, void *adrenotoolsImportHandle)
         : state(state),
-          vkContext(vkGetInstanceProcAddr),
+          vkContext(diagnostics::ObserveInitialization("GPU_VK_CONTEXT", [&] { return vk::raii::Context(vkGetInstanceProcAddr); })),
           adrenotoolsImportHandle{adrenotoolsImportHandle},
-          vkInstance(CreateInstance(state, vkContext)),
-          vkDebugReportCallback(CreateDebugReportCallback(this, vkInstance)),
-          vkPhysicalDevice(CreatePhysicalDevice(vkInstance)),
-          vkDevice(CreateDevice(vkContext, vkPhysicalDevice, vkQueueFamilyIndex, traits, &adrenotoolsImportHandle)),
-          vkQueue(vkDevice, vkQueueFamilyIndex, 0),
-          memory(*this),
-          scheduler(state, *this),
-          presentation(state, *this),
-          texture(*this),
-          buffer(*this),
-          megaBufferAllocator(*this),
-          descriptor(*this),
-          helperShaders(*this, state.os->assetFileSystem),
-          renderPassCache(*this),
-          framebufferCache(*this),
-          debugTracingBuffer(memory.AllocateBuffer(DebugTracingBufferSize)) {}
+          vkInstance(diagnostics::ObserveInitialization("GPU_VK_INSTANCE", [&] { return CreateInstance(state, vkContext); })),
+          vkDebugReportCallback(diagnostics::ObserveInitialization("GPU_DEBUG_CALLBACK", [&] { return CreateDebugReportCallback(this, vkInstance); })),
+          vkPhysicalDevice(diagnostics::ObserveInitialization("GPU_PHYSICAL_DEVICE", [&] { return CreatePhysicalDevice(vkInstance); })),
+          vkDevice(diagnostics::ObserveInitialization("GPU_VK_DEVICE", [&] { return CreateDevice(vkContext, vkPhysicalDevice, vkQueueFamilyIndex, traits, &adrenotoolsImportHandle); })),
+          vkQueue(diagnostics::ObserveInitialization("GPU_VK_QUEUE", [&] { return decltype(vkQueue)(vkDevice, vkQueueFamilyIndex, 0); })),
+          memory(diagnostics::ObserveInitialization("GPU_MEMORY", [&] { return decltype(memory)(*this); })),
+          scheduler(diagnostics::ObserveInitialization("GPU_SCHEDULER", [&] { return decltype(scheduler)(state, *this); })),
+          presentation(diagnostics::ObserveInitialization("GPU_PRESENTATION", [&] { return decltype(presentation)(state, *this); })),
+          texture(diagnostics::ObserveInitialization("GPU_TEXTURE", [&] { return decltype(texture)(*this); })),
+          buffer(diagnostics::ObserveInitialization("GPU_BUFFER", [&] { return decltype(buffer)(*this); })),
+          megaBufferAllocator(diagnostics::ObserveInitialization("GPU_MEGA_BUFFER", [&] { return decltype(megaBufferAllocator)(*this); })),
+          descriptor(diagnostics::ObserveInitialization("GPU_DESCRIPTOR", [&] { return decltype(descriptor)(*this); })),
+          helperShaders(diagnostics::ObserveInitialization("GPU_HELPER_SHADERS", [&] { return decltype(helperShaders)(*this, state.os->assetFileSystem); })),
+          renderPassCache(diagnostics::ObserveInitialization("GPU_RENDER_PASS_CACHE", [&] { return decltype(renderPassCache)(*this); })),
+          framebufferCache(diagnostics::ObserveInitialization("GPU_FRAMEBUFFER_CACHE", [&] { return decltype(framebufferCache)(*this); })),
+          debugTracingBuffer(diagnostics::ObserveInitialization("GPU_DEBUG_BUFFER", [&] { return memory.AllocateBuffer(DebugTracingBufferSize); })) {}
 
     void GPU::Initialise() {
         std::string titleId{state.loader->nacp->GetSaveDataOwnerId()};

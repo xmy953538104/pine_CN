@@ -4,6 +4,9 @@
 Stream PineDiag JSONL over an already authorized USB or wireless ADB connection.
 .EXAMPLE
 .\tools\pine-diag.ps1 -Serial emulator-5554 -SessionId abc -TitleId 0100751007ADA000
+.EXAMPLE
+.\tools\pine-diag.ps1 -IncludeCrashLog
+# Startup crashes: omit SessionId/TitleId so pre-title evidence is retained.
 #>
 [CmdletBinding()]
 param(
@@ -14,6 +17,7 @@ param(
     [string]$OutputDirectory = (Join-Path (Get-Location) 'pine-diagnostics'),
     [switch]$ListDevices,
     [switch]$NonInteractive,
+    [switch]$IncludeCrashLog,
     [ValidateRange(0, 86400)][int]$DurationSeconds = 0
 )
 Set-StrictMode -Version Latest
@@ -22,6 +26,9 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 $process = $null
 $writers = [System.Collections.Generic.Dictionary[string, System.IO.StreamWriter]]::new([System.StringComparer]::Ordinal)
 $overflowWriter = $null
+$crashWriter = $null
+$crashBytes = 0L
+$crashLimitReported = $false
 
 function Start-Adb([string[]]$Arguments) {
     # Arguments are controlled tokens. Reject characters that could alter argv quoting.
@@ -97,7 +104,16 @@ try {
     [void][System.IO.Directory]::CreateDirectory($OutputDirectory)
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
     Write-Host 'Collecting PineDiag. Press Ctrl+C to stop. Existing device logs are retained.'
-    $process = Start-Adb @('-s', $Serial, 'logcat', '-v', 'raw', 'PineDiag:V', '*:S')
+    if ($IncludeCrashLog) {
+        $crashPath = Join-Path $OutputDirectory ('pine-crash-{0}.log' -f $stamp)
+        $crashWriter = New-Object System.IO.StreamWriter($crashPath, $false, $utf8)
+        $crashWriter.AutoFlush = $true
+        Write-Host ('Saving unfiltered crash context (32 MiB limit): ' + $crashPath)
+        Write-Host 'Crash context can contain private paths or other apps. Review locally before sharing.'
+        $process = Start-Adb @('-s', $Serial, 'logcat', '-b', 'main', '-b', 'crash', '-v', 'raw', 'PineDiag:V', 'AndroidRuntime:V', 'DEBUG:V', 'libc:V', '*:S')
+    } else {
+        $process = Start-Adb @('-s', $Serial, 'logcat', '-v', 'raw', 'PineDiag:V', '*:S')
+    }
     $stderr = $process.StandardError.ReadToEndAsync()
     $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
     $lineTask = $process.StandardOutput.ReadLineAsync()
@@ -111,6 +127,16 @@ try {
             throw ('ADB logcat stream ended (device disconnected or ADB stopped). ' + $detail)
         }
         $lineTask = $process.StandardOutput.ReadLineAsync()
+        if ($crashWriter) {
+            $size = $utf8.GetByteCount($line) + 2
+            if ($line.Length -le 65536 -and $crashBytes + $size -le 32MB) {
+                $crashWriter.WriteLine($line)
+                $crashBytes += $size
+            } elseif (-not $crashLimitReported) {
+                $crashWriter.WriteLine('[Capture omitted oversized lines or reached the 32 MiB crash-context limit; JSONL collection continues.]')
+                $crashLimitReported = $true
+            }
+        }
         # Logcat startup banners and partial/non-JSON messages are not diagnostic events.
         if (-not $line.TrimStart().StartsWith('{')) { continue }
         try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
@@ -149,4 +175,5 @@ try {
     }
     foreach ($sink in $writers.Values) { $sink.Dispose() }
     if ($overflowWriter) { $overflowWriter.Dispose() }
+    if ($crashWriter) { $crashWriter.Dispose() }
 }

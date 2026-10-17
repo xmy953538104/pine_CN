@@ -3,11 +3,18 @@
 The authoritative binary identity is `build-identity.json` beside the Debug APK.
 It contains the full source commit, APK/ARM64 ELF SHA-256 values, application ID,
 ABI, JVM test totals and verification of the release emulation-process manifest.
+Current signed candidates also include a verified public certificate fingerprint
+and `signer-identity.json`, bound to the same source commit and APK SHA-256.
 Install **Pine Diagnostics Preview** (`io.github.pine.emu.diagnostics.preview`), version
-`2.1.2-diagnostics-v1`, alongside existing Pine and old diagnostics installations.
-The new ID avoids overwriting the differently signed e9 Debug app. Old data is
-not cleared or migrated; select local content/grants in the new preview. A
-stable development signer for continuous Debug updates is not configured yet.
+`2.1.2-diagnostics-v1`, alongside formal Pine. This ID also differs from the old
+e9 Debug app. Current O0/O2 candidates reuse the existing CI signer, pinned to
+`70edcdc802bb16afe9665ecd3d342ea74b217a79b6efb4dbdfbb3ea3eddf16c1`;
+see [signer evidence and migration limits](diagnostics-performance-candidate.md#reuse-the-existing-ci-signer).
+The published991/v1.3 Preview has the same package but a different certificate,
+so these candidates cannot update it in place. Nothing automatically uninstalls,
+clears or migrates owner data. Protect save/configuration backups outside Preview
+before an owner-chosen initial migration; diagnostics export is not a save backup.
+Future candidates with this same package and pinned signer can use normal updates.
 
 The current startup fixes are described in [the VMA regression](diagnostics-vma-startup-fix.md)
 and [safe URI/startup checks](diagnostics-startup-crash.md). The latest exact-commit JVM totals, build identity and runtime result are recorded

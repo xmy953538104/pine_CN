@@ -60,6 +60,7 @@ accel_check_status=0
 run_bounded 20 "$emulator" -accel-check > "$out/accel-check.txt" 2>&1 && accel=on || { accel_check_status=$?; accel=off; }
 printf '\naccel_check_exit_status=%s\n' "$accel_check_status" >> "$out/accel-check.txt"
 uname -a > "$out/host.txt"
+id >> "$out/host.txt"
 if [[ $(uname -s) == Linux ]]; then ls -l /dev/kvm /dev/dri >> "$out/host.txt" 2>&1 || true; fi
 python3 - <<'PY' >> "$out/host.txt"
 import json, os, pathlib, platform, subprocess
@@ -87,6 +88,30 @@ elif platform.system() == 'Darwin':
         except (OSError, subprocess.TimeoutExpired) as error:
             print(json.dumps({'sysctl': name, 'unavailable': str(error)}))
 PY
+# CI must qualify real hardware acceleration before creating an AVD. In the
+# retained Linux attempts /dev/kvm existed but this user could not access it;
+# silently using software CPU emulation made the framework unreliable. Never
+# change host permissions, groups or Android security to get past this gate.
+if [[ "${PINE_CI_REQUIRE_ACCELERATION:-0}" == 1 && "$accel" != on ]]; then
+  python3 - "$apk" "$commit" "$out" <<'PY'
+import hashlib,json,pathlib,runpy,sys
+apk,commit,out=sys.argv[1:]
+root=pathlib.Path(out)
+reason='Working hardware acceleration is required for CI. The official emulator accelerator probe failed; inspect accel-check.txt and host.txt. No AVD, Pine installation, UI or native success is claimed. No permission or security changes were attempted.'
+required=runpy.run_path('tools/android-diagnostics-smoke.py')['REQUIRED']
+report={'schema':1,'status':'environment_blocked','finished':True,'stage':'host_acceleration_preflight',
+    'commit':commit,'apk_sha256':hashlib.file_digest(open(apk,'rb'),'sha256').hexdigest(),
+    'physical_arm64_verified':False,'apk_installed':False,'reason':reason,
+    'checks':{name:{'status':'blocked','reason':reason} for name in required},
+    'permission_changes_attempted':False,'evidence':['host.txt','accel-check.txt']}
+(root/'runtime-report.json').write_text(json.dumps(report,indent=2)+'\n')
+print(json.dumps(report))
+PY
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    echo 'Android runtime: **host acceleration blocked before AVD/Pine creation**. All18 APK checks remain unexecuted. Build/test success is separate; see runtime-report.json.' >> "$GITHUB_STEP_SUMMARY"
+  fi
+  exit 0
+fi
 # This is a fresh, job-local AVD, never a user's existing device or disk.
 printf 'no\n' | avdmanager create avd --name PineDiagnosticsCI --package 'system-images;android-35;google_apis;x86_64' --path "$ANDROID_AVD_HOME/PineDiagnosticsCI.avd" > "$out/avd-create.txt" 2>&1
 # API35 attempts also observed system-app and Pine ANRs with two cores / 4 GiB.
@@ -134,6 +159,12 @@ fi
 # can otherwise lose the framework event that first stalled the package service.
 "$adb" -s emulator-5554 logcat -T 1 -b all -v threadtime > "$out/android-install-logcat.txt" 2>&1 &
 framework_logger_pid=$!
+if [[ "${PINE_DIAGNOSTICS_OWNED_AVD_PROFILE:-0}" == 1 ]]; then
+  # Explicit only on this newly created CI AVD. The helper fails closed unless
+  # ownership, exact API/system package, empty Pine query and error visibility
+  # are all verified; it changes only optional Wellbeing's user-0 enabled state.
+  python3 tools/tests/configure-owned-ci-avd.py --adb "$adb" --serial emulator-5554 --output "$out/configuration" --owned-ci-avd
+fi
 # Fresh-image BOOT_COMPLETED receiver work can continue after sys.boot_completed.
 # Observe the current system-server's completion marker without changing its
 # queues or settings. A missing marker is retained, not an acceptance failure

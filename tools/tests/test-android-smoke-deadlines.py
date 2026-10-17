@@ -60,6 +60,26 @@ def diagnostics_xml(enabled=True, package=None):
                   {"package": package, "text": f"Status process: main\nSession: {SESSION}\nSink active: {checked}\nWritten: 2, dropped: 0, disk errors: 0"})
 
 
+def saf_picker_xml(filename=None, provider="com.google.android.documentsui", enabled=True):
+    return ui_xml({"package": provider, "text": "Downloads", "resource-id": provider + ":id/breadcrumb_text", "clickable": "false"},
+                  {"package": provider, "content-desc": "Show roots", "class": "android.widget.ImageButton", "clickable": "true"},
+                  {"package": provider, "text": filename or "pine-diag-" + SESSION + ".zip",
+                   "class": "android.widget.EditText", "resource-id": "android:id/title"},
+                  {"package": provider, "text": "SAVE", "class": "android.widget.Button", "resource-id": "android:id/button1",
+                   "clickable": "true", "enabled": "true" if enabled else "false", "bounds": "[378,728][466,776]"})
+
+
+def saf_roots_xml(provider="com.google.android.documentsui", title="Downloads"):
+    tree = ET.fromstring(saf_picker_xml(provider=provider))
+    roots = ET.SubElement(tree, "node", {"package": provider, "resource-id": provider + ":id/roots_list",
+        "class": "android.widget.ListView", "enabled": "true", "bounds": "[0,24][400,800]"})
+    row = ET.SubElement(roots, "node", {"package": provider, "class": "android.widget.LinearLayout",
+        "enabled": "true", "clickable": "true", "bounds": "[0,120][400,184]"})
+    ET.SubElement(row, "node", {"package": provider, "class": "android.widget.TextView", "resource-id": "android:id/title",
+        "text": title, "enabled": "true", "clickable": "false", "bounds": "[60,120][340,184]"})
+    return ET.tostring(tree, encoding="unicode")
+
+
 SEARCH_LOCATIONS_XML = '''<hierarchy>
 <node resource-id="io.github.pine.emu.diagnostics.preview:id/toolbar_layout" package="io.github.pine.emu.diagnostics.preview"
  class="android.widget.FrameLayout" content-desc="Search Locations" enabled="true" bounds="[0,0][480,136]">
@@ -89,6 +109,10 @@ class ObservationDeadlines(unittest.TestCase):
             import time
 
             config = json.loads(Path(__file__).with_suffix('.json').read_text())
+            remote_store = Path(__file__).with_suffix('.remote-files.json')
+            remote_files = json.loads(remote_store.read_text()) if remote_store.is_file() else {}
+            def save_remote():
+                remote_store.write_text(json.dumps(remote_files))
             assert sys.argv[1:3] == ['-s', 'offline-fixture']
             args = sys.argv[3:]
             binary = False
@@ -119,6 +143,10 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'dropbox', config.get('dropbox_result', 'Retained data_app_anr fixture entry')
             elif args == ['shell', 'dumpsys', 'activity', 'activities']:
                 operation, output = 'activities', next_result('activities_sequence', 'Final activity evidence')
+            elif args == ['shell', 'dumpsys', 'window']:
+                operation, output = 'window-focus', config.get('window_focus', 'mCurrentFocus=Window{abcdef u0 com.google.android.documentsui/com.android.documentsui.picker.PickActivity}')
+            elif args == ['shell', 'dumpsys', 'activity', 'providers']:
+                operation, output = 'providers', 'Published provider fixture; not a SAF acceptance pass'
             elif args[:7] == ['shell', 'cmd', 'package', 'list', 'packages', '-s', 'com.google.android.apps.wellbeing']:
                 operation, output = 'system-package', config.get('system_package_result', 'package:com.google.android.apps.wellbeing')
             elif args[:7] == ['shell', 'cmd', 'package', 'list', 'packages', '-s', 'com.google.android.apps.nexuslauncher']:
@@ -129,23 +157,45 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'final-logcat', 'Final crash evidence'
             elif args[:3] == ['shell', 'rm', '-f']:
                 operation, output = 'remove-xml', ''
+                for name in args[3:]: remote_files.pop(name, None)
+                save_remote()
+            elif args[:4] == ['shell', 'test', '!', '-e']:
+                operation, output = 'new-xml-path', ''
+                code = 1 if args[4] in remote_files else 0
             elif args == ['shell', 'cmd', 'package', 'path', 'android']:
                 operation, output = 'package', next_result('package_sequence', 'package:/system/framework/framework-res.apk')
+            elif args == ['shell', 'cmd', 'package', 'list', 'packages', '-u', 'io.github.pine.emu.diagnostics.preview']:
+                operation, output = 'preinstall-package', config.get('preinstall_package', '')
+            elif args[:1] == ['install']:
+                operation, output = 'install', config.get('install_result', 'Success')
             elif args == ['shell', 'sm', 'list-volumes', 'all']:
-                operation, output = 'storage', next_result('storage_sequence', 'private mounted null')
+                operation, output = 'storage', next_result('storage_sequence', 'private mounted null\\nemulated;0 mounted null')
+            elif args == ['shell', 'ls', '-ld', '/sdcard/Download']:
+                operation, output = 'downloads-state', 'drwxrws--- 2 media_rw media_rw 4096 2026-10-17 /sdcard/Download'
+            elif args == ['shell', 'ls', '-ld', '/sdcard/.']:
+                operation, output = 'emulated-directory', next_result('directory_sequence', 'drwxrws--- 2 media_rw media_rw 4096 2026-10-17 /sdcard/.')
             elif args[:2] == ['shell', 'cat'] and args[2].startswith('/proc/'):
                 operation, output = 'proc-status', 'Name:\\toffline-fixture'
                 if config.get('status_denied'):
                     code, stderr, output = 1, 'cat: Permission denied', ''
             elif args[:3] == ['shell', 'uiautomator', 'dump']:
-                operation, output = 'dump', 'UI hierarchy dumped'
+                operation, output = 'dump', 'UI hierchary dumped to: ' + args[-1]
+                null_root = next_result('dump_null_root_sequence', config.get('dump_null_root', False))
+                if null_root:
+                    output, stderr = '', 'ERROR: null root node returned by UiTestAutomationBridge.'
+                elif not config.get('dump_no_file'):
+                    remote_files[args[-1]] = next_result('xml_sequence', '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>')
+                    save_remote()
+                output += next_result('dump_suffix_sequence', '')
             elif args[:3] == ['shell', 'am', 'start']:
                 operation, output = 'start-settings', 'Status: ok'
             elif args[:2] == ['exec-out', 'cat'] and args[2].startswith('/sdcard/') and 'zip_base64' in config:
                 operation, output, binary = 'safzip', base64.b64decode(config['zip_base64']), True
             elif args[:2] == ['exec-out', 'cat']:
                 operation = 'xml'
-                output = next_result('xml_sequence', '<hierarchy><node text="Ready" enabled="true" scrollable="true" bounds="[0,0][100,100]"/></hierarchy>')
+                output = remote_files.get(args[2], '')
+                if args[2] not in remote_files:
+                    code, stderr = 1, 'cat: No such file or directory'
                 if config.get('shared_storage_unavailable') and args[2].startswith('/sdcard/'):
                     # Android exec-out can report success while cat's error is
                     # returned as stdout. This must never become a UI success.
@@ -224,6 +274,7 @@ class ObservationDeadlines(unittest.TestCase):
               dismiss_platform_crash=False, close_system_anr=False):
         self.config.write_text(json.dumps({"session": SESSION, **delays}))
         self.fake.with_suffix('.state.json').unlink(missing_ok=True)
+        self.fake.with_suffix('.remote-files.json').unlink(missing_ok=True)
         # Short fixture budgets keep these real subprocess tests fast while
         # leaving room for interpreter startup on both Linux and macOS.
         # Only helpers and the readiness gate run; APK checks remain unexecuted.
@@ -290,16 +341,15 @@ class ObservationDeadlines(unittest.TestCase):
 
     def saf_fixture(self, name, filename=None, provider="com.google.android.documentsui", **overrides):
         filename = filename or "pine-diag-" + SESSION + ".zip"
-        picker = ui_xml({"package": provider, "text": "Downloads"},
-                        {"package": provider, "text": filename, "class": "android.widget.EditText", "resource-id": "android:id/title"},
-                        {"package": provider, "text": "SAVE", "class": "android.widget.Button", "resource-id": "android:id/button1", "clickable": "true"})
+        picker = saf_picker_xml(filename, provider)
         files = {"session-metadata.txt": b"fixture metadata\n", "main/diagnostics-0.jsonl":
                  (json.dumps({"schema": 1, "session_id": SESSION, "sequence": 1, "event": "SESSION_METADATA", "fields": {"commit": "a" * 40}}) + "\n").encode()}
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zipped:
             for entry, data in files.items():
                 zipped.writestr(entry, data)
-        config = {"xml_sequence": [ui_xml({"text": "EXPORT", "class": "android.widget.Button"}), picker, picker, diagnostics_xml()],
+        config = {"xml_sequence": [ui_xml({"text": "EXPORT", "class": "android.widget.Button"}), picker,
+                                   saf_roots_xml(provider), picker, diagnostics_xml()],
                   "zip_base64": base64.b64encode(archive.getvalue()).decode(), **overrides}
         smoke = self.smoke(name, config)
         smoke.session = SESSION
@@ -315,7 +365,10 @@ class ObservationDeadlines(unittest.TestCase):
         commands = self.commands(smoke)
         self.assertFalse(any("KEYCODE_DEL" in row["argv"] or "KEYCODE_MOVE_END" in row["argv"] or
                              row["argv"][-2:-1] == ["text"] for row in commands))
-        self.assertEqual(sum("tap" in row["argv"] for row in commands), 3)
+        self.assertEqual(sum("tap" in row["argv"] for row in commands), 4)
+        root = smoke.summary["saf_root_selections"][0]
+        self.assertEqual(root["bounds"], "[0,120][400,184]")
+        self.assertEqual(commands[root["command_number"] - 1]["argv"][-2:], ["200", "152"])
 
     def test_saf_wrong_session_or_path_and_foreign_provider_are_blocked(self):
         cases = (("session", {"filename": "pine-diag-" + "2" * 36 + ".zip"}),
@@ -333,7 +386,7 @@ class ObservationDeadlines(unittest.TestCase):
     def test_saf_foreign_save_control_is_not_tapped(self):
         smoke = self.saf_fixture("saf-foreign-save")
         config = json.loads(self.config.read_text())
-        for index in (1, 2):
+        for index in (3,):
             root = ET.fromstring(config["xml_sequence"][index])
             for node in root.iter("node"):
                 if node.get("text") == "SAVE":
@@ -342,7 +395,7 @@ class ObservationDeadlines(unittest.TestCase):
         self.config.write_text(json.dumps(config))
         with self.assertRaises(Blocked):
             smoke.saf_save()
-        self.assertEqual(sum("tap" in row["argv"] for row in self.commands(smoke)), 2)
+        self.assertEqual(sum("tap" in row["argv"] for row in self.commands(smoke)), 3)
 
     def test_saf_valid_zip_bytes_after_deadline_do_not_pass(self):
         smoke = self.saf_fixture("saf-late", safzip=0.8, emit_before_delay="safzip")
@@ -350,6 +403,133 @@ class ObservationDeadlines(unittest.TestCase):
         with self.assertRaises(Blocked):
             smoke.saf_save()
         self.assertTrue(any(row["timed_out"] and "/sdcard/Download/" in " ".join(row["argv"]) for row in self.commands(smoke)))
+
+    def test_downloads_root_requires_one_clickable_row_inside_real_roots_list(self):
+        def screen(xml):
+            return MODULE["Screen"](ET.fromstring(xml), self.root / "fixture.xml", 1)
+        self.assertIsNone(self.smoke("breadcrumb-only", {}).downloads_root(screen(saf_picker_xml())))
+        smoke = self.smoke("actual-root-row", {})
+        self.assertEqual(smoke.downloads_root(screen(saf_roots_xml())).get("bounds"), "[0,120][400,184]")
+        cases = [saf_roots_xml(provider="foreign.app"), saf_roots_xml(title="Pine Diagnostics Preview"),
+                 saf_roots_xml().replace(':id/roots_list', ':id/unrelated_list'),
+                 saf_roots_xml().replace('clickable="true" bounds="[0,120]', 'clickable="false" bounds="[0,120]')]
+        duplicate = ET.fromstring(saf_roots_xml())
+        roots = next(n for n in duplicate if n.get("resource-id", "").endswith(":id/roots_list"))
+        roots.append(ET.fromstring(ET.tostring(roots[0])))
+        cases.append(ET.tostring(duplicate, encoding="unicode"))
+        for xml in cases:
+            with self.subTest(xml=xml[:70]):
+                self.assertIsNone(smoke.downloads_root(screen(xml)))
+
+    def test_saf_waits_for_enabled_save_after_explicit_root_selection(self):
+        smoke = self.saf_fixture("saf-delayed-save", xml_sequence=[
+            ui_xml({"text": "EXPORT", "class": "android.widget.Button"}), saf_picker_xml(enabled=False),
+            saf_roots_xml(), saf_picker_xml(enabled=False), saf_picker_xml(), diagnostics_xml()])
+        smoke.args.ui_timeout = 3
+        self.assertTrue(smoke.saf_save()["zip_bytes"])
+        self.assertTrue(smoke.verify_zip()["preview_bytes_match"])
+        commands = self.commands(smoke)
+        save_taps = [row for row in commands if row["argv"][-4:] == ["input", "tap", "422", "752"]]
+        self.assertEqual(len(save_taps), 1)
+        before = [row for row in commands if row["number"] < save_taps[0]["number"] and "uiautomator" in row["argv"]]
+        self.assertEqual(len(before), 5)
+        self.assertFalse(smoke.pending_saf_export)
+
+    def test_disabled_save_never_taps_or_passes_zip_and_keeps_pending_picker(self):
+        smoke = self.saf_fixture("saf-disabled", xml_sequence=[
+            ui_xml({"text": "EXPORT", "class": "android.widget.Button"}), saf_picker_xml(enabled=False),
+            saf_roots_xml(), saf_picker_xml(enabled=False)])
+        smoke.args.ui_timeout = .5
+        smoke.step("saf_save", smoke.saf_save)
+        smoke.step("zip_verify", smoke.verify_zip, ("saf_save",))
+        self.assertEqual(smoke.results["saf_save"]["status"], "blocked")
+        self.assertEqual(smoke.results["zip_verify"]["status"], "blocked")
+        self.assertTrue(smoke.pending_saf_export)
+        self.assertFalse(any(row["argv"][-4:] == ["input", "tap", "422", "752"] for row in self.commands(smoke)))
+        self.assertIsNone(smoke.saved_name)
+
+    def test_cancel_exact_pending_picker_then_observes_real_stop_without_changing_export_block(self):
+        smoke = self.cleanup_fixture("cancel-own-picker", xml_sequence=[saf_picker_xml(enabled=False),
+            diagnostics_xml(), diagnostics_xml(), diagnostics_xml(), diagnostics_xml(False)])
+        smoke.pending_saf_export = True
+        smoke.summary["platform_crash_dismissals"].append({"status": "close_sent", "title": "Bluetooth keeps stopping"})
+        smoke.results.update(saf_save={"status": "blocked", "reason": "Provider unavailable"},
+                             zip_verify={"status": "blocked", "reason": "saf_save blocked"})
+        smoke.step("disable_stop", smoke.disable)
+        self.assertEqual(smoke.results["disable_stop"]["status"], "pass")
+        self.assertEqual(smoke.results["saf_save"]["status"], "blocked")
+        self.assertEqual(smoke.results["zip_verify"]["status"], "blocked")
+        self.assertEqual(len(smoke.summary["saf_cancel_actions"]), 1)
+        self.assertEqual(len([row for row in self.commands(smoke) if "KEYCODE_BACK" in row["argv"]]), 1)
+        self.assertTrue(smoke.results["disable_stop"]["summaries"])
+        self.assertFalse(smoke.pending_saf_export)
+
+    def test_saf_cancel_rejects_changed_session_foreign_focus_anr_and_null_root(self):
+        cases = [("wrong-session", {"xml_sequence": [saf_picker_xml(filename="pine-diag-" + "2" * 36 + ".zip")]}),
+                 ("foreign-focus", {"xml_sequence": [saf_picker_xml()], "window_focus": "mCurrentFocus=Window{abcdef u0 foreign.app/.Activity}"}),
+                 ("pine-anr", {"xml_sequence": [PINE_ANR_XML]}),
+                 ("system-anr", {"xml_sequence": [SYSTEM_ANR_XML]}),
+                 ("foreign-picker", {"xml_sequence": [saf_picker_xml(provider="foreign.app")]}),
+                 ("null-root", {"dump_null_root": True})]
+        for name, config in cases:
+            with self.subTest(name=name):
+                smoke = self.cleanup_fixture("cancel-reject-" + name, **config)
+                smoke.pending_saf_export = True
+                smoke.step("disable_stop", smoke.disable)
+                self.assertEqual(smoke.results["disable_stop"]["status"], "fail" if name == "pine-anr" else "blocked")
+                self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
+                self.assertEqual(smoke.summary["saf_cancel_actions"], [])
+
+    def test_saf_cancel_is_single_attempt_when_picker_persists(self):
+        smoke = self.cleanup_fixture("cancel-persists", xml_sequence=[saf_picker_xml(enabled=False)])
+        smoke.pending_saf_export = True
+        smoke.args.ui_timeout = .4
+        for _ in range(2):
+            with self.assertRaises(Blocked): smoke.cancel_pending_saf()
+        self.assertEqual(len(smoke.summary["saf_cancel_actions"]), 1)
+        self.assertEqual(len([row for row in self.commands(smoke) if "KEYCODE_BACK" in row["argv"]]), 1)
+
+    def test_storage_provider_capture_is_read_only_and_never_an_acceptance_pass(self):
+        smoke = self.smoke("provider-evidence", {}, require_storage=True)
+        smoke.capture_saf_storage("saf-fixture")
+        self.assertEqual(smoke.results, {})
+        self.assertEqual(smoke.summary["overall"], "blocked")
+        self.assertTrue(smoke.summary["saf_storage_observations"][0]["diagnostic_only"])
+        self.assertEqual([row["argv"][3:] for row in self.commands(smoke)], [
+            ["shell", "sm", "list-volumes", "all"], ["shell", "ls", "-ld", "/sdcard/Download"],
+            ["shell", "dumpsys", "activity", "providers"]])
+
+    def test_stdout_dump_error_rejects_success_marker_and_new_file_without_reading_or_tapping(self):
+        for suffix in ('ERROR: null root node returned by UiTestAutomationBridge.', 'ERROR: hierarchy unavailable'):
+            smoke = self.smoke('stdout-error-' + str(len(suffix)), {'dump_suffix_sequence': ['', suffix]})
+            smoke.screen('old-ready')
+            with self.assertRaisesRegex(Blocked, 'no XML fallback or UI action'):
+                smoke.screen('failed-current')
+            last = smoke.remote_xml_paths[-1]
+            self.assertFalse(any(row['argv'][3:] == ['exec-out', 'cat', last] for row in self.commands(smoke)))
+            self.assertFalse(any('input' in row['argv'] for row in self.commands(smoke)))
+
+    def test_unknown_package_query_never_authorizes_installation(self):
+        cases = [('installed', {'preinstall_package': 'package:io.github.pine.emu.diagnostics.preview'}),
+                 ('error-text', {'preinstall_package': 'Error: package service unavailable'}),
+                 ('nonzero', {'preinstall_package': {'stdout': '', 'code': 1}}),
+                 ('stderr', {'preinstall_package': {'stdout': '', 'stderr': 'Package service unavailable'}}),
+                 ('timeout', {'preinstall-package': 1})]
+        for name, config in cases:
+            smoke = self.smoke('preinstall-' + name, config)
+            smoke.args.command_timeout = .5
+            with self.assertRaises(Blocked): smoke.fresh_install()
+            self.assertFalse(smoke.installed)
+            self.assertFalse(any(row['argv'][3:4] == ['install'] for row in self.commands(smoke)))
+
+    def test_confirmed_absence_and_actual_install_success_are_required(self):
+        smoke = self.smoke('install-confirmed', {})
+        self.assertTrue(smoke.fresh_install()['fresh'])
+        self.assertTrue(smoke.installed)
+        self.assertEqual(self.commands(smoke)[0]['argv'][3:], ['shell', 'cmd', 'package', 'list', 'packages', '-u', MODULE['PACKAGE']])
+        smoke = self.smoke('install-unsuccessful', {'install_result': 'Error: install failed'})
+        with self.assertRaises(AssertionError): smoke.fresh_install()
+        self.assertFalse(smoke.installed)
 
     def test_explicit_single_column_listing_reads_actual_native_metadata_and_summary(self):
         smoke = self.smoke("native-columns", {"record1_events": ["SESSION_METADATA", "SESSION_SUMMARY"]})
@@ -500,12 +680,12 @@ class ObservationDeadlines(unittest.TestCase):
                 if name == 'pine':
                     self.assertIn('Pine application ANR observed', smoke.results['saf_save']['reason'])
 
-    def test_all_caps_export_confirmation_reaches_the_unchanged_saf_observation(self):
+    def test_all_caps_export_confirmation_reaches_saf_without_tapping_unknown_root(self):
         smoke = self.smoke("export-confirm-caps", {"xml_sequence": [
             ui_xml({"class": "android.widget.Button", "text": "EXPORT", "resource-id": "android:id/button1"}),
             ui_xml({"package": "com.google.android.documentsui", "text": "Unrecognized local root"}),
         ]})
-        with self.assertRaisesRegex(Blocked, "SAF picker does not expose a recognized local Downloads root"):
+        with self.assertRaisesRegex(Blocked, "UI observation 'saf-picker'"):
             smoke.saf_save()
         taps = [row for row in self.commands(smoke) if "tap" in row["argv"]]
         self.assertEqual(len(taps), 1)
@@ -635,6 +815,53 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertIn("Transport endpoint is not connected",
                       (smoke.output / "002-broken-fuse.xml").read_text())
         self.assertEqual(smoke.results, {})
+
+    def test_each_dump_uses_a_new_absent_remote_path(self):
+        smoke = self.smoke('unique-dumps', {'xml_sequence': [READY_XML, READY_XML]})
+        old = {smoke.remote_xml: PINE_ANR_XML}
+        self.fake.with_suffix('.remote-files.json').write_text(json.dumps(old))
+        for label in ('first', 'second'):
+            self.assertIsNotNone(smoke.screen(label).find('Ready'))
+        paths = [row['argv'][-1] for row in self.commands(smoke) if 'uiautomator' in row['argv']]
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(len(set(paths)), 2)
+        self.assertTrue(all(path not in old for path in paths))
+        self.assertEqual(paths, smoke.remote_xml_paths)
+        self.assertEqual(sum(row['argv'][-4:-1] == ['test', '!', '-e'] for row in self.commands(smoke)), 2)
+
+    def test_null_root_exit_zero_cannot_reuse_old_ready_or_anr(self):
+        for name, stale in (('ready', READY_XML), ('pine-anr', PINE_ANR_XML), ('system-anr', SYSTEM_ANR_XML)):
+            with self.subTest(name=name):
+                smoke = self.smoke('stale-' + name, {'dump_null_root': True}, close_system_anr=True)
+                self.fake.with_suffix('.remote-files.json').write_text(json.dumps({smoke.remote_xml: stale}))
+                with self.assertRaisesRegex(Blocked, 'fresh hierarchy'):
+                    smoke.screen('null-root', deadline=time.monotonic() + 1)
+                smoke.args.ui_timeout = .35
+                smoke.step('settings_entry', lambda: smoke.wait_ui('null-root', lambda _: True))
+                self.assertEqual(smoke.results['settings_entry']['status'], 'blocked')
+                commands = self.commands(smoke)
+                self.assertFalse(any('input' in row['argv'] for row in commands))
+                self.assertFalse(any(row['argv'][3:5] == ['exec-out', 'cat'] for row in commands))
+                dumps = [row for row in commands if 'uiautomator' in row['argv']]
+                self.assertTrue(all(row['returncode'] == 0 and 'null root' in row['stderr'] for row in dumps))
+                self.assertTrue(all(row['argv'][-1] != smoke.remote_xml for row in dumps))
+
+    def test_confirm_null_root_sends_no_close_on_previous_system_anr(self):
+        smoke = self.smoke('stale-confirm', {'xml_sequence': [SYSTEM_ANR_XML],
+            'dump_null_root_sequence': [False, True], 'activities_sequence': [anr_focus()]}, close_system_anr=True)
+        original = smoke.screen('settings')
+        with self.assertRaisesRegex(Blocked, 'fresh hierarchy'):
+            smoke.close_known_system_anr('settings', original, time.monotonic() + 3)
+        self.assertFalse((smoke.output / '002-system-anr-confirm.xml').exists())
+        self.assertFalse(any('input' in row['argv'] for row in self.commands(smoke)))
+        self.assertEqual(smoke.summary['system_anr_closes'], [])
+
+    def test_success_marker_without_new_file_never_falls_back_to_old_xml(self):
+        smoke = self.smoke('dump-no-file', {'dump_no_file': True})
+        self.fake.with_suffix('.remote-files.json').write_text(json.dumps({smoke.remote_xml: READY_XML}))
+        with self.assertRaisesRegex(Blocked, 'No such file'):
+            smoke.screen('missing-current-xml')
+        self.assertFalse(any('input' in row['argv'] for row in self.commands(smoke)))
 
     def test_opt_in_platform_wait_requires_a_fresh_observation_after_the_tap(self):
         smoke = self.smoke("platform-recovery", {"xml_sequence": [PLATFORM_ANR_XML, READY_XML]},
@@ -995,7 +1222,8 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertEqual((smoke.output / "pine-process-ids.txt").read_text().strip(), "1234 5678 91011")
         self.assertTrue((smoke.output / "final-activities.txt").is_file())
         self.assertTrue((smoke.output / "crash-buffer.txt").is_file())
-        self.assertTrue(any(row["argv"][-3:] == ["rm", "-f", smoke.remote_xml] for row in commands))
+        self.assertTrue(smoke.remote_xml_paths)
+        self.assertTrue(all(any("rm" in row["argv"] and path in row["argv"] for row in commands) for path in smoke.remote_xml_paths))
 
     def test_failure_process_probes_reject_untrusted_pids_and_skip_verified_runs(self):
         for name, pids in (("mixed", "1234 not-a-pid"), ("zero", "0"), ("unicode", "１２３４")):
@@ -1064,7 +1292,8 @@ class ObservationDeadlines(unittest.TestCase):
                     self.assertIn("Partial data_app_anr entry", (smoke.output / "dropbox-data-app-anr.txt").read_text())
                     self.assertIn("still being read", (smoke.output / "dropbox-data-app-anr.stderr.txt").read_text())
                 self.assertTrue((smoke.output / "final-activities.txt").is_file())
-                self.assertTrue(any(row["argv"][-3:] == ["rm", "-f", smoke.remote_xml] for row in commands))
+                self.assertTrue(smoke.remote_xml_paths)
+                self.assertTrue(all(any("rm" in row["argv"] and path in row["argv"] for row in commands) for path in smoke.remote_xml_paths))
 
     def assert_gate_only(self, smoke, status):
         self.assertEqual(set(smoke.results), {"device_ready"})
@@ -1088,6 +1317,8 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertFalse(rows[0]["storage_internal_mounted"])
         self.assertEqual(rows[0]["storage_volumes_raw"], "emulated;0 mounted null\nprivate unmounted null\n")
         self.assertTrue(rows[1]["storage_internal_mounted"])
+        self.assertTrue(rows[1]["storage_emulated_mounted"])
+        self.assertTrue(rows[1]["emulated_directory_accessible"])
         self.assertEqual(rows[1]["storage_internal_volume_line"], "private mounted null")
         self.assertEqual(rows[1]["system_server_before_pids"], rows[1]["system_server_after_pids"])
         self.assertGreaterEqual(rows[1]["continuity_seconds"], 2)
@@ -1119,6 +1350,21 @@ class ObservationDeadlines(unittest.TestCase):
                     self.assertIn("permission denied", rows[0]["command_errors"]["storage-volumes"])
                 if name == "late":
                     self.assertTrue(any(row["timed_out"] and "sm" in row["argv"] for row in self.commands(smoke)))
+
+    def test_internal_stub_alone_or_failed_real_fuse_stat_cannot_pass_readiness(self):
+        cases = [("stub-only", {"storage_sequence": ["private mounted null"]}),
+                 ("wrong-user", {"storage_sequence": ["private mounted null\nemulated;10 mounted null"]}),
+                 ("fuse-disconnected", {"directory_sequence": [{"stdout": "", "code": 1, "stderr": "Transport endpoint is not connected"}]}),
+                 ("false-success", {"directory_sequence": ["ls: /sdcard/.: Transport endpoint is not connected"]}),
+                 ("regular-file", {"directory_sequence": ["-rw-rw---- 1 shell shell 0 2026-10-17 /sdcard/."]}),
+                 ("late-directory", {"emulated-directory": 2, "emit_before_delay": "emulated-directory"})]
+        for name, config in cases:
+            with self.subTest(name=name):
+                smoke = self.smoke("fuse-" + name, config, require_storage=True)
+                smoke.args.boot_timeout = .8
+                smoke.step("device_ready", smoke.device_ready)
+                self.assert_gate_only(smoke, "blocked")
+                self.assertNotIn("accepted_attempt", smoke.summary["android_readiness"])
 
     def test_readiness_retries_missing_multiple_and_failed_package_observations(self):
         smoke = self.smoke("readiness-transient", {

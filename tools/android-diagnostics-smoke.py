@@ -175,6 +175,7 @@ class Smoke:
         # on shell-owned storage: first-boot FUSE failures can make /sdcard
         # unreadable even after dump reports success. SAF still uses Downloads.
         self.remote_xml = "/data/local/tmp/pine-diag-smoke-" + uuid.uuid4().hex + ".xml"
+        self.remote_xml_paths = []
         self.session = None
         self.sessions = set()
         self.ever_enabled = False
@@ -183,6 +184,7 @@ class Smoke:
         self.snapshot_bytes = {}
         self.snapshot_id = None
         self.saved_name = None  # Set only from the exact observed current-session SAF filename.
+        self.pending_saf_export = False
         self.logger = None
         self.log_stream = None
         self.results = {}
@@ -207,6 +209,9 @@ class Smoke:
             "system_anr_closes": [],
             "settings_back_recovery_limit": 1,
             "settings_back_recoveries": [],
+            "saf_root_selections": [],
+            "saf_cancel_actions": [],
+            "saf_storage_observations": [],
             "storage_readiness_required": bool(getattr(args, "require_ready_storage", False)),
             "system_last_anr_traces_enabled": bool(getattr(args, "collect_system_last_anr_traces", False)),
             "system_last_anr_traces_scope": "Latest system-wide ANR trace file and all retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated and include other processes.",
@@ -258,6 +263,9 @@ class Smoke:
             "settings_back_recovery_limit": self.summary["settings_back_recovery_limit"],
             "settings_back_recoveries": self.summary["settings_back_recoveries"],
             "settings_back_recovery_blocker": self.summary.get("settings_back_recovery_blocker"),
+            "saf_root_selections": self.summary["saf_root_selections"],
+            "saf_cancel_actions": self.summary["saf_cancel_actions"],
+            "saf_storage_observations": self.summary["saf_storage_observations"],
             "storage_readiness_required": self.summary["storage_readiness_required"],
             "system_last_anr_traces_enabled": self.summary["system_last_anr_traces_enabled"],
             "system_last_anr_traces_scope": self.summary["system_last_anr_traces_scope"],
@@ -370,10 +378,25 @@ class Smoke:
     def screen(self, label, deadline=None):
         observation = f"UI observation '{label}'"
         self.screen_number += 1
-        self.adb("shell", "uiautomator", "dump", "--compressed", self.remote_xml,
-                 timeout=self.budget(deadline, observation))
+        # A zero exit code is not proof of a successful dump: UIAutomator can
+        # report null-root on stderr and leave an older XML untouched. Never
+        # reuse a remote path, and require this invocation's success marker.
+        remote_xml = self.remote_xml.removesuffix(".xml") + "-" + uuid.uuid4().hex + ".xml"
+        self.remote_xml_paths.append(remote_xml)
+        self.adb("shell", "test", "!", "-e", remote_xml, timeout=self.budget(deadline, observation))
+        prefix = f"{self.screen_number:03d}-{label}"
+        stderr_path = self.output / (prefix + "-dump.stderr.txt")
+        dumped = decode(self.adb("shell", "uiautomator", "dump", "--compressed", remote_xml,
+                                  timeout=self.budget(deadline, observation),
+                                  save=prefix + "-dump.stdout.txt", save_stderr=stderr_path.name))
+        errors = stderr_path.read_text(errors="replace") if stderr_path.is_file() else ""
+        markers = {"UI hierchary dumped to: " + remote_xml, "UI hierarchy dumped to: " + remote_xml}
+        diagnostics = (dumped + "\n" + errors).casefold()
+        if (not any(line.strip() in markers for line in dumped.splitlines()) or
+                "null root" in diagnostics or "error:" in diagnostics):
+            raise Blocked(f"UIAutomator did not confirm a fresh hierarchy: {prefix}; no XML fallback or UI action")
         path = self.output / f"{self.screen_number:03d}-{label}.xml"
-        data = self.adb("exec-out", "cat", self.remote_xml, save=path.name,
+        data = self.adb("exec-out", "cat", remote_xml, save=path.name,
                         timeout=self.budget(deadline, observation))
         try:
             screen = Screen(ET.fromstring(data), path, self.screen_number)
@@ -381,6 +404,10 @@ class Smoke:
             raise Blocked(f"UIAutomator did not provide parseable XML: {path.name}: {error}") from error
         self.budget(deadline, observation)
         return screen
+
+    def remove_remote_xml(self, timeout=None):
+        for index in range(0, len(self.remote_xml_paths), 32):
+            self.adb("shell", "rm", "-f", *self.remote_xml_paths[index:index + 32], check=False, timeout=timeout)
 
     def wait_ui(self, label, predicate):
         deadline = time.monotonic() + self.args.ui_timeout
@@ -773,7 +800,7 @@ class Smoke:
                      "storage_readiness_required": storage_required,
                      "observations": observations}
         if storage_required:
-            readiness["storage_probe_scope"] = "The internal private volume is a mount-service stub; mounted does not prove FUSE or installation readiness."
+            readiness["storage_probe_scope"] = "Require both internal private and user-0 emulated volumes mounted, plus a real directory stat through /sdcard/. (FUSE). These read-only observations do not prove document-provider, write or installation readiness. Downloads may be created later by its normal provider."
         self.summary["android_readiness"] = readiness
         sampled_multiple = False
         last_reason = "No readiness observation completed"
@@ -855,6 +882,16 @@ class Smoke:
                     row["storage_internal_volume_line"] = mounted
                     if mounted is None:
                         raise Blocked("Storage service did not report the internal private volume mounted")
+                    emulated = next((line for line in volumes.splitlines()
+                                     if re.fullmatch(r"emulated(?:[;:]0)?[ \t]+mounted[ \t]+\S+", line)), None)
+                    row["storage_emulated_mounted"] = emulated is not None
+                    row["storage_emulated_volume_line"] = emulated
+                    if emulated is None:
+                        raise Blocked("Storage service did not report the user-0 emulated volume mounted")
+                    directory = observe("emulated-directory", "shell", "ls", "-ld", "/sdcard/.")
+                    row["emulated_directory_accessible"] = bool(re.fullmatch(r"d[^\n]*[ \t]/sdcard/\.\s*", directory))
+                    if not row["emulated_directory_accessible"]:
+                        raise Blocked("The real /sdcard/. directory is not accessible through FUSE")
                 if deadline - time.monotonic() <= 2:
                     raise Blocked("Readiness budget cannot fit the full two-second continuity window")
                 time.sleep(2)
@@ -867,6 +904,8 @@ class Smoke:
                             "package_query_answered": True, "preinstall_ui_required": False}
                 if storage_required:
                     accepted["storage_internal_mounted"] = True
+                    accepted["storage_emulated_mounted"] = True
+                    accepted["emulated_directory_accessible"] = True
                 row.update(status="pass", reason="One identical PID across the package query and full two-second window")
             except Blocked as error:
                 last_reason = str(error)
@@ -906,9 +945,11 @@ class Smoke:
         raise Blocked("Bounded Android boot/readiness gate expired before installation; last observation: " + last_reason)
 
     def fresh_install(self):
-        existing = decode(self.adb("shell", "cmd", "package", "path", PACKAGE, check=False)).strip()
-        if any(line.startswith("package:") for line in existing.splitlines()):
-            raise Blocked("Target package already installed; fresh-default check requires a fresh target package. Nothing was uninstalled or cleared.")
+        existing = decode(self.adb("shell", "cmd", "package", "list", "packages", "-u", PACKAGE,
+                                   save="preinstall-packages.txt", save_stderr="preinstall-packages.stderr.txt")).strip()
+        errors = self.output / "preinstall-packages.stderr.txt"
+        if existing or (errors.is_file() and errors.read_text(errors="replace").strip()):
+            raise Blocked("Target package is not demonstrably absent; fresh-default validation requires a successful empty package query. Nothing was uninstalled or cleared.")
         result = self.adb("install", str(self.args.apk.resolve()), timeout=self.args.install_timeout,
                           save="install.txt")
         require("Success" in decode(result).splitlines(), "adb install did not report Success")
@@ -1078,6 +1119,97 @@ class Smoke:
         return {"snapshot_id": self.snapshot_id,
                 "entry_sha256": {name: digest(data) for name, data in self.snapshot_bytes.items()}}
 
+    @staticmethod
+    def documents_control(screen, *, labels=None, resource=None, class_name=None, package=None,
+                          clickable=False, allow_disabled=False):
+        providers = ("com.google.android.documentsui", "com.android.documentsui")
+        return next((n for n in screen.root.iter("node") if Screen.bounds(n) and
+                     (allow_disabled or n.get("enabled") == "true") and
+                     n.get("package") in ((package,) if package else providers) and
+                     (not clickable or n.get("clickable") == "true") and
+                     (labels is None or n.get("text") in labels or n.get("content-desc") in labels) and
+                     (resource is None or n.get("resource-id") == resource) and
+                     (class_name is None or n.get("class") == class_name)), None)
+
+    @staticmethod
+    def documents_window(screen):
+        allowed = {"com.google.android.documentsui", "com.android.documentsui", "com.android.systemui"}
+        return all(n.get("package") in allowed for n in screen.root.iter("node")
+                   if Screen.bounds(n) and n.get("enabled") == "true")
+
+    def saf_field(self, screen):
+        if not self.documents_window(screen):
+            return None
+        return self.documents_control(screen, resource="android:id/title", class_name="android.widget.EditText")
+
+    def validate_saf_field(self, field):
+        if not self.session or not UUID_RE.fullmatch(self.session):
+            raise Blocked("No verified current session for SAF filename validation")
+        expected_name = "pine-diag-" + self.session + ".zip"
+        if field is None or field.get("text") != expected_name:
+            raise Blocked("SAF filename does not exactly match the current-session app default; no filename editing attempted")
+
+    def saf_save_control(self, screen, *, allow_disabled=False):
+        field = self.saf_field(screen)
+        if field is None:
+            return None
+        return self.documents_control(screen, labels=("SAVE", "Save", "保存", "CREATE", "Create", "创建"),
+                                      resource="android:id/button1", class_name="android.widget.Button",
+                                      package=field.get("package"), clickable=True, allow_disabled=allow_disabled)
+
+    def documents_roots_list(self, screen):
+        return next((n for n in screen.root.iter("node")
+                     if n.get("package") in ("com.google.android.documentsui", "com.android.documentsui") and
+                     n.get("resource-id") == n.get("package") + ":id/roots_list" and
+                     n.get("enabled") == "true" and Screen.bounds(n)), None)
+
+    def downloads_root(self, screen):
+        # A Downloads breadcrumb/title is not a root action. Accept only the
+        # actual title inside the system picker's roots list and its clickable
+        # row. Reselecting that standard root is a normal provider reload.
+        if not self.documents_window(screen):
+            return None
+        parents = {child: parent for parent in screen.root.iter() for child in parent}
+        rows = []
+        for container in screen.root.iter("node"):
+            package = container.get("package")
+            if (package not in ("com.google.android.documentsui", "com.android.documentsui") or
+                    container.get("resource-id") != package + ":id/roots_list" or
+                    container.get("enabled") != "true" or not Screen.bounds(container)):
+                continue
+            for title in container.iter("node"):
+                if (title.get("package") != package or title.get("resource-id") != "android:id/title" or
+                        title.get("text") not in ("Downloads", "Download", "下载") or
+                        title.get("enabled") != "true" or not Screen.bounds(title)):
+                    continue
+                node = title
+                while node is not container:
+                    if (node.get("package") == package and node.get("enabled") == "true" and
+                            node.get("clickable") == "true" and Screen.bounds(node)):
+                        rows.append(node)
+                        break
+                    node = parents[node]
+        return rows[0] if len(rows) == 1 else None
+
+    def capture_saf_storage(self, label):
+        if not self.summary["storage_readiness_required"]:
+            return
+        # Evidence only. Do not grant MANAGE_DOCUMENTS, modify providers, make
+        # test files or turn a successful shell probe into a SAF acceptance pass.
+        row = {"label": label, "diagnostic_only": True, "files": [], "errors": []}
+        for suffix, arguments in (("volumes", ("shell", "sm", "list-volumes", "all")),
+                                  ("downloads", ("shell", "ls", "-ld", "/sdcard/Download")),
+                                  ("providers", ("shell", "dumpsys", "activity", "providers"))):
+            name = label + "-" + suffix + ".txt"
+            row["files"].append(name)
+            try:
+                self.adb(*arguments, check=False, timeout=min(5, self.args.command_timeout),
+                         save=name, save_stderr=name + ".stderr.txt")
+            except (Blocked, OSError) as error:
+                row["errors"].append(str(error))
+        self.summary["saf_storage_observations"].append(row)
+        self.write_summary()
+
     def saf_save(self):
         screen = self.screen("export-confirm")
         self.reject_app_anr(screen)
@@ -1086,39 +1218,38 @@ class Smoke:
         if button is None:
             raise Blocked("Prepared preview Export action is unavailable; use retained preview XML/screenshot for manual handoff")
         self.tap(button)
-        providers = ("com.google.android.documentsui", "com.android.documentsui")
-        def control(screen, *, labels=None, resource=None, class_name=None, package=None):
-            return next((n for n in screen.root.iter("node") if Screen.bounds(n) and n.get("enabled") == "true" and
-                         n.get("package") in ((package,) if package else providers) and
-                         (labels is None or n.get("text") in labels or n.get("content-desc") in labels) and
-                         (resource is None or n.get("resource-id") == resource) and
-                         (class_name is None or n.get("class") == class_name)), None)
-        picker = self.wait_ui("saf-picker", lambda s: control(s) is not None)
-        download_labels = ("Downloads", "Download", "下载")
-        # Pick an explicit local Downloads root. Do not guess a provider or grant permissions.
-        if control(picker, labels=download_labels) is None:
-            drawer = control(picker, labels=("Show roots", "Open navigation drawer", "显示根目录", "显示位置", "打开导航抽屉"))
+        self.capture_saf_storage("saf-before-root")
+        picker = self.wait_ui("saf-picker", lambda s: self.saf_field(s) is not None)
+        self.validate_saf_field(self.saf_field(picker))
+        self.pending_saf_export = True
+        root = self.downloads_root(picker)
+        if root is None:
+            drawer = self.documents_control(picker, labels=("Show roots", "Open navigation drawer", "显示根目录", "显示位置", "打开导航抽屉"),
+                                            class_name="android.widget.ImageButton", clickable=True)
             if drawer is None:
-                raise Blocked("SAF picker does not expose a recognized local Downloads root; complete export manually using saf-picker evidence")
+                raise Blocked("SAF picker does not expose a recognized roots drawer; no breadcrumb or guessed provider was tapped")
             self.tap(drawer)
-            picker = self.wait_ui("saf-roots", lambda s: control(s, labels=download_labels) is not None)
-        root = control(picker, labels=download_labels)
-        if root is not None:
-            self.tap(root)
-        picker = self.wait_ui("saf-downloads", lambda s: control(s, resource="android:id/title", class_name="android.widget.EditText") is not None)
-        field = control(picker, resource="android:id/title", class_name="android.widget.EditText")
-        if not self.session or not UUID_RE.fullmatch(self.session):
-            raise Blocked("No verified current session for SAF filename validation")
-        expected_name = "pine-diag-" + self.session + ".zip"
-        if field.get("text") != expected_name:
-            raise Blocked("SAF filename does not exactly match the current-session app default; no filename editing attempted")
-        self.saved_name = field.get("text")
-        save = control(picker, labels=("SAVE", "Save", "保存", "CREATE", "Create", "创建"),
-                       resource="android:id/button1", class_name="android.widget.Button", package=field.get("package"))
-        if save is None or save.get("clickable") != "true":
-            raise Blocked("SAF Save control unavailable; complete the picker manually using saf-downloads evidence")
+            picker = self.wait_ui("saf-roots", lambda s: self.downloads_root(s) is not None)
+            root = self.downloads_root(picker)
+        self.summary["saf_root_selections"].append({"source_xml": picker.xml.name, "package": root.get("package"),
+            "bounds": root.get("bounds"), "action": "select standard Downloads root", "command_number": self.command_number + 1})
+        self.tap(root)
+        def save_ready(screen):
+            field = self.saf_field(screen)
+            if field is None:
+                return False
+            self.validate_saf_field(field)
+            return self.saf_save_control(screen) is not None and self.documents_roots_list(screen) is None
+        try:
+            picker = self.wait_ui("saf-downloads", save_ready)
+        except Blocked as error:
+            self.capture_saf_storage("saf-save-blocked")
+            raise Blocked("SAF Downloads did not expose an enabled Save control; no disabled control was tapped: " + str(error)) from error
+        self.saved_name = self.saf_field(picker).get("text")
+        save = self.saf_save_control(picker)
         self.tap(save)
         self.wait_ui("saf-return", lambda s: any(n.get("package") == PACKAGE for n in s.root.iter("node")))
+        self.pending_saf_export = False
         remote = "/sdcard/Download/" + self.saved_name
         deadline = time.monotonic() + self.args.ui_timeout
         while time.monotonic() < deadline:
@@ -1157,9 +1288,41 @@ class Smoke:
                     "Saved ZIP lacks current-session native metadata for expected commit")
         return {"entries": names, "valid_jsonl_records": len(records), "preview_bytes_match": True}
 
+    def cancel_pending_saf(self):
+        if not self.pending_saf_export:
+            return
+        screen = self.screen("saf-cleanup-confirm")
+        self.reject_app_anr(screen)
+        self.reject_unhandled_anr(screen)
+        if self.own_diagnostics_controls(screen) is not None:
+            self.pending_saf_export = False
+            return
+        self.validate_saf_field(self.saf_field(screen))
+        if self.saf_save_control(screen, allow_disabled=True) is None or self.documents_roots_list(screen) is not None:
+            raise Blocked("Pending current-session SAF picker cannot be identified for an ordinary Cancel")
+        package = self.saf_field(screen).get("package")
+        focus = decode(self.adb("shell", "dumpsys", "window", timeout=min(5, self.args.command_timeout),
+                                save="saf-cleanup-focus.txt"))
+        owners = re.findall(r"^\s*mCurrentFocus=Window\{[0-9a-f]+ u0 ([\w.]+)/[^\s}]+\}\s*$", focus, re.MULTILINE)
+        if owners != [package] or self.summary["saf_cancel_actions"]:
+            raise Blocked("Current-session SAF Cancel refused: picker focus is unknown or Cancel was already attempted")
+        row = {"source_xml": screen.xml.name, "focus_evidence": "saf-cleanup-focus.txt", "package": package,
+               "filename": self.saf_field(screen).get("text"), "action": "ordinary Back to cancel this export",
+               "command_number": self.command_number + 1, "status": "attempted"}
+        self.summary["saf_cancel_actions"].append(row)
+        self.adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        row["status"] = "back_sent"
+        self.write_summary()
+        self.wait_ui("saf-cancel-return", lambda s: self.own_diagnostics_controls(s) is not None)
+        self.pending_saf_export = False
+
     def disable(self):
         if not self.ever_enabled:
             raise Blocked("Diagnostics was never successfully enabled; no native Stop summary can be claimed")
+        # A positively identified picker from this runner's export can be
+        # cancelled normally, independently of an earlier Bluetooth dialog.
+        # This never changes saf_save/zip_verify's retained blocked outcomes.
+        self.cancel_pending_saf()
         # Recover through the normal exported Settings activity if a picker/dialog blocked later checks.
         try:
             self.open_settings(cleanup=True)
@@ -1247,7 +1410,7 @@ class Smoke:
                 self.adb("logcat", "-b", "system", "-b", "crash", "-d", "-t", "1000", "-v", "threadtime",
                          "Watchdog:V", "SystemServer:V", "ActivityManager:E", "AndroidRuntime:E", "*:S",
                          save="android-framework-logcat.txt", timeout=20)
-                self.adb("shell", "rm", "-f", self.remote_xml, check=False, timeout=10)
+                self.remove_remote_xml(timeout=10)
             except Blocked as error:
                 self.summary["final_capture_blocker"] = str(error)
         if self.installed:
@@ -1256,7 +1419,7 @@ class Smoke:
             try:
                 self.adb("logcat", "-b", "crash", "-d", "-v", "threadtime", save="crash-buffer.txt")
                 self.adb("shell", "dumpsys", "activity", "activities", save="final-activities.txt")
-                self.adb("shell", "rm", "-f", self.remote_xml, check=False)
+                self.remove_remote_xml()
             except Blocked as error:
                 self.summary["final_capture_blocker"] = str(error)
         if self.logger is not None:
@@ -1323,7 +1486,7 @@ def main():
     parser.add_argument("--collect-system-last-anr-traces", action="store_true",
                         help="Fresh job-owned AVDs only: on an unsuccessful installed run, read the latest system-wide ANR trace and retained data_app_anr DropBox entries; not filtered to Pine; entries may be old or truncated")
     parser.add_argument("--require-ready-storage", action="store_true",
-                        help="Fresh job-owned AVDs only: require sm list-volumes all to report internal private mounted within the original readiness deadline; this does not prove FUSE or install readiness")
+                        help="Fresh job-owned AVDs only: require internal private and user-0 emulated mounted plus a real /sdcard/. directory stat within the original readiness deadline; retain read-only provider state during SAF. This does not prove provider/write/install readiness")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_commit):
         parser.error("--expected-commit must be a full lowercase 40-character Git commit")

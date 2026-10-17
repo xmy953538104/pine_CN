@@ -86,6 +86,8 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/full/debug/apk-badging.txt
           python3 tools/verify-diagnostics-apk.py "$apk" "$EXPECTED_COMMIT"
+          python3 tools/verify-native-debug-flags.py --optimization 0 --apk "$apk" \
+            --output app/build/outputs/apk/full/debug/native-build-flags.json
       - name: Match and archive unstripped native symbols
         env:
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -111,6 +113,7 @@ jobs:
             app/build/outputs/apk/full/debug/*.apk
             app/build/outputs/apk/full/debug/apk-badging.txt
             app/build/outputs/apk/full/debug/build-identity.json
+            app/build/outputs/apk/full/debug/native-build-flags.json
           if-no-files-found: error
       - name: Test reports
         if: always()

@@ -1,0 +1,86 @@
+name: Diagnostics optimized candidate
+on:
+  push:
+    branches: [feat/diagnostics-perf-candidate]
+permissions:
+  contents: read
+concurrency:
+  group: diagnostics-performance-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  host-comparisons:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pinned fmt headers for the production legacy logger fixture
+        run: git submodule update --init --depth 1 app/libraries/fmt
+      - name: Native flag rejection tests and controlled host comparisons
+        run: |
+          python3 tools/tests/test-native-debug-flags.py
+          python3 tools/tests/benchmark-diagnostics-performance.py --output "$RUNNER_TEMP/host-comparison"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostics-host-performance-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/host-comparison/probe-results.json
+            ${{ runner.temp }}/host-comparison/legacy-results.json
+  optimized-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Pinned Android tools
+        run: sdkmanager 'ndk;27.3.13750724' 'cmake;3.22.1' 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: diagnostics-ndk-27.3-optimized-candidate
+          max-size: 3Gi
+      - name: Native dependencies at pinned revisions
+        run: git submodule update --init --recursive --depth 1 --jobs 8
+      - name: JVM tests and explicit optimized Debug candidate
+        env:
+          IS_BUILD_SIGNED: 'false'
+          SIGNING_STORE_PATH: unused.jks
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CCACHE_COMPILERCHECK: 'string:27.3.13750724'
+        run: ./gradlew --no-daemon -PpineNativeDebugOptimization=2 testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
+      - name: Verify actual compiler flags, APK and matching symbols
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          apk=app/build/outputs/apk/full/debug/app-full-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/full/debug/apk-badging.txt
+          python3 tools/verify-diagnostics-apk.py "$apk" "$EXPECTED_COMMIT"
+          python3 tools/verify-native-debug-flags.py --optimization 2 --apk "$apk" --output app/build/outputs/apk/full/debug/native-build-flags.json
+          python3 tools/archive-native-symbols.py "$apk" "$EXPECTED_COMMIT" app/build/outputs/optimized-symbols \
+            --root app/build/intermediates/cxx --root app/.cxx \
+            --readelf "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pine-diagnostics-O2-debug-candidate-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/full/debug/*.apk
+            app/build/outputs/apk/full/debug/*.json
+            app/build/outputs/apk/full/debug/apk-badging.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pine-diagnostics-O2-symbols-${{ github.sha }}
+          path: app/build/outputs/optimized-symbols/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostics-O2-jvm-reports-${{ github.sha }}
+          path: app/build/reports/tests/

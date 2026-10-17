@@ -27,7 +27,7 @@ internal object NativeTraceSummary {
         fun fields(): Map<String, String> = mapOf("trace_status" to status, "signal_number" to signal.toString(),
             "abort_signature" to abortSignature, "frames" to frames.joinToString(";") { it.safeText() },
             "frames_seen" to framesSeen.toString(), "frames_omitted" to framesOmitted.toString(),
-            "frame_scope" to "first_16_allowlisted_fault_thread_bounded_1700_bytes", "raw_trace_exported" to "false")
+            "raw_trace_exported" to "false")
     }
     fun read(input: InputStream?, expectedPid: Int, expectedUid: Int, durationMs: Long = 1000): Result {
         if (input == null) return Result("null_or_overwritten")

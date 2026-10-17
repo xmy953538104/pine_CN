@@ -50,4 +50,22 @@ int main(int argc, char **argv) {
     assert(text.find("\"guest_file\":\"main.lua\"") != std::string::npos);
     assert(text.find("\"event\":\"DFX_HAMLET_ENTER\"") == std::string::npos);
     assert(text.find("\"event\":\"DFX_MAIN_ENTER\"") == std::string::npos);
+    assert(text.find("\"last_guest_stage\":\"guest_message_observed\"") != std::string::npos);
+    assert(text.find("\"last_guest_stage\":\"DFX_HAMLET_ENTER\"") == std::string::npos);
+    assert(text.find("\"last_guest_stage\":\"DFX_MAIN_ENTER\"") == std::string::npos);
+    // A real allowlisted prefix changes only guest progress; loading alone never does.
+    config.sessionId = "guest-marker-test";
+    assert(Start(config));
+    for (int i = 0; i < 20; ++i) {
+        GuestMessage("DFX_MAIN_ENTER: controlled fixture", "OutputDebugString");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Stop();
+    std::ifstream markers(std::filesystem::path(argv[1]) / "diagnostics-0.jsonl");
+    const std::string progress{std::istreambuf_iterator<char>(markers), {}};
+    assert(progress.find("\"last_guest_stage\":\"DFX_MAIN_ENTER\"") != std::string::npos);
+    SetLaunchId("new-launch", true);
+    config.sessionId = "guest-test"; // Restore the test folder's schema/session fixture for parser checks.
+    assert(Start(config)); Stop();
+    // Earlier sessions are intentionally retained; parser checks their actual per-file IDs separately.
 }

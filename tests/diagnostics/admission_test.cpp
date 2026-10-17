@@ -25,6 +25,7 @@ int main(int argc, char **argv) {
     assert(AdmissionLimit(1, false) == 1 && AdmissionLimit(1, true) == 1);
     assert(CriticalEvent("content", "DLC_REGISTERED", "INFO"));
     assert(!CriticalEvent("guest", "GUEST_DEBUG_MESSAGE", "ERROR"));
+    assert(CriticalEvent("guest", "DFX_MAIN_ENTER", "INFO"));
     const std::filesystem::path root(argv[1]);
     Config config{root.string(), "reserve-test", 64, 65536, 2, false, {}};
     assert(Start(config));

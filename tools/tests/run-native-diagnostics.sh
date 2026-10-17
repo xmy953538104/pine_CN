@@ -37,7 +37,7 @@ for folder,session in [('logs','native-test'),('guest-logs','guest-test'),
     assert paths
     for path in paths:
         rows=[json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
-        assert rows and all(row['schema']==1 and row['session_id']==session for row in rows), path
+        assert rows and all(row['schema']==1 and row['session_id'] in ({'guest-test','guest-marker-test'} if folder=='guest-logs' else {session}) for row in rows), path
         assert all(a['sequence']<b['sequence'] for a,b in zip(rows,rows[1:])), path
         assert all(isinstance(row['title_id'],str) and isinstance(row['fields'],dict) for row in rows)
         assert all(isinstance(key,str) and isinstance(value,str) for row in rows for key,value in row['fields'].items())

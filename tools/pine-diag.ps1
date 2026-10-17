@@ -142,23 +142,35 @@ try {
         if (-not $line.TrimStart().StartsWith('{')) { continue }
         try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
         if (-not $event -or -not $event.PSObject.Properties['session_id'] -or $event.session_id -isnot [string] -or [string]::IsNullOrWhiteSpace($event.session_id)) { continue }
-        if ($SessionId -and $event.session_id -cne $SessionId) { continue }
+        $fieldsProperty = $event.PSObject.Properties['fields']
+        $eventFields = if ($fieldsProperty -and $null -ne $fieldsProperty.Value) { $fieldsProperty.Value } else { $null }
+        $name = $event.PSObject.Properties['event']
+        $historical = $name -and $name.Value -in @('PREVIOUS_PROCESS_CRASH', 'PREVIOUS_PROCESS_EXIT', 'PREVIOUS_NATIVE_TRACE')
+        $relation = if ($eventFields) { $eventFields.PSObject.Properties['association_status'] } else { $null }
+        $verified = $historical -and $relation -and $relation.Value -ceq 'verified'
+        if ($SessionId -and $event.session_id -cne $SessionId) {
+            $previous = if ($verified) { $eventFields.PSObject.Properties['previous_session_id'] } else { $null }
+            if (-not $previous -or $previous.Value -isnot [string] -or $previous.Value -cne $SessionId) { continue }
+        }
         if ($LaunchId) {
-            $launch = $event.PSObject.Properties['launch_id']
+            # A history import belongs to the previous launch in retained platform state,
+            # never to a coincidentally active importer launch. Unknown stays unassociated.
+            $launch = if ($historical) {
+                if ($verified) { $eventFields.PSObject.Properties['previous_launch_id'] } else { $null }
+            } else { $event.PSObject.Properties['launch_id'] }
             if (-not $launch -or $launch.Value -isnot [string] -or $launch.Value -cne $LaunchId) { continue }
         }
         if ($TitleId) {
-            # New sink records carry the base launch context at top level. A DLC
-            # event's fields.title_id is its own Data ID, not the base title.
-            $title = $event.PSObject.Properties['application_title_id']
-            if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value)) {
-                $title = $event.PSObject.Properties['title_id']
-            }
-            if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value) -or $title.Value -ieq 'unknown') {
-                # Older records and observations before a base is known can
-                # still expose an event-specific content identity.
-                $fields = $event.PSObject.Properties['fields']
-                $title = if ($fields -and $null -ne $fields.Value) { $fields.Value.PSObject.Properties['title_id'] } else { $null }
+            if ($historical) {
+                $title = if ($verified) { $eventFields.PSObject.Properties['previous_application_title_id'] } else { $null }
+            } else {
+                $title = $event.PSObject.Properties['application_title_id']
+                if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value)) {
+                    $title = $event.PSObject.Properties['title_id']
+                }
+                if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value) -or $title.Value -ieq 'unknown') {
+                    $title = if ($eventFields) { $eventFields.PSObject.Properties['title_id'] } else { $null }
+                }
             }
             if (-not $title -or $title.Value -isnot [string] -or $title.Value -ine $TitleId) { continue }
         }

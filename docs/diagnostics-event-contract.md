@@ -314,3 +314,44 @@ expose omitted repeats. This is separate from queue/drop counts. The bridge is
 inactive with diagnostics off and does not attach to every native log/hot path.
 `fatality=unknown` is deliberate: a minimum-latency query failure can recover via
 the audio backend's existing fallback and is not evidence of the crash cause.
+
+## Provenance and timeline boundaries
+
+`association_status` is `verified` only for the platform-retained anonymous state
+with matching own process scope/UID; it verifies that retained state identity,
+not its freshness at the crash or a causal game attribution. `unknown` never gains
+a launch by guessing from timestamps. `time_correlated` is reserved for a future
+explicit time-window collector, not currently emitted. ADB title/launch filters
+use verified `previous_*` identities for historical records; they never attach
+an old crash to the importer's current title/launch. Session filters retain the
+legacy root-session behavior and additionally accept verified previous sessions.
+Raw ADB crash context is still separate evidence; automatic live PID/window
+association is not implemented or silently presented as verified.
+
+`last_load_stage` preserves the compatible `last_stage` value. `last_guest_stage`
+starts at `unknown`, changes to `guest_message_observed` only on a real guest
+logging call, and can then retain one of the four parsed DFX progress markers.
+It is a guest-reported progress observation, not independent validation of Lua,
+menu/world state, or a frame presented to the display. Emulator loading stages
+never synthesize those game stages. Lua errors retain their real message/source
+fields without inventing a stack. TheSim:LuaPrint/LuaError forwarding, first guest
+thread and submit/present timing remain unverified extensions.
+
+`CONTENT_ROLE_OBSERVED` separates the input slot from its selected CNMT role.
+A Patch CNMT in the base slot is an observation that can also occur in working
+merged packages, not by itself a mismatch or cause of failure. No loading policy
+changes. Each `LOADER_READY` explicitly reports full-document hash as
+`not_computed`; NCA entry IDs never stand in for that hash. Optional exact SHA-256
+hashing is deferred: it needs background cancellation, changed-input/failure
+states, scope/algorithm/completion evidence and conservative cache invalidation.
+SAF metadata is not immutable-byte proof; any future reader must use an independent
+descriptor/position and never move the loader's shared FD offset. Import-time
+verification must remain distinct from verification of a later launch.
+
+The fixed snapshot replacement temporary file is also bounded to 64 KiB. Sudden
+death can leave both the previous state and that temporary file, so the per-process
+space allowance is 128 KiB beyond rotating logs. Only the finished JSONL is exported.
+CI archives the same job's unstripped ARM64 `libskyline.so` in a separate artifact.
+GNU Build ID must match the packaged ELF, debug info must exist, and exact source,
+APK/ELF/symbol SHA-256 values are recorded in `native-symbols.json`. Ambiguous or
+stripped-only candidates fail the job; symbols are never assigned to an older APK.

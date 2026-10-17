@@ -316,7 +316,9 @@ try {
     [IO.File]::WriteAllLines($identityFixture, @(
         '{"session_id":"identity","launch_id":"one","title_id":"0100751007ADA800","application_title_id":"0100751007ADA000","event":"DLC_DATA_READ","fields":{"title_id":"0100751007ADB001"}}',
         '{"session_id":"identity","launch_id":"two","title_id":"0100751007ADA000","application_title_id":"0100751007ADA000","event":"OTHER_LAUNCH","fields":{}}',
-        '{"session_id":"identity","launch_id":"one","title_id":"0100751007ADA000","event":"LEGACY_ROOT","fields":{}}'
+        '{"session_id":"identity","launch_id":"one","title_id":"0100751007ADA000","event":"LEGACY_ROOT","fields":{}}',
+        '{"session_id":"importer","application_title_id":"0100000000009999","launch_id":"other","event":"PREVIOUS_NATIVE_TRACE","fields":{"association_status":"verified","previous_launch_id":"one","previous_session_id":"identity","previous_application_title_id":"0100751007ADA000"}}',
+        '{"session_id":"importer","application_title_id":"0100751007ADA000","launch_id":"one","event":"PREVIOUS_PROCESS_CRASH","fields":{"association_status":"unknown","previous_launch_id":"one","previous_application_title_id":"0100751007ADA000"}}'
     ), (New-Object System.Text.UTF8Encoding($false)))
     $originalFixture = $env:PINE_FAKE_ADB_FIXTURE
     try {
@@ -324,7 +326,11 @@ try {
         $identityOutput = Join-Path $temp 'identity'
         & $collector -AdbPath $fake -Serial second-device -TitleId 0100751007ADA000 -LaunchId one -OutputDirectory $identityOutput -DurationSeconds 3 | Out-Null
         $identityRows = @(Get-ChildItem $identityOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) | ForEach-Object { $_ | ConvertFrom-Json } })
-        Assert ($identityRows.Count -eq 2 -and $identityRows[0].event -eq 'DLC_DATA_READ' -and $identityRows[1].event -eq 'LEGACY_ROOT') 'Application/CNMT or launch filtering lost or misattributed records'
+        Assert ($identityRows.Count -eq 3 -and @($identityRows | Where-Object { $_.event -eq 'DLC_DATA_READ' }).Count -eq 1 -and @($identityRows | Where-Object { $_.event -eq 'LEGACY_ROOT' }).Count -eq 1 -and @($identityRows | Where-Object { $_.event -eq 'PREVIOUS_NATIVE_TRACE' }).Count -eq 1) 'Application/CNMT or launch filtering lost or misattributed records'
+        $previousSessionOutput = Join-Path $temp 'previous-session'
+        & $collector -AdbPath $fake -Serial second-device -TitleId 0100751007ADA000 -LaunchId one -SessionId identity -OutputDirectory $previousSessionOutput -DurationSeconds 3 | Out-Null
+        $previousRows = @(Get-ChildItem $previousSessionOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) | ForEach-Object { $_ | ConvertFrom-Json } })
+        Assert ($previousRows.Count -eq 3) 'Verified prior-session filtering lost the historical trace or admitted an unknown association'
     } finally { $env:PINE_FAKE_ADB_FIXTURE = $originalFixture }
 
     $env:PINE_FAKE_ADB_MODE = 'sessions'

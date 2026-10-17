@@ -37,6 +37,7 @@ int main(int argc, char **argv) {
         assert(text.find("\"program_id\":\"0100751007ADA001\"") != std::string::npos);
         assert(text.find("\"launch_id\":\"launch-one\"") != std::string::npos);
         assert(text.find("\"process_run_id\":\"process-one\"") != std::string::npos);
+        assert(text.find("\"last_guest_stage\":\"unknown\"") != std::string::npos);
     }
     SetLaunchId("launch-two", true);
     ClearTitleId();

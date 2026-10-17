@@ -49,7 +49,14 @@ namespace skyline::kernel {
                     {"title_id", loader->cnmt ? loader->cnmt->GetTitleId() : "unknown"},
                     {"cnmt_version", loader->cnmt ? std::to_string(loader->cnmt->header.version) : "unknown"},
                     {"display_version", loader->nacp ? loader->nacp->GetApplicationVersion() : "unknown"},
-                    {"cnmt_type", loader->cnmt ? std::to_string(static_cast<int>(loader->cnmt->header.contentMetaType)) : "unknown"});
+                    {"cnmt_type", loader->cnmt ? std::to_string(static_cast<int>(loader->cnmt->header.contentMetaType)) : "unknown"},
+                    {"program_id", loader->programNca ? diagnostics::ContentTitleId(loader->programNca->header.titleId) : "unknown"},
+                    {"program_nca_id", loader->diagnosticProgramContentId}, {"full_content_hash_status", "not_computed"},
+                    {"full_content_hash_algorithm", ""}, {"full_content_hash_scope", "input_document_bytes"});
+                PINE_DIAG_CONTENT("CONTENT_ROLE_OBSERVED", {"slot_role", source},
+                    {"cnmt_role", !loader->cnmt ? "unknown" : loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Application ? "application" :
+                        loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch ? "patch" : loader->cnmt->GetContentMetaType() == vfs::ContentMetaType::AddOnContent ? "add_on_content" : "other"},
+                    {"title_id", loader->cnmt ? loader->cnmt->GetTitleId() : "unknown"}, {"validation", "observation_only_no_policy_change"});
                 return loader;
             } catch (const std::exception &e) {
                 PINE_DIAG_CONTENT_ERROR("LOADER_FAILED", {"source", source}, {"reason", e.what()}, {"last_stage", diagnostics::LastStage()});

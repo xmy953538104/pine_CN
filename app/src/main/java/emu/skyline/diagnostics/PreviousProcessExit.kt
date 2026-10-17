@@ -55,9 +55,8 @@ internal object PreviousProcessExit {
                 exits.forEach { exit ->
                     val scope = if (exit.processName.endsWith(":emulationProcess")) "emulation" else "main"
                     val id = ExitRecordIdentity.id(exit.timestamp, exit.reason, exit.status, exit.pid, scope)
-                    val decoded = ProcessAssociationCodec.decode(exit.processStateSummary)
-                    val association = decoded?.takeIf { it.scope == scope && it.process.isNotEmpty() && it.session.isNotEmpty() }
-                    val relation = if (association != null) "anonymous_process_state" else "unknown_or_unavailable"
+                    val association = ProcessAssociationCodec.forScope(exit.processStateSummary, scope)
+                    val relation = if (association != null) "verified" else "unknown"
                     fun previous() = mapOf("previous_session_id" to association?.session.orEmpty(), "previous_launch_id" to association?.launch.orEmpty(),
                         "previous_process_run_id" to association?.process.orEmpty(), "previous_commit" to association?.commit.orEmpty())
                     if ("e:$id" !in seen) {
@@ -79,7 +78,7 @@ internal object PreviousProcessExit {
                         catch (_: Exception) { NativeTraceSummary.Result("read_unavailable") }
                         val accepted = event("PREVIOUS_NATIVE_TRACE") {
                             mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true", "exit_record_id" to id,
-                                "association_status" to relation) + previous() + trace.fields()
+                                "association_status" to relation, "previous_application_title_id" to association?.title.orEmpty()) + previous() + trace.fields()
                         }
                         if (accepted && Diagnostics.flushForSession(session)) seen.add("t:$id")
                     }

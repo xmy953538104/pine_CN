@@ -31,6 +31,9 @@ internal object ProcessAssociationCodec {
         out.put(hex(value.commit, 20)).put(hex(value.title, 8))
         return out.array()
     }
+    fun forScope(bytes: ByteArray?, scope: String): ProcessAssociation? = decode(bytes)?.takeIf {
+        it.scope == scope && it.enabled && it.process.isNotEmpty() && it.session.isNotEmpty()
+    }
     fun decode(bytes: ByteArray?): ProcessAssociation? = runCatching {
         require(bytes != null && bytes.size == SIZE)
         val input = ByteBuffer.wrap(bytes)

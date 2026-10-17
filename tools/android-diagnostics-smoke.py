@@ -399,6 +399,7 @@ class Smoke:
                 if self.dismiss_known_platform_crash(label, last, deadline):
                     self.pause(deadline)
                     continue
+                self.reject_unhandled_anr(last)
                 if self.recover_known_search_locations(label, last, deadline):
                     self.pause(deadline)
                     continue
@@ -425,6 +426,15 @@ class Smoke:
                for node in screen.root.iter("node")):
             raise AppAnr(f"Pine application ANR observed: {APP_LABEL} isn't responding; see {screen.xml.name}")
 
+    @staticmethod
+    def reject_unhandled_anr(screen):
+        # Never satisfy an underlying app predicate through an unhandled ANR.
+        # This applies to unknown targets and to later UI stages where Close app
+        # is deliberately forbidden; retaining a visible control is not recovery.
+        if any(node.get("package") == "android" and node.get("resource-id") == "android:id/aerr_wait"
+               and Screen.bounds(node) for node in screen.root.iter("node")):
+            raise Blocked("Unhandled Android ANR covers the UI; see " + screen.xml.name)
+
     def close_known_system_anr(self, label, screen, deadline):
         """Close only a positively identified, focused, preinstalled system ANR.
 
@@ -432,7 +442,8 @@ class Smoke:
         controls and window must agree; ambiguous/stale observations never tap.
         No force-stop, package disabling, data clearing or security changes.
         """
-        if label != "settings" or not self.summary["system_anr_close_enabled"]:
+        if (label != "settings" or "settings_entry" in self.results or
+                not self.summary["system_anr_close_enabled"]):
             return False
         self.reject_app_anr(screen)
         titles = [node for node in screen.root.iter("node")
@@ -658,6 +669,7 @@ class Smoke:
             if self.wait_known_platform_dialog(screen, deadline):
                 self.pause(deadline)
                 continue
+            self.reject_unhandled_anr(screen)
             node = screen.find_button(text, exact=exact) if button else screen.find(text, exact=exact)
             self.budget(deadline, f"Seeking '{text}'")
             if node is not None:

@@ -711,6 +711,19 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertEqual(smoke.summary['system_anr_closes'][0]['status'], 'blocked')
         self.assertEqual(len([r for r in self.commands(smoke) if 'tap' in r['argv']]), 1)
 
+    def test_unknown_anr_over_underlying_ready_controls_cannot_pass(self):
+        root = ET.fromstring(READY_XML)
+        root.extend(ET.fromstring(SYSTEM_ANR_XML.replace('Digital Wellbeing', 'Unknown App')))
+        smoke = self.smoke('unknown-cover', {'xml_sequence': [ET.tostring(root, encoding='unicode')]}, close_system_anr=True)
+        with self.assertRaises(Blocked):
+            smoke.wait_ui('settings', lambda screen: screen.find('Ready') is not None)
+        self.assertFalse(any('tap' in row['argv'] for row in self.commands(smoke)))
+        smoke = self.smoke('post-entry-close', {'xml_sequence': [SYSTEM_ANR_XML],
+            'activities_sequence': [anr_focus()]}, close_system_anr=True)
+        smoke.results['settings_entry'] = {'status': 'pass'}
+        self.assertFalse(smoke.close_known_system_anr('settings', smoke.screen('cleanup'), time.monotonic() + 2))
+        self.assertFalse(any('tap' in row['argv'] for row in self.commands(smoke)))
+
     def test_opt_in_bluetooth_close_requires_a_fresh_settings_observation(self):
         smoke = self.smoke("bluetooth-settings", {"xml_sequence": [BLUETOOTH_CRASH_XML, READY_XML]},
                            dismiss_platform_crash=True)

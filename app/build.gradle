@@ -13,6 +13,10 @@ idea.module {
     excludeDirs.add(file("libraries/llvm"))
 }
 
+def pineNativeDebugOptimization = project.findProperty('pineNativeDebugOptimization') ?: '0'
+if (!(pineNativeDebugOptimization in ['0', '2']))
+    throw new GradleException('pineNativeDebugOptimization must be 0 or 2')
+
 android {
     namespace 'emu.skyline'
     compileSdk 35
@@ -37,6 +41,7 @@ android {
         }
         def diagnosticsCommit = commitResult.exitValue == 0 ? commitOutput.toString().trim() : 'unknown'
         buildConfigField "String", "DIAGNOSTICS_COMMIT", "\"${diagnosticsCommit}\""
+        buildConfigField "String", "DIAGNOSTICS_NATIVE_OPTIMIZATION", '"build_type_default"'
 
         ndk {
             //noinspection ChromeOsAbiSupport
@@ -116,6 +121,12 @@ android {
             applicationIdSuffix ".diagnostics.preview"
             versionNameSuffix "-diagnostics-v1"
             manifestPlaceholders += [appLabel: "Pine Diagnostics Preview"]
+            buildConfigField "String", "DIAGNOSTICS_NATIVE_OPTIMIZATION", "\"O${pineNativeDebugOptimization}\""
+            externalNativeBuild {
+                cmake {
+                    arguments "-DPINE_NATIVE_DEBUG_OPTIMIZATION=${pineNativeDebugOptimization}"
+                }
+            }
             debuggable true
             minifyEnabled false
             shrinkResources false

@@ -87,6 +87,7 @@ object Diagnostics {
                 "process_scope" to processScope, "session_id" to sessionId, "process_run_id" to processRunId,
                 "application_id" to BuildConfig.APPLICATION_ID, "version" to BuildConfig.VERSION_NAME,
                 "build_type" to BuildConfig.BUILD_TYPE, "commit" to BuildConfig.DIAGNOSTICS_COMMIT,
+                "native_debug_optimization" to BuildConfig.DIAGNOSTICS_NATIVE_OPTIMIZATION,
                 "launch_id" to launch.id, "launch_start_observed" to launch.startObserved.toString())
         }
         if (active) publishAssociation(context) else {

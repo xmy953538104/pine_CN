@@ -32,7 +32,7 @@ object Diagnostics {
     fun fieldsEvent(category: String, event: String, level: String = "INFO", fields: () -> Map<String, String>): Boolean {
         if (!active) return false
         return runCatching {
-            val bounded = fields().entries.take(16).associate { it.key.take(64) to DiagnosticExport.redact(it.value.take(2048)) }
+            val bounded = fields().entries.take(24).associate { it.key.take(64) to DiagnosticExport.redact(it.value.take(2048)) }
             emitFieldsNative(category, event, level, bounded.keys.toTypedArray(), bounded.values.toTypedArray())
         }.getOrDefault(false)
     }

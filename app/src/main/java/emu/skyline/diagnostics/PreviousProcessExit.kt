@@ -69,18 +69,21 @@ internal object PreviousProcessExit {
                         }
                         if (accepted && Diagnostics.flushForSession(session)) seen.add("e:$id")
                     }
-                    if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && !traceAttempted && "t:$id" !in seen) {
+                    if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && !traceAttempted && NativeTraceImport.eligible(seen, id)) {
                         traceAttempted = true
-                        val trace = if (Build.VERSION.SDK_INT < 31) NativeTraceSummary.Result("android_api_below_31")
-                        else try {
-                            queryBounded(1500) { NativeTraceSummary.read(exit.traceInputStream, exit.pid, ownUid) }
-                        } catch (_: java.util.concurrent.TimeoutException) { NativeTraceSummary.Result("observer_deadline") }
-                        catch (_: Exception) { NativeTraceSummary.Result("read_unavailable") }
-                        val accepted = event("PREVIOUS_NATIVE_TRACE") {
-                            mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true", "exit_record_id" to id,
-                                "association_status" to relation, "previous_application_title_id" to association?.title.orEmpty()) + previous() + trace.fields()
+                        NativeTraceImport.attempt(seen, id, {
+                            if (Build.VERSION.SDK_INT < 31) NativeTraceSummary.Result("android_api_below_31")
+                            else try {
+                                queryBounded(1500) { NativeTraceSummary.read(exit.traceInputStream, exit.pid, ownUid) }
+                            } catch (_: java.util.concurrent.TimeoutException) { NativeTraceSummary.Result("observer_deadline") }
+                            catch (_: Exception) { NativeTraceSummary.Result("read_unavailable") }
+                        }) { trace, attempt ->
+                            val accepted = event("PREVIOUS_NATIVE_TRACE") {
+                                NativeTraceImport.fields(mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true", "exit_record_id" to id,
+                                    "association_status" to relation, "previous_application_title_id" to association?.title.orEmpty()) + previous(), trace, attempt)
+                            }
+                            accepted && Diagnostics.flushForSession(session)
                         }
-                        if (accepted && Diagnostics.flushForSession(session)) seen.add("t:$id")
                     }
                 }
             }

@@ -17,7 +17,7 @@ internal object ExitRecordIdentity {
 }
 /** Observer threads only. A cross-process try-lock prevents simultaneous history re-imports. */
 internal class ExitRecordStore(private val directory: File) {
-    private val pattern = Regex("[et]:[0-9a-f]{64}")
+    private val pattern = Regex("(?:[et]:[0-9a-f]{64}|[sp]1:[0-9a-f]{64}|r1:[0-9a-f]{64}:[1-3])")
     fun <T> locked(operation: (MutableSet<String>) -> T): T {
         require(directory.absoluteFile == directory.canonicalFile)
         check(directory.isDirectory || directory.mkdirs())

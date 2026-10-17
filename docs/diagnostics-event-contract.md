@@ -356,3 +356,23 @@ CI archives the same job's unstripped ARM64 `libskyline.so` in a separate artifa
 GNU Build ID must match the packaged ELF, debug info must exist, and exact source,
 APK/ELF/symbol SHA-256 values are recorded in `native-symbols.json`. Ambiguous or
 stripped-only candidates fail the job; symbols are never assigned to an older APK.
+
+## Reviewed trace retention corrections
+
+A null native trace can mean a transient service failure as well as overwritten
+data. Native trace failures do not create a successful terminal marker. The
+private store permits at most three persisted bounded attempts across process
+starts, at most one attempt in any process; successful safe summaries and rejected
+foreign ownership are terminal. Old ambiguous `t:` markers are not trusted.
+`trace_attempt` and `trace_attempt_limit` make the budget visible. Export deduplicates
+trace evidence by status/attempt/frame digest, allowing a later successful summary
+to upgrade an earlier negative result, while historical crash identity remains
+strictly deduplicated.
+
+Producers accept up to 24 bounded fields under the same 4096-byte value budget.
+Critical snapshots retain all accepted producer fields instead of taking the first
+12. Snapshot-only metadata is in `snapshot_metadata`, including explicit
+`fields_omitted=0`; legacy `fields.observed_event` remains readable. Whole old rows
+may still be evicted to satisfy 32-row/64-KiB limits. A production native 16-field
+trace fixture is generated after ordinary-log rotation and checked through the
+actual export pipeline; frames at field13 and their counts remain in the ZIP.

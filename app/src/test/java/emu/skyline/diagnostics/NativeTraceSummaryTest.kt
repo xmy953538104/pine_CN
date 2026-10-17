@@ -28,6 +28,7 @@ class NativeTraceSummaryTest {
             text(2, "PRIVATE_FINGERPRINT") + text(9, "PRIVATE_COMMAND") + text(17, "SECRET_MAPS") + text(19, "SECRET_FD") +
             blob(16, scalar(1, 234) + blob(2, thread))
     }
+    internal fun controlledTrace(): ByteArray = tombstone()
     @Test fun ownNativeTraceYieldsOnlyAllowlistedRelativeFramesAndKnownAbortClass() {
         val result = NativeTraceSummary.parse(tombstone(List(44) { frame(if (it == 1) "libskyline.so" else "libart.so") }), 123, 10001)
         assertEquals("ok", result.status); assertEquals(6, result.signal)

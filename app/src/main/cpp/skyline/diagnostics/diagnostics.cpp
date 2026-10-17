@@ -92,7 +92,8 @@ std::string Quote(std::string_view text) {
     }
     return result + '"';
 }
-std::string Serialize(const Record &r, const Config &c, bool snapshot = false) {
+std::string Serialize(const Record &r, const Config &c, bool snapshot = false,
+                      std::string_view observedEvent = {}, std::string_view observedLevel = {}, uint64_t evictions = 0) {
     std::string out = "{\"schema\":1,\"session_id\":" + Quote(c.sessionId) + ",\"sequence\":" + std::to_string(r.sequence)
         + ",\"wall_clock_ms\":" + std::to_string(r.wall) + ",\"monotonic_us\":" + std::to_string(r.mono)
         + ",\"dropped_count\":" + std::to_string(r.dropped)
@@ -105,7 +106,10 @@ std::string Serialize(const Record &r, const Config &c, bool snapshot = false) {
         + ",\"last_guest_stage\":" + Quote(r.guestStage) + ",\"title_id\":" + Quote(r.titleId)
         + ",\"application_title_id\":" + Quote(r.titleId) + ",\"program_id\":" + Quote(r.programId)
         + ",\"cnmt_title_id\":" + Quote(r.cnmtId) + ",\"program_nca_id\":" + Quote(r.programContentId)
-        + ",\"launch_id\":" + Quote(r.launchId) + ",\"process_run_id\":" + Quote(c.processRunId) + ",\"fields\":{";
+        + ",\"launch_id\":" + Quote(r.launchId) + ",\"process_run_id\":" + Quote(c.processRunId)
+        + (snapshot ? ",\"snapshot_metadata\":{\"observed_event\":" + Quote(observedEvent) + ",\"observed_level\":" + Quote(observedLevel)
+            + ",\"fields_omitted\":0,\"evictions\":" + std::to_string(evictions) + ",\"scope\":\"accepted_critical_last_state_not_replay\"}" : "")
+        + ",\"fields\":{";
     bool first = true;
     for (const auto &[key, value] : r.fields) { if (!first) out += ','; first = false; out += Quote(key) + ':' + Quote(value); }
     return out + "}}\n";
@@ -128,7 +132,7 @@ public:
         try {
         std::string key = record.event;
         for (const auto &[name, value] : record.fields)
-            if (name == "title_id" || name == "loader_source" || name == "loader_index" || name == "nca_type") key += ":" + name + "=" + value;
+            if (name == "exit_record_id" || name == "title_id" || name == "loader_source" || name == "loader_index" || name == "nca_type") key += ":" + name + "=" + value;
         auto found = std::find_if(records.begin(), records.end(), [&](const auto &item) { return item.first == key; });
         if (found != records.end()) records.erase(found);
         if (records.size() == 32) { records.pop_front(); ++sink.snapshotEvictions; }
@@ -146,11 +150,11 @@ public:
                 text.clear();
                 for (const auto &[key, original] : records) {
                     auto record = original;
-                    record.fields.resize(std::min<size_t>(record.fields.size(), 12));
-                    record.fields.insert(record.fields.begin(), {{"observed_event", original.event}, {"observed_level", original.level},
-                        {"snapshot_evictions", std::to_string(sink.snapshotEvictions.load())}, {"snapshot_scope", "accepted_critical_last_state_not_replay"}});
+                    // Producer fields are already bounded. Keep all of them, including
+                    // late trace frames/Build IDs; snapshot metadata has its own root object.
+                    record.fields.emplace_back("observed_event", original.event); // schema-1 compatibility
                     record.event = "CRITICAL_STATE_SNAPSHOT"; record.level = "INFO";
-                    text += Serialize(record, config, true);
+                    text += Serialize(record, config, true, original.event, original.level, sink.snapshotEvictions.load());
                 }
                 if (text.size() <= 65536) break;
                 records.pop_front(); ++sink.snapshotEvictions;
@@ -325,7 +329,7 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         r.wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         r.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
         size_t budget = 4096;
-        for (auto &[key, value] : fields) { if (r.fields.size() == 16 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
+        for (auto &[key, value] : fields) { if (r.fields.size() == 24 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
         std::unique_lock lock(s.mutex, std::try_to_lock);
         if (!lock.owns_lock()) { drop(s.droppedContention); return false; }
         if (!IsEnabled(s) || s.stopping) return false;

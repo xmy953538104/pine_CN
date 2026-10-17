@@ -388,12 +388,12 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_e
     try {
         if (!skyline::diagnostics::Enabled() || !keys || !values) return false;
         const auto count = env->GetArrayLength(keys);
-        if (env->ExceptionCheck() || count > 16 || env->GetArrayLength(values) != count || env->ExceptionCheck()) return false;
+        if (env->ExceptionCheck() || count > 24 || env->GetArrayLength(values) != count || env->ExceptionCheck()) return false;
         const auto categoryText = ConvertDiagnosticJString(env, category);
         const auto eventText = ConvertDiagnosticJString(env, event);
         const auto levelText = ConvertDiagnosticJString(env, level);
-        std::array<std::string, 16> ownedKeys, ownedValues;
-        std::array<std::pair<std::string_view, std::string_view>, 16> fields;
+        std::array<std::string, 24> ownedKeys, ownedValues;
+        std::array<std::pair<std::string_view, std::string_view>, 24> fields;
         for (jsize i = 0; i < count; ++i) {
             const auto index = static_cast<size_t>(i);
             auto key = static_cast<jstring>(env->GetObjectArrayElement(keys, i));

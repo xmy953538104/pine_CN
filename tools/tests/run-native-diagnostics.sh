@@ -60,3 +60,5 @@ assert all('hidden' not in row['thread'] for row in rows)
 print('PASS: strict JSON/UTF-8, schema, per-session sequence, title context, field types and file bounds')
 PY
 bash tools/tests/check-native-adb-fixtures.sh
+
+bash tools/tests/check-native-trace-fixture.sh

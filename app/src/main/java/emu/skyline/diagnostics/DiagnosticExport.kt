@@ -272,7 +272,7 @@ object DiagnosticExport {
         val omissions = mutableListOf<String>()
         private val identities = HashSet<Triple<String, String, Long>>()
         private var criticalSnapshots = 0L
-        private val historicalIdentities = hashSetOf<Pair<String, String>>()
+        private val historicalIdentities = hashSetOf<String>()
         private var historicalDuplicates = 0L
         private var historicalCrashes = 0L
         private val criticalRows = ArrayDeque<String>()
@@ -287,11 +287,22 @@ object DiagnosticExport {
         private data class SessionObservation(var dropped: Long = 0, var summary: Boolean = false, var emulationEnd: Boolean = false,
             var startedSequence: Long = -1, var startedStage: String = "")
         private val observations = linkedMapOf<String, SessionObservation>()
-        fun accept(record: JsonObject): Boolean {
+        private fun historicalIdentity(record: JsonObject): String? {
             val event = (record["event"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            val exitId = ((record["fields"] as? JsonObject)?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull
-            if (event in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE") &&
-                exitId != null && Regex("[0-9a-f]{64}").matches(exitId) && (event to exitId) in historicalIdentities) {
+            if (event !in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE")) return null
+            val fields = record["fields"] as? JsonObject ?: return null
+            val id = (fields["exit_record_id"] as? JsonPrimitive)?.contentOrNull ?: return null
+            if (!Regex("[0-9a-f]{64}").matches(id)) return null
+            if (event != "PREVIOUS_NATIVE_TRACE") return "$event:$id"
+            val status = (fields["trace_status"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(64)
+            val attempt = (fields["trace_attempt"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(8)
+            val frames = (fields["frames"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(2048)
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(frames.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            return "$event:$id:$status:$attempt:$digest"
+        }
+        fun accept(record: JsonObject): Boolean {
+            if (historicalIdentity(record)?.let { it in historicalIdentities } == true) {
                 historicalDuplicates++; return false
             }
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull
@@ -337,8 +348,7 @@ object DiagnosticExport {
             }
             records++
             val historical = event in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE")
-            val exitId = ((record["fields"] as? JsonObject)?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull
-            if (historical && exitId != null && exitId.length == 64 && historicalIdentities.size < MAX_IDENTITIES) historicalIdentities.add(event to exitId)
+            if (historicalIdentities.size < MAX_IDENTITIES) historicalIdentity(record)?.let(historicalIdentities::add)
             if (event == "PREVIOUS_PROCESS_CRASH") historicalCrashes++
             observation?.let {
                 val dropped = (record["dropped_count"] as? JsonPrimitive)?.longOrNull

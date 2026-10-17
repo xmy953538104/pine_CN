@@ -933,9 +933,17 @@ class ObservationDeadlines(unittest.TestCase):
         ):
             with self.subTest(case=name):
                 smoke = self.smoke(name, {"xml_sequence": [xml]})
+                observed = MODULE['Screen'](ET.fromstring(xml), smoke.output / 'fixture.xml', 0)
+                # These are not identified Pine ANRs. Real Android ANR controls
+                # still cover the UI and must block, rather than pass a predicate
+                # for application controls underneath. App-rendered text alone
+                # is neither an OS ANR nor an application failure.
+                smoke.reject_app_anr(observed)
                 smoke.step("settings_entry", lambda: {"xml": smoke.wait_ui(name, lambda value: True).xml.name})
-                self.assertEqual(smoke.results["settings_entry"]["status"], "pass")
+                expected = 'pass' if name == 'application-text' else 'blocked'
+                self.assertEqual(smoke.results["settings_entry"]["status"], expected)
                 self.assertEqual(smoke.summary["overall"], "blocked")
+                self.assertFalse(any('tap' in row['argv'] for row in self.commands(smoke)))
 
     def test_failed_run_collects_bounded_process_evidence_without_overwriting_anr(self):
         smoke = self.smoke("failure-evidence", {

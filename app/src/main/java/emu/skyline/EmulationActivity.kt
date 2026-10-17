@@ -323,9 +323,12 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         GpuDriverHelper.ensureFileRedirectDir(this)
         emulationThread = Thread {
             runningGeneration = token
+            // Read preferences before the generation monitor. Publication and
+            // Launch begin happen together only after any old owned drain;
+            // cancellation and a newer user configuration still take precedence.
+            val beginDiagnosticLaunch = emu.skyline.diagnostics.Diagnostics.prepareLaunch(this, diagnosticTitle, token)
             if (!generations.session(token) {
-                emu.skyline.diagnostics.Diagnostics.apply(this)
-                emu.skyline.diagnostics.Diagnostics.beginLaunch(diagnosticTitle, token)
+                beginDiagnosticLaunch()
                 emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED", diagnosticTitle) { "phase=ui_association execution_confirmed=false format=$diagnosticFormat" }
                 emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED", diagnosticTitle) { "phase=ui_association execution_confirmed=false update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
             }) {

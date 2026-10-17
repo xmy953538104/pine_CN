@@ -19,6 +19,13 @@ object Diagnostics {
     private var applicationIdentitySource = "unknown"
     private var launchApplicationHint = ""
     private var appContext: Context? = null
+    private var configurationGeneration = 0L // Guarded by the Diagnostics monitor.
+    private var sessionStopGeneration = 0L
+    private data class Configuration(val enabled: Boolean = false, val verbose: Boolean = false,
+        val files: Int = 4, val categories: String = "", val loaded: Boolean = false)
+    private class ConfigurationRequest(val generation: Long, var stopGeneration: Long,
+        var snapshot: Configuration? = null)
+    private var latestConfigurationRequest: ConfigurationRequest? = null
     private val processRunId: String by lazy { UUID.randomUUID().toString() }
     private class LaunchFailureBoundary(val owner: Long, var observed: ProcessAssociation?, val hint: String)
     private data class PendingLaunchFailure(val error: WeakReference<Throwable>, val id: String, val owner: Long,
@@ -56,12 +63,79 @@ object Diagnostics {
     }
     @Synchronized internal fun fieldsForSession(expected: String, event: String, level: String = "INFO", fields: () -> Map<String, String>): Boolean =
         active && sessionId == expected && fieldsEvent("lifecycle", event, level, fields)
-    @Synchronized fun apply(context: Context) {
+    @Synchronized private fun nextConfigurationRequest(): ConfigurationRequest =
+        ConfigurationRequest(++configurationGeneration, sessionStopGeneration).also { latestConfigurationRequest = it }
+
+    private fun readConfiguration(context: Context): Configuration = runCatching {
+        // One coherent copy, outside the diagnostic/lifecycle monitors. Android
+        // may wait for its SharedPreferences disk loader even for getBoolean.
+        val values = preferences(context).all
+        Configuration(values["enabled"] as Boolean? ?: false, values["verbose"] as Boolean? ?: false,
+            values["files"] as Int? ?: 4, values["categories"] as String? ?: "", true)
+    }.getOrDefault(Configuration())
+
+    /** App startup remains disabled until persisted settings have loaded off-main. */
+    fun initializeAsync(context: Context) = initializeAsync(context) { work ->
+        Thread({ work() }, "PineDiagPrefs").apply { isDaemon = true }.start()
+    }
+
+    internal fun initializeAsync(context: Context, schedule: (() -> Unit) -> Unit) {
+        val application = context.applicationContext
+        val request = nextConfigurationRequest()
+        runCatching {
+            schedule {
+                runCatching { completeConfiguration(application, request, readConfiguration(application)) }
+                    .onFailure { runCatching { completeConfiguration(application, request, Configuration()) } }
+            }
+        }.onFailure { runCatching { completeConfiguration(application, request, Configuration()) } }
+    }
+
+    /** Explicit settings callers run on workers and wait for their own snapshot. */
+    fun apply(context: Context) {
+        val request = nextConfigurationRequest()
+        val application = context.applicationContext
+        val configuration = readConfiguration(application)
+        completeConfiguration(application, request, configuration)
+    }
+
+    @Synchronized private fun rememberConfiguration(request: ConfigurationRequest, configuration: Configuration) {
+        if (latestConfigurationRequest === request) request.snapshot = configuration
+    }
+
+    @Synchronized private fun completeConfiguration(context: Context, request: ConfigurationRequest, configuration: Configuration) {
+        if (latestConfigurationRequest !== request || request.generation != configurationGeneration) return
+        // Retain the latest preferences for an explicitly owned replacement,
+        // but a late disk read alone must not restart a finished session.
+        request.snapshot = configuration
+        if (request.stopGeneration != sessionStopGeneration) return
+        applyConfiguration(context, configuration)
+    }
+
+    /** Read off-lock on a worker; invoke the action only inside an accepted EmulationGeneration.session. */
+    internal fun prepareLaunch(context: Context, applicationTitleId: String?, owner: Long): () -> Unit {
+        val application = context.applicationContext
+        val request = nextConfigurationRequest()
+        val configuration = readConfiguration(application)
+        rememberConfiguration(request, configuration)
+        return {
+            synchronized(this) {
+                // A's owned drain has finished before B can call this action.
+                // Prefer a newer user request; while it is still reading, stay
+                // conservatively off and let its completion configure this B.
+                val latest = latestConfigurationRequest ?: request
+                val selected = if (latest === request) configuration else latest.snapshot ?: Configuration()
+                latest.stopGeneration = sessionStopGeneration
+                applyConfiguration(application, selected)
+                beginLaunch(applicationTitleId, owner)
+            }
+        }
+    }
+
+    @Synchronized private fun applyConfiguration(context: Context, configuration: Configuration) {
         appContext = context.applicationContext
-        val prefs = preferences(context)
-        val enabled = prefs.getBoolean("enabled", false)
-        val categories = prefs.getString("categories", "") ?: ""
-        val nextSignature = "$categories:$enabled:${prefs.getBoolean("verbose", false)}:${prefs.getInt("files", 4)}"
+        val enabled = configuration.enabled
+        val categories = configuration.categories
+        val nextSignature = "$categories:$enabled:${configuration.verbose}:${configuration.files}"
         if (signature == nextSignature && (!enabled || status().enabled)) return
         active = false
         val launchObservedLate = enabled && launch.active && launch.id.isEmpty()
@@ -79,9 +153,9 @@ object Diagnostics {
             }
         }
         active = runCatching {
-            configureNative(if (enabled) directory(context).absolutePath else "", enabled, prefs.getBoolean("verbose", false), prefs.getInt("files", 4), sessionId, categories, if (enabled) processRunId else "")
+            configureNative(if (enabled) directory(context).absolutePath else "", enabled, configuration.verbose, configuration.files, sessionId, categories, if (enabled) processRunId else "")
         }.getOrDefault(false)
-        signature = if (enabled && !active) "" else nextSignature
+        signature = if (!configuration.loaded || enabled && !active) "" else nextSignature
         if (active) fieldsEvent("lifecycle", "SESSION_METADATA") {
             mapOf("detail" to "process=$processScope process_run_id=$processRunId session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT} launch_start_observed=${launch.startObserved}",
                 "process_scope" to processScope, "session_id" to sessionId, "process_run_id" to processRunId,
@@ -184,6 +258,7 @@ object Diagnostics {
     }
     @Synchronized fun finishSession(owner: Long? = null) {
         if (owner != null && !launch.belongsTo(owner)) return
+        sessionStopGeneration++ // A read alone cannot revive this completed session.
         runCatching { stopNative() }
         active = false
         signature = ""

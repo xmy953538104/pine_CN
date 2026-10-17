@@ -21,6 +21,8 @@ fi
 "$build/identity_test" "$build/identity-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/admission_test.cpp -o "$build/admission_test"
 "$build/admission_test" "$build/admission-logs"
+"${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/legacy_error_test.cpp -o "$build/legacy_error_test"
+"$build/legacy_error_test" "$build/legacy-logs"
 for test in pending_signal utf16; do
     "${CXX:-c++}" "${flags[@]}" -Iapp/src/main/cpp/skyline "tests/diagnostics/${test}_test.cpp" -o "$build/${test}_test"
     "$build/${test}_test"

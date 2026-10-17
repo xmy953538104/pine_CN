@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "diagnostics.h"
 #include "admission.h"
+#include "legacy_error.h"
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -39,6 +40,8 @@ struct Sink {
     std::atomic<uint64_t> producers{ProducersClosed};
     std::atomic<bool> verbose{};
     std::atomic<uint64_t> accepted{}, dropped{}, written{}, diskErrors{};
+    LegacyErrorBudget audioErrors, shaderErrors;
+    std::atomic<uint64_t> legacySuppressed{};
     std::atomic<uint64_t> droppedContention{}, droppedFull{}, droppedAllocation{}, droppedDisk{}, criticalDropped{}, snapshotErrors{}, snapshotEvictions{};
     std::mutex lifecycle, mutex, progressMutex;
     std::condition_variable wake, progress;
@@ -252,7 +255,7 @@ void Run(Sink &s) noexcept {
           summary.programContentId = s.activeProgramContentId; summary.launchId = s.activeLaunchId; }
         summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())},
             {"disk_errors", std::to_string(s.diskErrors.load())}, {"snapshot_errors", std::to_string(s.snapshotErrors.load())},
-            {"snapshot_evictions", std::to_string(s.snapshotEvictions.load())}};
+            {"snapshot_evictions", std::to_string(s.snapshotEvictions.load())}, {"legacy_error_rate_suppressed", std::to_string(s.legacySuppressed.load())}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
         file.write(line.data(), line.size()); file.flush();
@@ -440,7 +443,8 @@ bool Start(const Config &config) noexcept {
             { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.clear(); s.stage.clear(); s.stopping = false; }
             s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0;
             s.droppedContention = 0; s.droppedFull = 0; s.droppedAllocation = 0; s.droppedDisk = 0;
-            s.criticalDropped = 0; s.snapshotErrors = 0; s.snapshotEvictions = 0; s.verbose = config.verbose;
+            s.criticalDropped = 0; s.snapshotErrors = 0; s.snapshotEvictions = 0;
+            s.audioErrors.Reset(); s.shaderErrors.Reset(); s.legacySuppressed = 0; s.verbose = config.verbose;
             s.producers.store(0, std::memory_order_release);
             s.worker = std::thread([&s] { Run(s); });
             return true;
@@ -474,6 +478,21 @@ bool EmitFields(std::string_view category, std::string_view event,
                 std::span<const std::pair<std::string_view, std::string_view>> fields, std::string_view level) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return false;
     return Enqueue(s, category, event, fields, level);
+}
+void EmitLegacyError(std::string_view component, std::string_view message) noexcept {
+    auto &s = Get(); if (!IsEnabled(s)) return;
+    Producer producer(s); if (!producer) return;
+    const auto category = component == "audio_core" ? "audio" : component == "shader_compiler" ? "gpu" : "";
+    if (std::string_view(category).empty() || !CategorySelected(s.config.categories, category)) return;
+    const auto second = std::chrono::duration_cast<std::chrono::seconds>(Clock::now().time_since_epoch()).count();
+    uint64_t suppressed{};
+    auto &budget = component == "audio_core" ? s.audioErrors : s.shaderErrors;
+    if (!budget.Take(static_cast<uint64_t>(second), suppressed)) { ++s.legacySuppressed; return; }
+    try {
+        Emit(category, component == "audio_core" ? "AUDIO_BACKEND_ERROR" : "SHADER_COMPILER_ERROR",
+            {{"component", component}, {"message", message}, {"fatality", "unknown"},
+             {"rate_policy", "first_4_per_component_per_second"}, {"prior_rate_suppressed", std::to_string(suppressed)}}, "ERROR");
+    } catch (...) {}
 }
 void SetTitleId(std::string_view titleId) noexcept {
     try {

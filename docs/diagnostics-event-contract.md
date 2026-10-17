@@ -294,3 +294,23 @@ No new permission, protobuf dependency, root setting or system security change i
 required. The [Android API](https://developer.android.com/reference/android/app/ApplicationExitInfo#getTraceInputStream())
 and [AOSP schema](https://android.googlesource.com/platform/system/core/+/refs/heads/master/debuggerd/proto/tombstone.proto)
 define the supported source; unavailable trace data is never replaced by invented frames.
+
+## UI associations and owned legacy errors
+
+`CONTENT_ASSOCIATION` and `CONTENT_IMPORT_RESULT` now carry typed Title/parent,
+version/type, loader result and decision fields. A duplicate import still follows
+the existing reported-success policy even if metadata parsing failed. Metadata is
+actually parsed before that decision; diagnostics does not claim duplicates skip
+parsing. Empty IDs have an explicit metadata status/reason. An eligible decision
+is not a completed save: `CONTENT_ASSOCIATION_SAVED` follows actual stream closure,
+while `CONTENT_ASSOCIATION_SAVE_FAILED` observes the existing IOException catch
+without changing its return/propagation policy or promising fsync durability.
+
+The owned AudioCore and Shader error adapters additionally emit
+`AUDIO_BACKEND_ERROR` / `SHADER_COMPILER_ERROR` before the existing legacy logger
+moves the message. Each component has a non-waiting four-per-second budget;
+`prior_rate_suppressed` and the terminal `legacy_error_rate_suppressed` counter
+expose omitted repeats. This is separate from queue/drop counts. The bridge is
+inactive with diagnostics off and does not attach to every native log/hot path.
+`fatality=unknown` is deliberate: a minimum-latency query failure can recover via
+the audio backend's existing fallback and is not evidence of the crash cause.

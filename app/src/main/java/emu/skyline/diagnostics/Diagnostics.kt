@@ -64,8 +64,12 @@ object Diagnostics {
             configureNative(if (enabled) directory(context).absolutePath else "", enabled, prefs.getBoolean("verbose", false), prefs.getInt("files", 4), sessionId, categories, if (enabled) processRunId else "")
         }.getOrDefault(false)
         signature = if (enabled && !active) "" else nextSignature
-        if (active) event("lifecycle", "SESSION_METADATA") {
-            "process=$processScope process_run_id=$processRunId session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT} launch_start_observed=${launch.startObserved}"
+        if (active) fieldsEvent("lifecycle", "SESSION_METADATA") {
+            mapOf("detail" to "process=$processScope process_run_id=$processRunId session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT} launch_start_observed=${launch.startObserved}",
+                "process_scope" to processScope, "session_id" to sessionId, "process_run_id" to processRunId,
+                "application_id" to BuildConfig.APPLICATION_ID, "version" to BuildConfig.VERSION_NAME,
+                "build_type" to BuildConfig.BUILD_TYPE, "commit" to BuildConfig.DIAGNOSTICS_COMMIT,
+                "launch_id" to launch.id, "launch_start_observed" to launch.startObserved.toString())
         }
         if (active) publishAssociation(context) else runCatching { ProcessStateAssociation.clear() }
         if (active && launchObservedLate) event("lifecycle", "LAUNCH_CONTEXT_OBSERVED") { "start_observed=false" }

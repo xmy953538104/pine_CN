@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/legacy_error.h>
 #include <audio_core/audio_core.h>
 #include <audio_core/audio_out_manager.h>
 #include <audio_core/common/settings.h>
@@ -22,6 +23,7 @@ namespace AudioCore::Log {
     }
 
     void Error(const std::string &message) {
+        skyline::diagnostics::EmitLegacyError("audio_core", message);
         skyline::AsyncLogger::LogAsync(skyline::AsyncLogger::LogLevel::Error, std::move(const_cast<std::string &>(message)));
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2021 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/legacy_error.h>
 #include <fstream>
 #include <future>
 #include <range/v3/algorithm.hpp>
@@ -26,6 +27,7 @@ namespace Shader::Log {
     }
 
     void Error(const std::string &message) {
+        skyline::diagnostics::EmitLegacyError("shader_compiler", message);
         skyline::AsyncLogger::LogAsync(skyline::AsyncLogger::LogLevel::Error, std::move(const_cast<std::string &>(message)));
     }
 }

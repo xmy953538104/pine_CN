@@ -20,7 +20,14 @@ class ContentsHelper(private val context: Context) {
             objectOutputStream.writeObject(contents)
             objectOutputStream.close()
             fileOutputStream.close()
+            emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "CONTENT_ASSOCIATION_SAVED") {
+                mapOf("status" to "stream_close_completed", "entry_count" to contents.size.toString(),
+                    "last_content_title_id" to emu.skyline.diagnostics.Diagnostics.normalizedTitleId((contents.lastOrNull() as? emu.skyline.loader.AppEntry)?.titleId))
+            }
         } catch (e: IOException) {
+            emu.skyline.diagnostics.Diagnostics.fieldsEvent("content", "CONTENT_ASSOCIATION_SAVE_FAILED", "ERROR") {
+                mapOf("exception_type" to e.javaClass.simpleName, "message" to e.message.orEmpty(), "action" to "legacy_return_unchanged")
+            }
             e.printStackTrace()
         }
     }

@@ -171,10 +171,13 @@ session or unknown-title game cannot inherit the previous game's identity.
 Android completion owns a process-wide game generation. Session apply and drain
 serialize on background threads under that ownership; navigation/process exit
 checks the generation again on the main thread. A replacement game invalidates
-old completions immediately. Once a normal ending is accepted, Activity
-destruction or coroutine cancellation cannot silently discard it. Late same-game
-apply and duplicate endings are rejected. This preserves orderly shutdown without
-letting an old game's suspended completion stop or kill its replacement.
+old completions immediately. Activity destruction closes that generation to new
+completion requests before asking native emulation to stop, including callbacks
+made synchronously by that stop. If a normal ending was already accepted, its
+owned drain and exit survive Activity destruction or coroutine cancellation.
+Destruction must not create a new ending. Late same-game apply and duplicate
+endings are rejected. This preserves orderly shutdown without letting an old
+game's suspended completion stop or kill its replacement.
 
 `GUEST_SIGNAL` is emitted after the existing guest signal longjmp returns to the
 ordinary KThread entrypoint. The handler only captures a `sig_atomic_t` signal

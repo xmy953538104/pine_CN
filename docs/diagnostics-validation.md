@@ -14,7 +14,7 @@ Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
 | Two independent process sinks with concurrent rotation | Passed real fork/exec test | Android process lifecycle still needs runtime checks |
 | Native ASan/UBSan and core ThreadSanitizer | Passed local review runs | Host tools, not an Android sanitizer APK |
 | NSP selection/catch policy, production Backing/IStorage/PatchManager and BKTR/CTR/Region/OS compositions | Passed controlled host tests | Crypto keys, full NSP parsing and commercial files are not exercised |
-| Android/JVM exporter, selection, process/settings and game-generation ownership | 34/34 passed actual full Gradle task: 17 exporter, 4 selection, 3 process/settings and 10 generation tests, including controlled A→B drain/apply/exit interleavings, cancellation, Activity destruction and duplicate/late requests | Local JitPack proxy was unavailable; pinned upstream dependencies/native classpath helpers outside checkout support this supplemental JVM run; exact-commit CI remains authoritative |
+| Android/JVM exporter, selection, process/settings and game-generation ownership | 43/43 passed the full local Gradle task: 17 exporter, 4 selection, 3 process/settings, 13 generation and 6 real Activity wiring cases. Previous `538ba8af` CI's 34 tests did not exercise actual Activity destruction | Robolectric substitutes JNI boundaries and records navigation/kill; it is not an APK/game run. Local dependency/native classpath helpers are supplemental; exact-commit CI remains authoritative |
 | Whole Android app/test Kotlin and Java compilation | Passed locally | Final exact-commit CI remains authoritative |
 | Complete ARM64 native link and supplemental APK | Passed 983-step build, 229 changed-dependency objects, final static-STL link and APK packaging | The local supplemental native build uses debug compilation; the final exact-commit CI APK remains authoritative |
 | Windows PS5.1/pwsh ADB | Full suite passed at `86ae1d47`, including native EOF, complete shared-file records and a real Win32 CTRL_C_EVENT in an isolated console; self-exit 47/62 ms, no failure cleanup | Actual USB/wireless devices and physical keyboard mapping remain manual acceptance; actual POSIX PTY Ctrl+C passed separately |
@@ -43,7 +43,43 @@ git submodule update --init --recursive --depth 1 --jobs 8
 The dedicated Diagnostics Debug workflow performs these checks and runs the ADB
 suite in Windows PowerShell5.1 and pwsh. The `ci` PR label enables APK upload.
 
+`EmulationActivityCompletionTest` invokes the real attached Activity's
+`onDestroy` and public completion entry. It initializes AndroidX saved-state and
+fragment prerequisites without starting a ROM; only the native stop/drain
+boundaries are substituted, and Robolectric records navigation and process-kill
+calls. It distinguishes destruction before completion acceptance from an already
+accepted ending that must still drain and exit. Helper cancellation tests remain
+separate and do not stand in for Activity destruction. This JVM wiring evidence
+does not demonstrate real native game shutdown.
+
+The initial three-case run against `538ba8af` lifecycle/acceptance logic plus the
+neutral JNI-stop test seam produced two assertion failures: delayed completion
+after destruction and completion called synchronously by destruction's native
+stop both accepted a new ending. The already-accepted-before-destruction case
+passed. AndroidX test setup failures were resolved before recording that red
+baseline and are not counted as reproductions of the defect.
+
+```sh
+./gradlew testFullDebugUnitTest --tests emu.skyline.emulation.EmulationActivityCompletionTest
+```
+
 ## Actual Android execution
+
+The [`538ba8af` independent Intel Mac run](https://github.com/xmy953538104/pine_CN/actions/runs/38984441717/job/117252508085)
+passed **18/18 actual Settings/log/export/Stop checks** against APK SHA-256
+`29a1b5e7c7c460df959c0073610f1b73263193d3b124335d91b2b8f428792fda`.
+Its [runtime evidence artifact](https://github.com/xmy953538104/pine_CN/actions/runs/38984441717/artifacts/12083510739)
+records the exact App/observer checkout separately from the retry workflow.
+Actual ARM64 native JSONL and a DocumentsUI-saved ZIP with matching preview bytes
+were verified on the official API35 x86_64 Google APIs image/native bridge.
+No Wait/Close/Back recovery was used. The original same-APK Mac and Ubuntu runs
+remain 5 passed / 13 blocked by system ANRs; their reports were not replaced.
+The successful retry does not erase historical real Pine startup ANRs.
+
+That APK predates the separate destruction-first Activity fix and is a superseded
+review candidate. Those 18 checks do not exercise native game completion or
+Activity destruction order. Build and runtime evidence for the replacement APK
+must carry its own exact source and hash; consult the draft PR's current result.
 
 The [`69826dda` Intel Mac attempt](https://github.com/xmy953538104/pine_CN/actions/runs/38964404733/job/117189621941)
 installed and hash-verified the actual ARM64 APK on an official API35 x86_64

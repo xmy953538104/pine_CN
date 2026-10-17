@@ -190,6 +190,10 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      */
     private external fun stopEmulation(join : Boolean) : Boolean
 
+    // Isolate the JNI boundary so JVM lifecycle tests run the actual destruction
+    // path without loading an ARM64 emulator or substituting Activity methods.
+    internal var stopEmulationForDestruction: (Boolean) -> Boolean = ::stopEmulation
+
     private external fun pauseEmulation(pause: Boolean)
 
     /**
@@ -936,6 +940,10 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
     }
 
     override fun onDestroy() {
+        // Suppress an as-yet unaccepted native completion before requesting its
+        // stop. Already accepted normal ending still owns its drain and exit.
+        val token = generationToken
+        val stopCurrentGame = generations.destroy(token)
         super.onDestroy()
 
         // Stop forcing 60Hz on exit to allow the skyline UI to run at high refresh rates
@@ -944,7 +952,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         if (emulationSettings.forceMaxGpuClocks)
             GpuDriverHelper.forceMaxGpuClocks(false)
 
-        if (generations.isCurrent(generationToken)) stopEmulation(false)
+        if (stopCurrentGame && generations.ownsNativeGame(token)) stopEmulationForDestruction(false)
         vibrators.forEach { (_, vibrator) -> vibrator.cancel() }
         vibrators.clear()
     }

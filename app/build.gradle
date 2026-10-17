@@ -141,6 +141,10 @@ android {
         buildConfig true
     }
 
+    testOptions {
+        unitTests.includeAndroidResources = true
+    }
+
     /* Linting */
     lint {
         disable 'IconLocation'

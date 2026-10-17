@@ -103,7 +103,7 @@ class EmulationGenerationTest {
         assertFalse(exited); assertTrue(owner.isCurrent(b))
     }
 
-    @Test fun callerCancellationOrActivityDestructionCannotLoseAcceptedNormalEnd() = scenario { owner, _, _ ->
+    @Test fun callerCancellationCannotLoseAcceptedNormalEnd() = scenario { owner, _, _ ->
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         val events = Collections.synchronizedList(mutableListOf<String>())
         val activityJob = Job()
@@ -164,5 +164,39 @@ class EmulationGenerationTest {
         assertFalse(owner.session(a) { fail("old apply") })
         owner.finish(a, { fail("old dialog drain") }, { fail("old dialog exit") })
         assertTrue(owner.isCurrent(b))
+    }
+
+    @Test fun destructionBeforeAcceptanceRejectsNewFinishAndSession() = scenario { owner, _, _ ->
+        val a = owner.begin()
+        assertTrue(owner.destroy(a))
+        assertTrue(owner.ownsNativeGame(a))
+        assertFalse(owner.isCurrent(a))
+        assertFalse(owner.session(a) { fail("apply after destruction") })
+        owner.finish(a, { fail("new drain after destruction") }, { fail("new exit after destruction") })
+        assertFalse(owner.destroy(a))
+    }
+
+    @Test fun acceptedFinishKeepsItsQueuedDrainAfterDestruction() = scenario { owner, worker, _ ->
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        val barrier = launch(worker) { entered.countDown(); release.awaitReady() }
+        entered.awaitReady()
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val a = owner.begin()
+        val ending = launch(start = CoroutineStart.UNDISPATCHED) { owner.finish(a, { events.add("drain") }, { events.add("exit") }) }
+        assertTrue(owner.destroy(a))
+        release.countDown(); barrier.join(); ending.join()
+        assertEquals(listOf("drain", "exit"), events)
+    }
+
+    @Test fun staleDestructionDoesNotSuppressReplacement() = scenario { owner, _, _ ->
+        val a = owner.begin(); val b = owner.begin()
+        assertFalse(owner.destroy(a))
+        assertTrue(owner.isCurrent(b))
+        assertFalse(owner.ownsNativeGame(a))
+        assertTrue(owner.ownsNativeGame(b))
+        assertTrue(owner.session(b) {})
+        var exits = 0
+        owner.finish(b, {}, { exits++ })
+        assertEquals(1, exits)
     }
 }

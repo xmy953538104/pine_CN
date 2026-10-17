@@ -318,7 +318,8 @@ try {
         '{"session_id":"identity","launch_id":"two","title_id":"0100751007ADA000","application_title_id":"0100751007ADA000","event":"OTHER_LAUNCH","fields":{}}',
         '{"session_id":"identity","launch_id":"one","title_id":"0100751007ADA000","event":"LEGACY_ROOT","fields":{}}',
         '{"session_id":"importer","application_title_id":"0100000000009999","launch_id":"other","event":"PREVIOUS_NATIVE_TRACE","fields":{"association_status":"verified","previous_launch_id":"one","previous_session_id":"identity","previous_application_title_id":"0100751007ADA000"}}',
-        '{"session_id":"importer","application_title_id":"0100751007ADA000","launch_id":"one","event":"PREVIOUS_PROCESS_CRASH","fields":{"association_status":"unknown","previous_launch_id":"one","previous_application_title_id":"0100751007ADA000"}}'
+        '{"session_id":"importer","application_title_id":"0100751007ADA000","launch_id":"one","event":"PREVIOUS_PROCESS_CRASH","fields":{"association_status":"unknown","previous_launch_id":"one","previous_application_title_id":"0100751007ADA000"}}',
+        '{"session_id":"import-ui","application_title_id":"","title_id":"","launch_id":"","event":"CONTENT_IMPORT_RESULT","fields":{"application_title_id":"0100751007ADA000","title_id":"0100751007ADA800"}}'
     ), (New-Object System.Text.UTF8Encoding($false)))
     $originalFixture = $env:PINE_FAKE_ADB_FIXTURE
     try {
@@ -331,6 +332,12 @@ try {
         & $collector -AdbPath $fake -Serial second-device -TitleId 0100751007ADA000 -LaunchId one -SessionId identity -OutputDirectory $previousSessionOutput -DurationSeconds 3 | Out-Null
         $previousRows = @(Get-ChildItem $previousSessionOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) | ForEach-Object { $_ | ConvertFrom-Json } })
         Assert ($previousRows.Count -eq 3) 'Verified prior-session filtering lost the historical trace or admitted an unknown association'
+        $ownerOutput = Join-Path $temp 'typed-owner'
+        & $collector -AdbPath $fake -Serial second-device -TitleId 0100751007ADA000 -OutputDirectory $ownerOutput -DurationSeconds 3 | Out-Null
+        $ownerRows = @(Get-ChildItem $ownerOutput -Filter '*.jsonl' | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) | ForEach-Object { $_ | ConvertFrom-Json } })
+        $imports = @($ownerRows | Where-Object { $_.event -eq 'CONTENT_IMPORT_RESULT' })
+        Assert ($ownerRows.Count -eq 5 -and $imports.Count -eq 1 -and $imports[0].fields.title_id -eq '0100751007ADA800') 'Typed import owner filtering lost the Patch content or admitted an unknown history association'
+
     } finally { $env:PINE_FAKE_ADB_FIXTURE = $originalFixture }
 
     $env:PINE_FAKE_ADB_MODE = 'sessions'

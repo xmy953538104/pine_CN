@@ -37,7 +37,8 @@ a subsequent launch gets a new ID. `process_run_id` identifies the emitting proc
 incarnation. Both are anonymous and absent before observed initialization. Enabling
 diagnostics during an existing launch emits `LAUNCH_CONTEXT_OBSERVED` with
 `start_observed=false`, without fabricating a launch-begin event. Old fields remain
-readable. The ADB collector prefers `application_title_id`, falls back to legacy
+readable. The ADB collector prefers root `application_title_id`, then an explicit event
+`fields.application_title_id` owner (for imports before a game is running), then legacy
 root/field Title IDs, and optionally filters `-LaunchId`; it never guesses an old
 Patch-to-application relation by clearing bits.
 

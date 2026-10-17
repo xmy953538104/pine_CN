@@ -165,7 +165,12 @@ try {
                 $title = if ($verified) { $eventFields.PSObject.Properties['previous_application_title_id'] } else { $null }
             } else {
                 $title = $event.PSObject.Properties['application_title_id']
-                if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value)) {
+                if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value) -or $title.Value -ieq 'unknown') {
+                    # Imports/associations in the main process have an explicit owner,
+                    # while their content title may be a Patch or DLC and no game is running.
+                    $title = if ($eventFields) { $eventFields.PSObject.Properties['application_title_id'] } else { $null }
+                }
+                if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value) -or $title.Value -ieq 'unknown') {
                     $title = $event.PSObject.Properties['title_id']
                 }
                 if (-not $title -or $title.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($title.Value) -or $title.Value -ieq 'unknown') {

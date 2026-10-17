@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PACKAGE = "io.github.pine.emu.diagnostics"
+PACKAGE = "io.github.pine.emu.diagnostics.preview"
+APP_LABEL = "Pine Diagnostics Preview"
 SETTINGS = PACKAGE + "/emu.skyline.settings.SettingsActivity"
 UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 LOG_NAME = re.compile(r"(?:(?:main|emulation)/)?diagnostics-[0-7]\.jsonl")
@@ -396,9 +397,9 @@ class Smoke:
         # the actual Android dialog identity, not arbitrary application text.
         if any(node.get("package") == "android" and
                node.get("resource-id") == "android:id/alertTitle" and
-               node.get("text") == "Pine Diagnostics isn't responding"
+               node.get("text") == APP_LABEL + " isn't responding"
                for node in screen.root.iter("node")):
-            raise AppAnr(f"Pine application ANR observed: Pine Diagnostics isn't responding; see {screen.xml.name}")
+            raise AppAnr(f"Pine application ANR observed: {APP_LABEL} isn't responding; see {screen.xml.name}")
 
     def dismiss_known_platform_crash(self, label, screen, deadline):
         """One opt-in Close app on the exact observed Bluetooth system dialog.

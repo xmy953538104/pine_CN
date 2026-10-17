@@ -1,6 +1,16 @@
 This is a Diagnostics v1 developer preview, packaged as a Debug APK for owner testing.
-It installs alongside Pine as **Pine Diagnostics** (`io.github.pine.emu.diagnostics`),
+It installs alongside Pine and the old diagnostics app as **Pine Diagnostics Preview** (`io.github.pine.emu.diagnostics.preview`),
 version `2.1.2-diagnostics-v1`. Diagnostics is off by default.
+
+The old and initial fixed CI APKs have different Debug signing certificates.
+This fresh application ID avoids requiring an uninstall or clearing old data.
+It does not migrate another app's private settings, files, URI grants or exit
+history. Configure lawful local content in the new app; do not share keys.
+Continuous in-place Debug updates still require a stable development signer.
+
+This revision repairs the identified VMA mapped-allocation contract and safe
+failure for missing/revoked SAF content, including ACTION_VIEW metadata entry.
+Controlled regressions pass; restored device game startup remains unverified.
 
 It adds bounded asynchronous JSONL/PineDiag events, actual content selection and
 storage observations, guest message/DFX forwarding, developer settings, redacted

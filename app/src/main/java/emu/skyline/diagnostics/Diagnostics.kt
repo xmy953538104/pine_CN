@@ -46,7 +46,7 @@ object Diagnostics {
         }.getOrDefault(false)
         signature = if (enabled && !active) "" else nextSignature
         if (active) event("lifecycle", "SESSION_METADATA") {
-            "process=$processScope session=$sessionId version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT}"
+            "process=$processScope session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT}"
         }
         if (active && !exitHistoryQueried) {
             exitHistoryQueried = true

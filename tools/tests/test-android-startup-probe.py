@@ -47,7 +47,7 @@ class StartupProbeTests(unittest.TestCase):
             elif a[:3]==['shell','input','keyevent']: s['back']=c['mode']!='unresponsive'
             elif a[:2]==['exec-out','cat']:
                 if c['mode']=='late-ui': time.sleep(0.6)
-                label='Pine' if c['package']=='io.github.pine.emu' else 'Pine Diagnostics'
+                label={'io.github.pine.emu': 'Pine', 'io.github.pine.emu.diagnostics': 'Pine Diagnostics', 'io.github.pine.emu.diagnostics.preview': 'Pine Diagnostics Preview'}[c['package']]
                 if c['mode'] in ('anr','anr-screenshot-timeout','platform'):
                     title=label if c['mode'].startswith('anr') else 'System UI'
                     out='<hierarchy><node package="android" resource-id="android:id/alertTitle" text="'+title+' isn&apos;t responding"/><node package="android" resource-id="android:id/aerr_wait"/></hierarchy>'
@@ -80,7 +80,7 @@ class StartupProbeTests(unittest.TestCase):
         return result, report, calls, root
 
     def test_visible_and_back_reopen_both_packages(self):
-        for package in (PACKAGE, PACKAGE+'.diagnostics'):
+        for package in (PACKAGE, PACKAGE+'.diagnostics', PACKAGE+'.diagnostics.preview'):
             with self.subTest(package=package):
                 result,report,calls,root=self.run_probe(package=package)
                 self.assertEqual(result.returncode,0,report)

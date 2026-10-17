@@ -3,8 +3,16 @@
 The authoritative binary identity is `build-identity.json` beside the Debug APK.
 It contains the full source commit, APK/ARM64 ELF SHA-256 values, application ID,
 ABI, JVM test totals and verification of the release emulation-process manifest.
-Install **Pine Diagnostics** (`io.github.pine.emu.diagnostics`), version
-`2.1.2-diagnostics-v1`, alongside your existing Pine installation.
+Install **Pine Diagnostics Preview** (`io.github.pine.emu.diagnostics.preview`), version
+`2.1.2-diagnostics-v1`, alongside existing Pine and old diagnostics installations.
+The new ID avoids overwriting the differently signed e9 Debug app. Old data is
+not cleared or migrated; select local content/grants in the new preview. A
+stable development signer for continuous Debug updates is not configured yet.
+
+The current startup fixes are described in [the VMA regression](diagnostics-vma-startup-fix.md)
+and [safe URI/startup checks](diagnostics-startup-crash.md). Local JVM coverage is
+67 cases, including10 real Activity URI-entry/lifecycle cases; exact-commit CI
+and device startup results remain separate from the historical table below.
 
 ## Automated evidence
 

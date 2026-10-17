@@ -25,7 +25,7 @@ PLATFORM_ANR_XML = '''<hierarchy><node package="android" bounds="[48,313][431,51
 <node text="Wait" resource-id="android:id/aerr_wait" package="android"
  class="android.widget.Button" enabled="true" clickable="true" bounds="[64,438][415,486]"/>
 </node></hierarchy>'''
-PINE_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Pine Diagnostics isn't responding")
+PINE_ANR_XML = PLATFORM_ANR_XML.replace("System UI isn't responding", "Pine Diagnostics Preview isn't responding")
 BLUETOOTH_CRASH_XML = '''<hierarchy><node package="android" class="android.widget.FrameLayout" bounds="[48,301][431,498]">
 <node text="Bluetooth keeps stopping" resource-id="android:id/alertTitle" class="android.widget.TextView"
  package="android" enabled="true" bounds="[88,335][391,363]"/>
@@ -53,14 +53,14 @@ def diagnostics_xml(enabled=True, package=None):
 
 
 SEARCH_LOCATIONS_XML = '''<hierarchy>
-<node resource-id="io.github.pine.emu.diagnostics:id/toolbar_layout" package="io.github.pine.emu.diagnostics"
+<node resource-id="io.github.pine.emu.diagnostics.preview:id/toolbar_layout" package="io.github.pine.emu.diagnostics.preview"
  class="android.widget.FrameLayout" content-desc="Search Locations" enabled="true" bounds="[0,0][480,136]">
- <node package="io.github.pine.emu.diagnostics" class="android.widget.ImageButton" content-desc="Navigate up"
+ <node package="io.github.pine.emu.diagnostics.preview" class="android.widget.ImageButton" content-desc="Navigate up"
   clickable="true" enabled="true" bounds="[0,28][56,84]"/>
 </node>
-<node resource-id="io.github.pine.emu.diagnostics:id/locations_list" package="io.github.pine.emu.diagnostics"
+<node resource-id="io.github.pine.emu.diagnostics.preview:id/locations_list" package="io.github.pine.emu.diagnostics.preview"
  class="androidx.recyclerview.widget.RecyclerView" enabled="true" bounds="[0,136][480,800]"/>
-<node text="Add" resource-id="io.github.pine.emu.diagnostics:id/add_location_button" package="io.github.pine.emu.diagnostics"
+<node text="Add" resource-id="io.github.pine.emu.diagnostics.preview:id/add_location_button" package="io.github.pine.emu.diagnostics.preview"
  class="android.widget.Button" enabled="true" bounds="[344,704][464,760]"/>
 </hierarchy>'''
 
@@ -101,10 +101,10 @@ class ObservationDeadlines(unittest.TestCase):
                 output = '[sys.boot_completed]: [1]\\n[ro.product.cpu.abilist]: [x86_64,arm64-v8a]'
             elif args == ['shell', 'pidof', 'system_server']:
                 operation, output = 'pid', next_result('pid_sequence', '672')
-            elif args == ['shell', 'pidof', 'io.github.pine.emu.diagnostics']:
+            elif args == ['shell', 'pidof', 'io.github.pine.emu.diagnostics.preview']:
                 operation, output = 'app-pids', config.get('app_pids', '1234')
             elif args == ['shell', 'dumpsys', 'activity', 'lastanr']:
-                operation, output = 'lastanr', config.get('lastanr_result', 'ANR in io.github.pine.emu.diagnostics')
+                operation, output = 'lastanr', config.get('lastanr_result', 'ANR in io.github.pine.emu.diagnostics.preview')
             elif args == ['shell', 'dumpsys', 'activity', 'lastanr-traces']:
                 operation, output = 'lastanr-traces', config.get('lastanr_traces_result', 'Global fixture ANR traces')
             elif args == ['shell', 'dumpsys', 'dropbox', '--print', 'data_app_anr']:
@@ -151,10 +151,10 @@ class ObservationDeadlines(unittest.TestCase):
                 operation, output = 'back', ''
             elif args[:2] == ['exec-out', 'screencap']:
                 operation, output, binary = 'screenshot', b'\\x89PNG\\r\\n\\x1a\\n', True
-            elif (args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat']
+            elif (args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics.preview', 'cat']
                   and args[4].startswith('/proc/') and args[4].endswith('/maps')):
                 operation, output = 'maps', config.get('maps_result', 'Fixture library mappings')
-            elif args[:5] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', '/system/bin/debuggerd', '-b']:
+            elif args[:5] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics.preview', '/system/bin/debuggerd', '-b']:
                 operation, output = 'backtrace', config.get('backtrace_result', 'Fixture native backtrace')
             elif args[:2] == ['exec-out', 'run-as'] and args[3] == 'ls':
                 operation = 'list'
@@ -169,9 +169,9 @@ class ObservationDeadlines(unittest.TestCase):
                 output = ('\\n' if args[4:-1] == ['-1'] else '  ').join(names)
             elif args[:2] == ['exec-out', 'run-as'] and args[4].endswith('session-id.txt'):
                 operation, output = 'marker', config['session']
-            elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat'] and args[4] == 'shared_prefs/diagnostics.xml':
+            elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics.preview', 'cat'] and args[4] == 'shared_prefs/diagnostics.xml':
                 operation, output = 'prefs', config.get('prefs_xml', '<map><string name="files">2</string><string name="categories">content,storage,exception</string></map>')
-            elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics', 'cat'] and args[4].startswith('cache/diagnostics-exports/'):
+            elif args[:4] == ['exec-out', 'run-as', 'io.github.pine.emu.diagnostics.preview', 'cat'] and args[4].startswith('cache/diagnostics-exports/'):
                 operation, binary = 'snapshot', True
                 name = args[4].split('/', 3)[3]
                 output = config['snapshot_files'][name].encode()
@@ -598,7 +598,7 @@ class ObservationDeadlines(unittest.TestCase):
 
         scenarios = (
             ("default", BLUETOOTH_CRASH_XML, False),
-            ("pine", BLUETOOTH_CRASH_XML.replace("Bluetooth", "Pine Diagnostics"), True),
+            ("pine", BLUETOOTH_CRASH_XML.replace("Bluetooth", "Pine Diagnostics Preview"), True),
             ("unknown", BLUETOOTH_CRASH_XML.replace("Bluetooth", "Fixture App"), True),
             ("anr", PLATFORM_ANR_XML, True),
             ("package", changed("android:id/aerr_close", package="fixture.other"), True),
@@ -626,7 +626,7 @@ class ObservationDeadlines(unittest.TestCase):
                 root.append(close)
             else:
                 ET.SubElement(root, "node", {"resource-id": "android:id/alertTitle", "package": "android",
-                                             "text": "Pine Diagnostics keeps stopping", "bounds": "[0,0][100,100]"})
+                                             "text": "Pine Diagnostics Preview keeps stopping", "bounds": "[0,0][100,100]"})
             smoke = self.smoke("bluetooth-guard-" + name, {"xml_sequence": [ET.tostring(root, encoding="unicode")]},
                                dismiss_platform_crash=True)
             screen = smoke.screen("guard", deadline=time.monotonic() + 1)
@@ -696,7 +696,7 @@ class ObservationDeadlines(unittest.TestCase):
     def test_platform_wait_never_handles_default_pine_unknown_or_wrong_controls(self):
         scenarios = (
             ("default", PLATFORM_ANR_XML, False),
-            ("pine", PLATFORM_ANR_XML.replace("System UI", "Pine Diagnostics"), True),
+            ("pine", PLATFORM_ANR_XML.replace("System UI", "Pine Diagnostics Preview"), True),
             ("unknown", PLATFORM_ANR_XML.replace("System UI", "Fixture App"), True),
             ("wrong-package", PLATFORM_ANR_XML.replace('package="android"', 'package="fixture.other"'), True),
             ("prefixed-resource", PLATFORM_ANR_XML.replace('resource-id="android:', 'resource-id="fixture:android:'), True),
@@ -750,7 +750,7 @@ class ObservationDeadlines(unittest.TestCase):
                     self.assertEqual(smoke.results["settings_entry"]["status"], "fail")
                     self.assertIn("Pine application ANR observed", smoke.results["settings_entry"]["reason"])
                     self.assertEqual(smoke.summary["overall"], "fail")
-                    self.assertIn("Pine Diagnostics isn't responding", (smoke.output / "001-pine-anr.xml").read_text())
+                    self.assertIn("Pine Diagnostics Preview isn't responding", (smoke.output / "001-pine-anr.xml").read_text())
                     self.assertFalse(any("tap" in row["argv"] for row in self.commands(smoke)))
                     self.assertEqual(smoke.summary["platform_anr_waits"], [])
 
@@ -762,12 +762,13 @@ class ObservationDeadlines(unittest.TestCase):
         self.assertIn("Pine application ANR observed", smoke.results["disable_stop"]["reason"])
         self.assertEqual(smoke.summary["overall"], "fail")
         self.assertFalse(any("input" in row["argv"] for row in self.commands(smoke)))
-        self.assertIn("Pine Diagnostics isn't responding", (smoke.output / "001-settings.xml").read_text())
+        self.assertIn("Pine Diagnostics Preview isn't responding", (smoke.output / "001-settings.xml").read_text())
 
     def test_pine_anr_identity_does_not_match_other_titles_or_application_text(self):
         for name, xml in (
-            ("other-title", PINE_ANR_XML.replace("Pine Diagnostics", "Fixture App")),
-            ("application-text", PINE_ANR_XML.replace('package="android"', 'package="io.github.pine.emu.diagnostics"')),
+            ("other-title", PINE_ANR_XML.replace("Pine Diagnostics Preview", "Fixture App")),
+            ("old-preview-title", PINE_ANR_XML.replace("Pine Diagnostics Preview", "Pine Diagnostics")),
+            ("application-text", PINE_ANR_XML.replace('package="android"', 'package="io.github.pine.emu.diagnostics.preview"')),
             ("prefixed-resource", PINE_ANR_XML.replace('resource-id="android:id/alertTitle"',
                                                      'resource-id="fixture:android:id/alertTitle"')),
         ):

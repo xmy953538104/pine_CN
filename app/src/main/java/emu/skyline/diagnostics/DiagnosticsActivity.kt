@@ -158,6 +158,7 @@ class DiagnosticsActivity : AppCompatActivity() {
                 val metadata = buildString {
                     appendLine("schema=1")
                     appendLine("exporter_version=${BuildConfig.VERSION_NAME}")
+                    appendLine("exporter_application_id=${BuildConfig.APPLICATION_ID}")
                     appendLine("exporter_build=${BuildConfig.BUILD_TYPE}")
                     appendLine("exporter_flavor=${BuildConfig.FLAVOR}")
                     appendLine("exporter_commit=${BuildConfig.DIAGNOSTICS_COMMIT}")

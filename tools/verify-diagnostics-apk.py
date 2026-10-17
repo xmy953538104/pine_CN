@@ -14,7 +14,7 @@ expected = sys.argv[2]
 actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 assert re.fullmatch(r"[0-9a-f]{40}", expected) and actual == expected, (actual, expected)
 badging = apk.with_name("apk-badging.txt").read_text(encoding="utf-8")
-assert "name='io.github.pine.emu.diagnostics'" in badging
+assert "name='io.github.pine.emu.diagnostics.preview'" in badging
 assert "-diagnostics-v1'" in badging
 assert "sdkVersion:'29'" in badging
 with zipfile.ZipFile(apk) as archive:
@@ -45,7 +45,7 @@ metadata = {
     "commit": actual,
     "apk": apk.name,
     "sha256": hashlib.file_digest(apk.open("rb"), "sha256").hexdigest(),
-    "application_id": "io.github.pine.emu.diagnostics",
+    "application_id": "io.github.pine.emu.diagnostics.preview",
     "abi": ["arm64-v8a"],
     "min_sdk": 29,
     "build_type": "debug",

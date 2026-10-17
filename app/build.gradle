@@ -111,9 +111,11 @@ android {
         }
 
         debug {
-            applicationIdSuffix ".diagnostics"
+            // CI debug certificates differ between jobs. A fresh preview ID
+            // preserves an already-installed e9 diagnostic app and its data.
+            applicationIdSuffix ".diagnostics.preview"
             versionNameSuffix "-diagnostics-v1"
-            manifestPlaceholders += [appLabel: "Pine Diagnostics"]
+            manifestPlaceholders += [appLabel: "Pine Diagnostics Preview"]
             debuggable true
             minifyEnabled false
             shrinkResources false

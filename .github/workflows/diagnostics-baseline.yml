@@ -156,7 +156,7 @@ jobs:
           root = pathlib.Path('target-apk')
           identity = json.loads((root / 'build-identity.json').read_text())
           apk = root / 'app-full-debug.apk'
-          assert identity['commit'] == commit and identity['application_id'] == 'io.github.pine.emu.diagnostics'
+          assert identity['commit'] == commit and identity['application_id'] == 'io.github.pine.emu.diagnostics.preview'
           assert identity['sha256'] == hashlib.sha256(apk.read_bytes()).hexdigest()
           with zipfile.ZipFile(apk) as archive:
               dex = [name for name in archive.namelist() if re.fullmatch(r'classes[0-9]*\.dex', name)]

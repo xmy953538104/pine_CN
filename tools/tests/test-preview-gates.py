@@ -39,7 +39,7 @@ class PreviewGates(unittest.TestCase):
                       "limitations": "no executable APK or device in this test", "physical_arm64_verified": False,
                       "commercial_game_verified": False}
         self.identity = {"commit": self.sha, "apk": self.apk.name, "sha256": digest,
-                         "application_id": "io.github.pine.emu.diagnostics", "abi": ["arm64-v8a"], "build_type": "debug",
+                         "application_id": "io.github.pine.emu.diagnostics.preview", "abi": ["arm64-v8a"], "build_type": "debug",
                          "skyline_elf_sha256": hashlib.sha256(self.elf).hexdigest(),
                          "jvm_tests": {"tests": 20, "failures": 0, "errors": 0, "skipped": 0},
                          "release_emulation_process_manifest_verified": True}

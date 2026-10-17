@@ -43,7 +43,7 @@ if len(sys.argv) > 1:
     assert {p.name for p in folder.glob("*.apk")} == {"app-full-debug.apk"}
     identity = json.loads((folder / "build-identity.json").read_text())
     assert identity["commit"] == value["commit"]
-    assert identity["application_id"] == "io.github.pine.emu.diagnostics"
+    assert identity["application_id"] == "io.github.pine.emu.diagnostics.preview"
     assert identity["abi"] == ["arm64-v8a"] and identity["build_type"] == "debug"
     assert identity["release_emulation_process_manifest_verified"] is True
     jvm = identity["jvm_tests"]

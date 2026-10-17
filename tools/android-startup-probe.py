@@ -14,7 +14,7 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 
-PACKAGES = ('io.github.pine.emu', 'io.github.pine.emu.diagnostics')
+PACKAGES = ('io.github.pine.emu', 'io.github.pine.emu.diagnostics', 'io.github.pine.emu.diagnostics.preview')
 
 
 class Blocked(Exception):
@@ -88,7 +88,7 @@ class Probe:
                   n.get('resource-id') == 'android:id/alertTitle']
         anr_controls = any(n.get('package') == 'android' and n.get('resource-id') in
                            ('android:id/aerr_wait', 'android:id/aerr_close') for n in nodes)
-        label = 'Pine' if self.a.package == PACKAGES[0] else 'Pine Diagnostics'
+        label = dict(zip(PACKAGES, ('Pine', 'Pine Diagnostics', 'Pine Diagnostics Preview')))[self.a.package]
         if anr_controls:
             # XML already establishes the outcome. Optional visual evidence must
             # never downgrade a known app ANR when its capture times out.

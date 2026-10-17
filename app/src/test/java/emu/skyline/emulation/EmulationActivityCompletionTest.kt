@@ -16,6 +16,9 @@ import emu.skyline.settings.EmulationSettings
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.CopyOnWriteArrayList
+import emu.skyline.diagnostics.ProcessAssociation
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -38,14 +41,25 @@ import org.robolectric.util.ReflectionHelpers
     instrumentedPackages = ["emu.skyline.diagnostics.Diagnostics"])
 @LooperMode(LooperMode.Mode.PAUSED)
 class EmulationActivityCompletionTest {
+    private data class NativeEvent(val name: String, val fields: Map<String, String>)
     @Implements(value = Diagnostics::class, isInAndroidSdk = false)
     class NativeDiagnostics {
         companion object {
             @JvmStatic @Implementation fun configureNative(path: String, enabled: Boolean, verbose: Boolean, files: Int, session: String, categories: String, process: String) = enabled
             @JvmStatic @Implementation fun statusNative() = longArrayOf(1, 0, 0, 0)
-            @JvmStatic @Implementation fun setLaunchNative(id: String, title: String, newLaunch: Boolean) { }
-            @JvmStatic @Implementation fun emitFieldsNative(category: String, event: String, level: String, keys: Array<String>, values: Array<String>) = true
-            @JvmStatic @Implementation fun emitNative(category: String, event: String, detail: String, title: String) { }
+            @JvmStatic @Implementation fun setLaunchNative(id: String, title: String, newLaunch: Boolean) {
+                if (newLaunch && id.isEmpty()) order.add("clear")
+            }
+            @JvmStatic @Implementation fun emitFieldsNative(category: String, event: String, level: String, keys: Array<String>, values: Array<String>): Boolean {
+                events.add(NativeEvent(event, keys.zip(values).toMap())); order.add(event)
+                return true
+            }
+            @JvmStatic @Implementation fun emitNative(category: String, event: String, detail: String, title: String) {
+                events.add(NativeEvent(event, mapOf("detail" to detail, "title_id" to title))); order.add(event)
+            }
+            @JvmStatic @Implementation fun flushNative(): Boolean {
+                flushes.incrementAndGet(); order.add("flush"); onFlush?.invoke(); return true
+            }
             @JvmStatic @Implementation fun stopNative() {
                 drains.incrementAndGet()
                 onDrain?.invoke()
@@ -56,6 +70,10 @@ class EmulationActivityCompletionTest {
     companion object {
         private val stops = AtomicInteger()
         private val drains = AtomicInteger()
+        private val flushes = AtomicInteger()
+        private val events = CopyOnWriteArrayList<NativeEvent>()
+        private val order = CopyOnWriteArrayList<String>()
+        @Volatile private var onFlush: (() -> Unit)? = null
         @Volatile private var onStop: (() -> Unit)? = null
         @Volatile private var onDrain: (() -> Unit)? = null
     }
@@ -64,9 +82,12 @@ class EmulationActivityCompletionTest {
     private lateinit var owner: EmulationGeneration
     private var token = 0L
     private val releaseDrain = CountDownLatch(1)
+    private var originalExceptionHandler: Thread.UncaughtExceptionHandler? = null
 
     @Before fun attachActualActivityWithoutStartingNativeGame() {
-        stops.set(0); drains.set(0); onStop = null; onDrain = null
+        stops.set(0); drains.set(0); flushes.set(0); events.clear(); order.clear()
+        onStop = null; onDrain = null; onFlush = null
+        originalExceptionHandler = Thread.getDefaultUncaughtExceptionHandler()
         ShadowProcess.clearKilledProcesses()
         // Deliberately attach without onCreate: it starts a ROM and JNI emulation.
         // The actual onDestroy and public completion entry below remain untouched.
@@ -102,7 +123,8 @@ class EmulationActivityCompletionTest {
             owner.session(next) {} // Wait for any released drain before resetting its counters.
         }
         shadowOf(Looper.getMainLooper()).idle()
-        onStop = null; onDrain = null
+        onStop = null; onDrain = null; onFlush = null
+        Thread.setDefaultUncaughtExceptionHandler(originalExceptionHandler)
     }
 
     private fun destroy() {
@@ -141,6 +163,97 @@ class EmulationActivityCompletionTest {
         Diagnostics.beginLaunch("0100751007ADA000", owner)
         Diagnostics.onNativeContentIdentity(owner, "0100751007ADA000", "cnmt_application")
         return ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch").id.also { assertTrue(it.isNotEmpty()) }
+    }
+    /** Real JVM uncaught dispatch invokes the installed production handler and its predecessor. */
+    private fun runToUncaught(expected: Throwable, execute: () -> Unit): ProcessAssociation {
+        val forwarded = AtomicReference<Throwable>()
+        val association = AtomicReference<ProcessAssociation>()
+        val finished = CountDownLatch(1)
+        Thread.setDefaultUncaughtExceptionHandler { _, error ->
+            forwarded.set(error); association.set(Diagnostics.currentAssociation()); finished.countDown()
+        }
+        Diagnostics.installExceptionObserver()
+        val thread = Thread({ activity.runNativeForGeneration(token, execute) }, "ControlledEmuMain")
+        thread.start(); thread.join(5000)
+        assertFalse("production wrapper and handler must complete", thread.isAlive)
+        assertTrue("original uncaught handler was delegated to", finished.await(1, TimeUnit.SECONDS))
+        assertSame("same Throwable, without wrapping or replacement", expected, forwarded.get())
+        return association.get()
+    }
+    @Test fun throwingProductionWrapperFlushesIdentityBeforeCleanupAndSameUncaughtHandlerKeepsIt() {
+        val launchId = startObservedLaunch(token)
+        val session = Diagnostics.currentAssociation().session
+        val expected = LinkageError("controlled JNI boundary failure")
+        // Keep controlled frames stable across Robolectric's own reflection-stack cleanup.
+        expected.stackTrace = arrayOf(StackTraceElement("controlled.NativeSettings", "create", "Controlled.kt", 42),
+            StackTraceElement("controlled.EmuMain", "run", "Controlled.kt", 73))
+        val originalStack = expected.stackTrace.toList()
+        events.clear(); order.clear(); flushes.set(0)
+        val atHandler = runToUncaught(expected) { throw expected }
+        val uncaught = events.single { it.name == "ANDROID_UNCAUGHT_EXCEPTION" }.fields
+        assertEquals(launchId, uncaught["failure_launch_id"])
+        assertEquals("0100751007ADA000", uncaught["failure_application_title_id"])
+        assertEquals(session, uncaught["failure_session_id"])
+        assertEquals("cnmt_application", uncaught["failure_application_identity_source"])
+        assertEquals("observed_owned_launch", uncaught["failure_context_status"])
+        assertEquals(originalStack, expected.stackTrace.toList())
+        val before = events.single { it.name == "LAUNCH_FAILURE_CONTEXT" }.fields
+        assertEquals(before["failure_id"], uncaught["failure_id"]); assertFalse(uncaught["failure_id"].isNullOrEmpty())
+        assertTrue(order.indexOf("LAUNCH_FAILURE_CONTEXT") < order.indexOf("flush"))
+        assertTrue(order.indexOf("flush") < order.indexOf("clear"))
+        assertTrue(order.indexOf("clear") < order.indexOf("ANDROID_UNCAUGHT_EXCEPTION"))
+        assertEquals(2, flushes.get()); assertEquals("", atHandler.launch); assertEquals("", atHandler.title)
+        Diagnostics.preferences(activity).edit().putBoolean("verbose", true).commit()
+        Diagnostics.apply(activity)
+        assertEquals("", Diagnostics.currentAssociation().launch); assertEquals("", Diagnostics.currentAssociation().title)
+        assertFalse(ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch").active)
+    }
+    @Test fun lateAFailureKeepsItsNativeResolvedIdentityWithoutOverwritingReplacementB() {
+        val aId = startObservedLaunch(token)
+        Diagnostics.beginLaunch(null, token) // A's Program identity is not known until inside execute().
+        val lateAId = ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch").id
+        assertNotEquals(aId, lateAId)
+        val expected = IllegalStateException("controlled late A failure")
+        var bId = ""
+        var bToken = 0L
+        events.clear(); order.clear()
+        val atHandler = runToUncaught(expected) {
+            Diagnostics.onNativeContentIdentity(token, "0100751007ADA001", "program_header")
+            bToken = owner.begin()
+            bId = startObservedLaunch(bToken)
+            Diagnostics.onNativeContentIdentity(bToken, "0200751007ADA000", "cnmt_application")
+            throw expected
+        }
+        val uncaught = events.single { it.name == "ANDROID_UNCAUGHT_EXCEPTION" }.fields
+        assertEquals(lateAId, uncaught["failure_launch_id"])
+        assertEquals("0100751007ADA001", uncaught["failure_application_title_id"])
+        assertEquals("program_header", uncaught["failure_application_identity_source"])
+        assertEquals(bId, atHandler.launch); assertEquals("0200751007ADA000", atHandler.title)
+        val state = ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch")
+        assertTrue(state.active); assertEquals(bToken, state.owner); assertEquals(bId, state.id)
+        assertFalse("A's failure/finally never clears B", order.contains("clear"))
+        assertFalse(ShadowProcess.wasKilled(Process.myPid()))
+    }
+    @Test fun failureBeforeNativeResolutionRetainsOnlyExplicitUnverifiedUiHint() {
+        startObservedLaunch(token)
+        Diagnostics.beginLaunch("0100751007ADA000", token)
+        val expected = IllegalStateException("controlled NativeSettings construction failure")
+        runToUncaught(expected) { throw expected }
+        val fields = events.single { it.name == "ANDROID_UNCAUGHT_EXCEPTION" }.fields
+        assertEquals("", fields["failure_application_title_id"])
+        assertEquals("unknown", fields["failure_application_identity_source"])
+        assertEquals("0100751007ADA000", fields["failure_ui_application_title_id"])
+        assertEquals("ui_metadata_hint_not_runtime_verified", fields["failure_ui_identity_source"])
+        assertEquals("", Diagnostics.currentAssociation().title)
+    }
+    @Test fun diagnosticFlushFailureCannotReplaceTheThrownObjectOrSkipOwnedCleanup() {
+        val launchId = startObservedLaunch(token)
+        val expected = IllegalArgumentException("controlled construction failure")
+        onFlush = { throw UnsupportedOperationException("controlled sink failure") }
+        val state = runToUncaught(expected) { throw expected }
+        assertEquals(launchId, events.single { it.name == "ANDROID_UNCAUGHT_EXCEPTION" }.fields["failure_launch_id"])
+        assertEquals("", state.launch); assertEquals("", state.title)
+        assertFalse(ReflectionHelpers.getField<LaunchIdentity>(Diagnostics, "launch").active)
     }
     @Test fun destructionThenRealNativeReturnPathAndSettingsApplyCannotResurrectLaunch() {
         val old = startObservedLaunch(token)

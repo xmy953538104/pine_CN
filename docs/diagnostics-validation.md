@@ -242,3 +242,11 @@ every 16 in detailed mode. This tight in-memory loop saturates the bounded async
 writer, especially in detailed mode; scheduling and drop rates affect timing.
 These observations do not measure Android game FPS, audio, device storage or
 ARM64 performance, and do not replace the repeated owner scene comparison above.
+
+The Java-failure cleanup regressions additionally run the production wrapper on
+an actual JVM thread and let the JVM invoke the installed uncaught handler.
+They verify pre-cleanup identity/flush ordering, same Throwable and controlled
+stack frames, no launch resurrection on settings apply, A's native identity
+observed during execution surviving replacement B, unverified early UI hints,
+and sink-flush failure preserving propagation and cleanup. JNI side effects are
+shadowed in these Activity tests; they are not Android APK execution.

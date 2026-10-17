@@ -346,7 +346,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
     /** The real JNI return/failure ends only its own launch; navigation has separate ownership. */
     internal fun runNativeForGeneration(token: Long, execute: () -> Unit) {
-        try { execute() }
+        try { emu.skyline.diagnostics.Diagnostics.observeLaunchFailure(token, execute) }
         finally { emu.skyline.diagnostics.Diagnostics.endLaunch(token) }
         returnFromEmulation(token)
     }

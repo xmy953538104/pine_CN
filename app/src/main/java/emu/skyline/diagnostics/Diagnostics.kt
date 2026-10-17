@@ -7,6 +7,7 @@ import emu.skyline.BuildConfig
 import java.io.File
 import java.util.UUID
 import java.util.Locale
+import java.lang.ref.WeakReference
 
 object Diagnostics {
     @Volatile private var active = false
@@ -16,8 +17,24 @@ object Diagnostics {
     private val launch = LaunchIdentity()
     private var applicationTitleId = ""
     private var applicationIdentitySource = "unknown"
+    private var launchApplicationHint = ""
     private var appContext: Context? = null
     private val processRunId: String by lazy { UUID.randomUUID().toString() }
+    private class LaunchFailureBoundary(val owner: Long, var observed: ProcessAssociation?, val hint: String)
+    private data class PendingLaunchFailure(val error: WeakReference<Throwable>, val id: String, val owner: Long,
+        val observed: ProcessAssociation?, val hint: String) {
+        fun fields() = linkedMapOf("failure_id" to id, "failure_generation" to owner.toString(),
+            "failure_context_status" to if (observed == null) "not_observed" else "observed_owned_launch",
+            "failure_process_run_id" to observed?.process.orEmpty(), "failure_session_id" to observed?.session.orEmpty(),
+            "failure_launch_id" to observed?.launch.orEmpty(), "failure_application_title_id" to observed?.title.orEmpty(),
+            "failure_application_identity_source" to (observed?.titleSource ?: "unknown"), "failure_commit" to observed?.commit.orEmpty(),
+            "failure_ui_application_title_id" to hint,
+            "failure_ui_identity_source" to if (hint.isEmpty()) "unknown" else "ui_metadata_hint_not_runtime_verified")
+    }
+    // One small scope on the launch thread; one weak throwable association until
+    // that same thread's uncaught handler consumes it. No global identity restore.
+    private val launchFailureBoundary = ThreadLocal<LaunchFailureBoundary?>()
+    private val pendingLaunchFailure = ThreadLocal<PendingLaunchFailure?>()
     val processScope: String get() = if (Application.getProcessName().endsWith(":emulationProcess")) "emulation" else "main"
     fun preferences(context: Context) = context.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
     fun rootDirectory(context: Context) = File(context.filesDir.canonicalFile, "diagnostics")
@@ -94,6 +111,7 @@ object Diagnostics {
         // reports the identity resolved by the native runtime loader.
         this.applicationTitleId = ""
         applicationIdentitySource = "unknown"
+        launchApplicationHint = normalizedTitleId(applicationTitleId)
         runCatching { setLaunchNative(id, normalizedTitleId(applicationTitleId), true) }
         event("lifecycle", "LAUNCH_BEGIN", applicationTitleId) { "start_observed=true" }
         if (active) appContext?.let(::publishAssociation)
@@ -105,7 +123,10 @@ object Diagnostics {
         val knownSource = source in setOf("cnmt_application", "cnmt_patch_parent", "cnmt_aoc_parent", "program_header")
         applicationTitleId = if (knownSource) id else ""
         applicationIdentitySource = if (knownSource && id.isNotEmpty()) source else "unknown"
-        if (active) appContext?.let(::publishAssociation)
+        if (active) {
+            launchFailureBoundary.get()?.takeIf { it.owner == owner }?.observed = currentAssociation()
+            appContext?.let(::publishAssociation)
+        }
     }
     @Synchronized internal fun currentAssociation() = ProcessAssociation(processRunId, launch.id, sessionId,
         BuildConfig.DIAGNOSTICS_COMMIT, applicationTitleId, processScope, active, launch.startObserved, applicationIdentitySource)
@@ -117,11 +138,43 @@ object Diagnostics {
     @Synchronized internal fun eventForSession(expected: String, category: String, event: String, detail: () -> String) {
         if (active && sessionId == expected) event(category, event, detail = detail)
     }
+    private fun ownedFailureAssociation(owner: Long): ProcessAssociation? =
+        if (active && launch.active && launch.belongsTo(owner)) currentAssociation() else null
+    /** Observe only; the caller still owns finally cleanup and the original Throwable. */
+    internal fun observeLaunchFailure(owner: Long, execute: () -> Unit) {
+        val previous = runCatching { launchFailureBoundary.get() }.getOrNull()
+        val boundary = runCatching { synchronized(this) { LaunchFailureBoundary(owner, ownedFailureAssociation(owner),
+            if (launch.active && launch.belongsTo(owner)) launchApplicationHint else "") } }.getOrNull()
+        runCatching { pendingLaunchFailure.remove(); launchFailureBoundary.set(boundary) }
+        try { execute() }
+        catch (error: Throwable) {
+            runCatching { recordLaunchFailure(owner, boundary, error) }
+            throw error
+        } finally {
+            runCatching { if (previous == null) launchFailureBoundary.remove() else launchFailureBoundary.set(previous) }
+        }
+    }
+    @Synchronized private fun recordLaunchFailure(owner: Long, boundary: LaunchFailureBoundary?, error: Throwable) {
+        if (pendingLaunchFailure.get()?.error?.get() === error) return // Preserve the innermost observer of this same failure.
+        // If B has started, retain A's last owned observation without reading B
+        // into A's failure or writing A back into native/platform state.
+        val observed = ownedFailureAssociation(owner) ?: boundary?.observed
+        val hint = if (launch.active && launch.belongsTo(owner)) launchApplicationHint else boundary?.hint.orEmpty()
+        val failure = PendingLaunchFailure(WeakReference(error), if (active) UUID.randomUUID().toString() else "", owner, observed, hint)
+        pendingLaunchFailure.set(failure)
+        if (active) {
+            fieldsEvent("exception", "LAUNCH_FAILURE_CONTEXT") {
+                failure.fields() + mapOf("exception_type" to error.javaClass.name, "phase" to "before_launch_cleanup")
+            }
+            runCatching { flushNative() } // Existing native Flush has a 250ms deadline.
+        }
+    }
     /** Native completion owns state cleanup even when Activity navigation was rejected. */
     @Synchronized fun endLaunch(owner: Long): Boolean {
         if (!launch.end(owner)) return false
         applicationTitleId = ""
         applicationIdentitySource = "unknown"
+        launchApplicationHint = ""
         runCatching { setLaunchNative("", "", true) }
         runCatching { ProcessStateAssociation.clear() }
         return true
@@ -134,13 +187,19 @@ object Diagnostics {
         launch.end()
         applicationTitleId = ""
         applicationIdentitySource = "unknown"
+        launchApplicationHint = ""
         runCatching { ProcessStateAssociation.clear() }
     }
     fun installExceptionObserver() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try {
-                event("exception", "ANDROID_UNCAUGHT_EXCEPTION") { "thread=${thread.name} type=${error.javaClass.name} message=${error.message} stack=${error.stackTrace.take(16).joinToString(" | ")}" }
+                val failure = pendingLaunchFailure.get()?.takeIf { it.error.get() === error }
+                pendingLaunchFailure.remove()
+                fieldsEvent("exception", "ANDROID_UNCAUGHT_EXCEPTION", "ERROR") {
+                    failure?.fields().orEmpty() + mapOf("thread" to thread.name, "exception_type" to error.javaClass.name,
+                        "message" to error.message.orEmpty(), "stack" to error.stackTrace.take(16).joinToString(" | "))
+                }
                 if (active) runCatching { flushNative() }
             } finally {
                 previous?.uncaughtException(thread, error)

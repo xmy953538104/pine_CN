@@ -414,3 +414,24 @@ updates the application identity used by the platform process-state summary.
 setters, the actual RomFile initializer and the production Java callback observer.
 It distinguishes CNMT/Program/save-owner IDs and round-trips the actual summary
 codec. It is neither an Android APK run nor a commercial NCA/cryptography test.
+
+## Java launch failures during cleanup
+
+The production emulation wrapper observes a Java `Throwable` before its owned
+launch cleanup. `LAUNCH_FAILURE_CONTEXT` is an informational critical context
+record, followed by a best-effort native flush with the existing 250ms deadline.
+The original Throwable is rethrown without wrapping; normal `finally` cleanup
+still ends only its generation. A per-thread weak Throwable association carries
+an immutable last-owned observation into the installed uncaught handler.
+`ANDROID_UNCAUGHT_EXCEPTION` retains that observation in explicit `failure_*`
+fields, shares its `failure_id`, and delegates the same object to the previous
+handler. The informational precursor is not an additional error observation.
+
+`failure_application_title_id` has the native identity source shown alongside it.
+Before native resolution it stays unknown; `failure_ui_application_title_id` can
+separately retain an unverified UI metadata hint. If B has replaced A, A's failure
+fields describe A's last owned observation while the root sink context can be B.
+No old identity is written back into current native or platform state. Platform
+history may therefore remain unknown after orderly cleanup; these local failure
+records are separate evidence, not a fabricated verified exit association.
+Sink failure, admission loss or abrupt death can still prevent persistence.

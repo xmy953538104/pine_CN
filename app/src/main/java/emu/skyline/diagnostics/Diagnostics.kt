@@ -11,7 +11,7 @@ import java.util.Locale
 object Diagnostics {
     @Volatile private var active = false
     private var signature = ""
-    private var sessionId = ""
+    @Volatile private var sessionId = ""
     private var exitHistoryQueried = false
     val processScope: String get() = if (Application.getProcessName().endsWith(":emulationProcess")) "emulation" else "main"
     fun preferences(context: Context) = context.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
@@ -50,13 +50,17 @@ object Diagnostics {
         }
         if (active && !exitHistoryQueried) {
             exitHistoryQueried = true
-            PreviousProcessExit.observe(context)
+            runCatching { PreviousProcessExit.schedule(context.applicationContext, sessionId) }
+                .onFailure { event("lifecycle", "PROCESS_EXIT_HISTORY_UNAVAILABLE") { "reason=observer_thread_start_failed" } }
         }
     }
     internal fun normalizedTitleId(titleId: String?): String = titleId?.uppercase(Locale.ROOT)
         ?.takeIf { it.length == 16 && it.all { char -> char in '0'..'9' || char in 'A'..'F' } }.orEmpty()
     fun event(category: String, event: String, titleId: String? = null, detail: () -> String) {
         if (active) runCatching { emitNative(category, event, DiagnosticExport.redact(detail().take(4096)), normalizedTitleId(titleId)) }
+    }
+    @Synchronized internal fun eventForSession(expected: String, category: String, event: String, detail: () -> String) {
+        if (active && sessionId == expected) event(category, event, detail = detail)
     }
     @Synchronized fun finishSession() {
         runCatching { stopNative() }

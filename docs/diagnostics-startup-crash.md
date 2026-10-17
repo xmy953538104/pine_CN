@@ -51,6 +51,11 @@ game, commit and diagnostic session are explicitly unknown; it must not be
 attributed to the new session. A signaled exit is not automatically called a
 crash. Android's history is bounded and may be unavailable; absence is not
 proof of a normal exit. Android 29 reports the API limitation.
+The one-shot query runs on daemon background threads, with a 1500 ms observer
+deadline and explicit unavailable result on timeout/read failure. UI startup,
+game execution and diagnostic shutdown never join it. A Binder call may ignore
+interruption; at most one daemon query can remain until it returns. Results
+are discarded if their requesting diagnostic session has changed or stopped.
 
 Export now distinguishes current-session status counters from per-session
 maximum observed cumulative `dropped_count` values. Their total is a lower

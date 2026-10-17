@@ -93,7 +93,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         toggle("Enable diagnostics / 启用诊断 (default off)", "enabled")
         toggle("Detailed tracing / 详细追踪", "verbose")
         layout.addView(Button(this).apply {
-            text = "Retention / 保留: 2, 4 or 8 × 2 MiB per process"
+            text = "Retention / 保留: 2, 4 or 8 × 2 MiB + 64 KiB state per process"
             setOnClickListener {
                 AlertDialog.Builder(this@DiagnosticsActivity).setTitle("Maximum log space per process")
                     .setItems(arrayOf("2 files / 4 MiB", "4 files / 8 MiB", "8 files / 16 MiB")) { _, index ->
@@ -219,7 +219,7 @@ class DiagnosticsActivity : AppCompatActivity() {
                         appendLine("$scope: last session ${sessions[scope]}, ${logs.size} logs, ${logs.sumOf { it.length() }} bytes")
                     }
                     val retention = Diagnostics.preferences(this@DiagnosticsActivity).getInt("files", 4)
-                    append("Limit per process: $retention × 2 MiB; two scopes: up to ${retention * 4} MiB")
+                    append("Limit per process: $retention × 2 MiB + 64 KiB state; two scopes: up to ${retention * 4} MiB + 128 KiB state")
                 }
             }.getOrDefault("Diagnostics status unavailable")
         }

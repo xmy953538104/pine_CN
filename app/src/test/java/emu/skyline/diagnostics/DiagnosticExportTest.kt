@@ -15,6 +15,26 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 
 class DiagnosticExportTest {
+    @Test fun criticalStateSharesSequenceWithoutReplayingAnErrorAndRemainsAllowlisted() = sandbox { logs, textLog, cache, _ ->
+        val original = Json.parseToJsonElement(record("same", 7, "exception", "NATIVE_EXCEPTION", "ERROR")).jsonObject
+        val state = JsonObject(original + mapOf("record_kind" to JsonPrimitive("critical_snapshot"),
+            "event" to JsonPrimitive("CRITICAL_STATE_SNAPSHOT"), "level" to JsonPrimitive("INFO"),
+            "fields" to buildJsonObject { put("observed_event", "NATIVE_EXCEPTION"); put("detail", "path:/data/private/owner") }))
+        log(logs, "main/critical-state.jsonl", state.toString() + "\n")
+        log(logs, "main/diagnostics-0.jsonl", original.toString() + "\n")
+        log(logs, "main/critical-state.tmp", "NEVER_EXPORT_TEMP")
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val result = archive(snapshot)
+            assertTrue(result.containsKey("main/critical-state.jsonl"))
+            assertFalse(result.keys.any { it.endsWith(".tmp") })
+            assertFalse(result.values.any { it.contains("private/owner") })
+            val metadata = result.getValue("session-metadata.txt")
+            assertTrue(metadata.contains("exported_records=1"))
+            assertTrue(metadata.contains("exported_critical_state_records=1"))
+            assertTrue(metadata.contains("observed_error_count=1"))
+        }
+    }
+
     @Test fun malformedStagePayloadCannotBreakSafeExportOrInventNormalEnd() = sandbox { logs, textLog, cache, _ ->
         log(logs, "main/diagnostics-0.jsonl", """{"session_id":"synthetic","sequence":1,"event":"STAGE_COMPLETED","fields":{"stage":["EMULATION_ENDED"]}}""" + "\n")
         DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->

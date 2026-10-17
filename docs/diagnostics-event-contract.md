@@ -229,3 +229,27 @@ a crash. UI selections are associations (`execution_confirmed=false`), and
 `loader_source=metadata_scan` does not establish runtime execution. Historical
 `PREVIOUS_PROCESS_EXIT`/`PREVIOUS_PROCESS_CRASH` records preserve Android's
 reported reason; the previous build/session/title are unknown.
+
+## Bounded admission and critical state
+
+The default 1024-slot queue reserves 64 slots for selected lifecycle, exception,
+content selection and storage-open/error events. Normal samples cannot occupy
+that reserve. Critical events still drop if the queue is full, admission is
+contended or allocation fails. Category selection still applies. Guest message
+floods have no reserved admission merely because their text claims an error.
+`drop_counts` separates `contention`, `queue_full`, `allocation`, and
+`disk_failure`; `critical` is a subset of those losses, not an extra count.
+Counters are cumulative per logging session and final counters require normal
+sink closure. Missing terminal records leave only lower bounds.
+
+The writer maintains `critical-state.jsonl`, at most 32 accepted last-state rows
+and 64 KiB per process, replacing it at most twice per second and on clean drain.
+It retains recent selections/stages/errors across ordinary log rotation, subject
+to eviction and write failure. `record_kind=critical_snapshot` and
+`event=CRITICAL_STATE_SNAPSHOT` distinguish state from new events;
+`fields.observed_event` identifies the original event with its original sequence,
+time and identity. Export preserves both state and event rows with a shared
+sequence but counts state separately, without replaying errors or crashes.
+Snapshot failures disable only that optional writer and increment
+`snapshot_errors`; no producer or signal handler writes files. There is no
+lossless persistence or filesystem durability guarantee across sudden death.

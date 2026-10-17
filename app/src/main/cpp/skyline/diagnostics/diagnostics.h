@@ -19,7 +19,10 @@ struct Config {
     std::string categories;
     std::string processRunId{};
 };
-struct Statistics { uint64_t accepted{}, dropped{}, written{}, diskErrors{}; };
+struct Statistics {
+    uint64_t accepted{}, dropped{}, written{}, diskErrors{};
+    uint64_t droppedContention{}, droppedFull{}, droppedAllocation{}, droppedDisk{}, criticalDropped{}, snapshotErrors{}, snapshotEvictions{};
+};
 bool Enabled() noexcept;
 bool Verbose() noexcept;
 // Lifecycle calls are for ordinary threads only. Start replaces/drains an existing session.

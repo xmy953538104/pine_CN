@@ -19,6 +19,8 @@ fi
 "$build/startup_test" "$build/startup-logs"
 "${CXX:-c++}" "${flags[@]}" -Iapp/src/main/cpp/skyline "$build/diagnostics.o" tests/diagnostics/identity_test.cpp -o "$build/identity_test"
 "$build/identity_test" "$build/identity-logs"
+"${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/admission_test.cpp -o "$build/admission_test"
+"$build/admission_test" "$build/admission-logs"
 for test in pending_signal utf16; do
     "${CXX:-c++}" "${flags[@]}" -Iapp/src/main/cpp/skyline "tests/diagnostics/${test}_test.cpp" -o "$build/${test}_test"
     "$build/${test}_test"
@@ -29,7 +31,7 @@ root=pathlib.Path(sys.argv[1])
 for folder,session in [('logs','native-test'),('guest-logs','guest-test'),
                        ('process-logs/main','process-main'),('process-logs/emulation','process-emulation')]:
     paths=[path for path in (root/folder).rglob('*.jsonl')
-           if path.is_file() and not path.is_symlink() and path.parent.name!='write-failure']
+           if path.is_file() and not path.is_symlink() and path.parent.name!='write-failure' and path.name!='critical-state.jsonl']
     assert paths
     for path in paths:
         rows=[json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]

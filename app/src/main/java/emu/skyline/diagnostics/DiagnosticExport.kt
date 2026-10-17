@@ -28,7 +28,7 @@ object DiagnosticExport {
     private val credentialLine = Regex("(?i)(?:prod\\.keys|title\\.keys|\\b(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)\\b[\\s=:])")
     private val snapshotId = Regex("snapshot-[0-9a-f-]{36}")
     private val names = (listOf("emulation/", "main/", "").flatMap { scope ->
-        (0..7).map { "${scope}diagnostics-$it.jsonl" }
+        listOf("${scope}critical-state.jsonl") + (0..7).map { "${scope}diagnostics-$it.jsonl" }
     } + "emulation.log")
 
     /**
@@ -268,7 +268,10 @@ object DiagnosticExport {
         var fileLimit = 0L
         var snapshotLimit = 0L
         val omissions = mutableListOf<String>()
-        private val identities = HashSet<Pair<String, Long>>()
+        private val identities = HashSet<Triple<String, String, Long>>()
+        private var criticalSnapshots = 0L
+        private val criticalRows = ArrayDeque<String>()
+        private val dropReasons = linkedMapOf<String, MutableMap<String, Long>>()
         private var dedupLimit = false
         private val sessions = sortedSetOf<String>()
         private val sessionBuilds = linkedMapOf<String, String>()
@@ -283,13 +286,12 @@ object DiagnosticExport {
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull
             val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull
             if (session != null && session.length <= 128 && sequence != null) {
-                val identity = session to sequence
+                val identity = Triple(session, (record["record_kind"] as? JsonPrimitive)?.contentOrNull ?: "event", sequence)
                 if (identity in identities) { duplicates++; return false }
             }
             return true
         }
         fun observe(record: JsonObject) {
-            records++
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(128)
             if (session.isNotEmpty() && sessions.size < 64) sessions.add(session)
             val category = (record["category"] as? JsonPrimitive)?.contentOrNull
@@ -297,6 +299,24 @@ object DiagnosticExport {
             val level = (record["level"] as? JsonPrimitive)?.contentOrNull
             val stage = (record["last_stage"] as? JsonPrimitive)?.contentOrNull
             val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull ?: -1L
+            if (session.isNotEmpty() && sequence >= 0) {
+                if (identities.size < MAX_IDENTITIES) identities.add(Triple(session, (record["record_kind"] as? JsonPrimitive)?.contentOrNull ?: "event", sequence)) else dedupLimit = true
+            }
+            if (session.isNotEmpty() && (session in dropReasons || dropReasons.size < 64)) {
+                val reasons = dropReasons.getOrPut(session) { linkedMapOf() }
+                val counts = record["drop_counts"] as? JsonObject
+                listOf("contention", "queue_full", "allocation", "disk_failure", "critical").forEach { key ->
+                    val count = (counts?.get(key) as? JsonPrimitive)?.longOrNull
+                    if (count != null && count >= 0) reasons[key] = maxOf(reasons[key] ?: 0, count)
+                }
+            }
+            if ((record["record_kind"] as? JsonPrimitive)?.contentOrNull == "critical_snapshot") {
+                criticalSnapshots++
+                if (criticalRows.size == 32) criticalRows.removeFirst()
+                criticalRows.addLast(record.toString().take(2048))
+                return // State rows are not new error/content/lifecycle events or crash counts.
+            }
+            records++
             val observation = if (session.isNotEmpty() && (session in observations || observations.size < 64))
                 observations.getOrPut(session) { SessionObservation() } else null
             observation?.let {
@@ -311,9 +331,6 @@ object DiagnosticExport {
                     it.startedSequence = sequence
                     it.startedStage = (fields?.get("stage") as? JsonPrimitive)?.contentOrNull.orEmpty().take(128)
                 }
-            }
-            if (session.isNotEmpty() && sequence >= 0) {
-                if (identities.size < MAX_IDENTITIES) identities.add(session to sequence) else dedupLimit = true
             }
             if (!stage.isNullOrEmpty() && (session in stages || stages.size < 64) && sequence >= (stages[session]?.first ?: -1L)) {
                 stages[session] = sequence to stage.take(128)
@@ -345,6 +362,13 @@ object DiagnosticExport {
             appendLine("snapshot_priority=emulation, main, legacy, emulation.log")
             appendLine("snapshot_rotation=opened file descriptors; duplicate session/sequence records omitted; concurrent rotation may omit records")
             appendLine("exported_records=$records")
+            appendLine("exported_critical_state_records=$criticalSnapshots")
+            appendLine("critical_state_scope=bounded accepted last state; not replayed events or new errors; absence is inconclusive")
+            criticalRows.forEach(::appendLine)
+            appendLine("observed_drop_reasons_scope=per-session maxima; critical is a subset of all dropped reasons, not an additional total")
+            dropReasons.forEach { (session, reasons) -> appendLine(buildJsonObject {
+                put("session_id", session); putJsonObject("drop_counts_lower_bound") { reasons.forEach { (key, value) -> put(key, value) } }
+            }.toString()) }
             appendLine("observed_sessions=${sessions.joinToString(",")}")
             appendLine("observed_drop_scope=per-session maximum cumulative dropped_count in exported records; lower bound, not a sum of each row")
             appendLine("observed_dropped_count_lower_bound=${observations.values.fold(0L) { total, item -> total + minOf(item.dropped, Long.MAX_VALUE - total) }}")

@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "diagnostics.h"
+#include "admission.h"
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -23,7 +28,8 @@ namespace {
 using Clock = std::chrono::steady_clock;
 constexpr uint64_t ProducersClosed = uint64_t{1} << 63;
 struct Record {
-    uint64_t sequence{}, wall{}, mono{}, dropped{};
+    uint64_t sequence{}, wall{}, mono{}, dropped{}, contention{}, full{}, allocation{}, disk{}, criticalDropped{};
+    bool critical{};
     std::string category, event, level, thread, stage, titleId, programId, cnmtId, programContentId, launchId;
     std::vector<std::pair<std::string, std::string>> fields;
 };
@@ -33,6 +39,7 @@ struct Sink {
     std::atomic<uint64_t> producers{ProducersClosed};
     std::atomic<bool> verbose{};
     std::atomic<uint64_t> accepted{}, dropped{}, written{}, diskErrors{};
+    std::atomic<uint64_t> droppedContention{}, droppedFull{}, droppedAllocation{}, droppedDisk{}, criticalDropped{}, snapshotErrors{}, snapshotEvictions{};
     std::mutex lifecycle, mutex, progressMutex;
     std::condition_variable wake, progress;
     std::deque<Record> queue;
@@ -81,10 +88,14 @@ std::string Quote(std::string_view text) {
     }
     return result + '"';
 }
-std::string Serialize(const Record &r, const Config &c) {
+std::string Serialize(const Record &r, const Config &c, bool snapshot = false) {
     std::string out = "{\"schema\":1,\"session_id\":" + Quote(c.sessionId) + ",\"sequence\":" + std::to_string(r.sequence)
         + ",\"wall_clock_ms\":" + std::to_string(r.wall) + ",\"monotonic_us\":" + std::to_string(r.mono)
-        + ",\"dropped_count\":" + std::to_string(r.dropped) + ",\"thread\":" + Quote(r.thread)
+        + ",\"dropped_count\":" + std::to_string(r.dropped)
+        + ",\"drop_counts\":{\"contention\":" + std::to_string(r.contention) + ",\"queue_full\":" + std::to_string(r.full)
+        + ",\"allocation\":" + std::to_string(r.allocation) + ",\"disk_failure\":" + std::to_string(r.disk)
+        + ",\"critical\":" + std::to_string(r.criticalDropped) + "}"
+        + ",\"record_kind\":" + Quote(snapshot ? "critical_snapshot" : "event") + ",\"thread\":" + Quote(r.thread)
         + ",\"category\":" + Quote(r.category) + ",\"event\":" + Quote(r.event) + ",\"level\":" + Quote(r.level)
         + ",\"last_stage\":" + Quote(r.stage) + ",\"title_id\":" + Quote(r.titleId)
         + ",\"application_title_id\":" + Quote(r.titleId) + ",\"program_id\":" + Quote(r.programId)
@@ -94,10 +105,78 @@ std::string Serialize(const Record &r, const Config &c) {
     for (const auto &[key, value] : r.fields) { if (!first) out += ','; first = false; out += Quote(key) + ':' + Quote(value); }
     return out + "}}\n";
 }
+void CopyDropCounts(Record &r, const Sink &s) {
+    r.dropped = s.dropped; r.contention = s.droppedContention; r.full = s.droppedFull;
+    r.allocation = s.droppedAllocation; r.disk = s.droppedDisk; r.criticalDropped = s.criticalDropped;
+}
+// Writer-owned, small last-observed-state cache. It is never an event replay or a lossless journal.
+class CriticalSnapshot {
+    Sink &sink;
+    const Config &config;
+    std::deque<std::pair<std::string, Record>> records;
+    bool pending{}, failed{};
+    Clock::time_point nextWrite{};
+public:
+    CriticalSnapshot(Sink &sink, const Config &config) : sink(sink), config(config) {}
+    void Observe(const Record &record) noexcept {
+        if (!record.critical || failed) return;
+        try {
+        std::string key = record.event;
+        for (const auto &[name, value] : record.fields)
+            if (name == "title_id" || name == "loader_source" || name == "loader_index" || name == "nca_type") key += ":" + name + "=" + value;
+        auto found = std::find_if(records.begin(), records.end(), [&](const auto &item) { return item.first == key; });
+        if (found != records.end()) records.erase(found);
+        if (records.size() == 32) { records.pop_front(); ++sink.snapshotEvictions; }
+        records.emplace_back(std::move(key), record); pending = true;
+        } catch (...) { ++sink.snapshotErrors; failed = true; pending = false; }
+    }
+    bool Pending() const { return pending; }
+    Clock::time_point Deadline() const { return nextWrite; }
+    void Persist(bool force = false) noexcept {
+        if (!pending || failed || (!force && Clock::now() < nextWrite)) return;
+        int fd = -1;
+        try {
+            std::string text;
+            for (;;) {
+                text.clear();
+                for (const auto &[key, original] : records) {
+                    auto record = original;
+                    record.fields.resize(std::min<size_t>(record.fields.size(), 12));
+                    record.fields.insert(record.fields.begin(), {{"observed_event", original.event}, {"observed_level", original.level},
+                        {"snapshot_evictions", std::to_string(sink.snapshotEvictions.load())}, {"snapshot_scope", "accepted_critical_last_state_not_replay"}});
+                    record.event = "CRITICAL_STATE_SNAPSHOT"; record.level = "INFO";
+                    text += Serialize(record, config, true);
+                }
+                if (text.size() <= 65536) break;
+                records.pop_front(); ++sink.snapshotEvictions;
+            }
+            const auto directory = std::filesystem::path(config.directory);
+            const auto temporary = directory / "critical-state.tmp";
+            fd = open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0600);
+            struct stat status{};
+            if (fd < 0 || fstat(fd, &status) || !S_ISREG(status.st_mode)) throw std::runtime_error("snapshot open failed");
+            size_t offset{};
+            while (offset < text.size()) {
+                const auto count = write(fd, text.data() + offset, text.size() - offset);
+                if (count < 0 && errno == EINTR) continue;
+                if (count <= 0) throw std::runtime_error("snapshot write failed");
+                offset += static_cast<size_t>(count);
+            }
+            const auto result = close(fd); fd = -1;
+            if (result) throw std::runtime_error("snapshot close failed");
+            std::filesystem::rename(temporary, directory / "critical-state.jsonl");
+            pending = false; nextWrite = Clock::now() + std::chrono::milliseconds(500);
+        } catch (...) {
+            if (fd >= 0) close(fd);
+            ++sink.snapshotErrors; failed = true; pending = false;
+        }
+    }
+};
 void Run(Sink &s) noexcept {
-    bool pendingRecord{};
+    bool pendingRecord{}, pendingCritical{};
     try {
         const Config c = s.config;
+        CriticalSnapshot snapshot(s, c);
         auto path = [&](size_t i) { return std::filesystem::path(c.directory) / ("diagnostics-" + std::to_string(i) + ".jsonl"); };
         std::ofstream file;
         size_t bytes{};
@@ -133,12 +212,17 @@ void Run(Sink &s) noexcept {
             Record record;
             {
                 std::unique_lock lock(s.mutex);
-                s.wake.wait(lock, [&] { return s.stopping || !s.queue.empty(); });
-                if (s.queue.empty()) break;
+                if (snapshot.Pending()) s.wake.wait_until(lock, snapshot.Deadline(), [&] { return s.stopping || !s.queue.empty(); });
+                else s.wake.wait(lock, [&] { return s.stopping || !s.queue.empty(); });
+                if (s.queue.empty()) {
+                    if (s.stopping) break;
+                    lock.unlock(); snapshot.Persist(); continue;
+                }
                 record = std::move(s.queue.front()); s.queue.pop_front();
-                pendingRecord = true;
+                pendingRecord = true; pendingCritical = record.critical;
             }
             auto line = Serialize(record, c);
+            snapshot.Observe(record);
 #ifdef __ANDROID__
             // Android log entries have a small payload limit: never emit broken JSON.
             const auto priority = record.level == "ERROR" ? ANDROID_LOG_ERROR : record.level == "WARN" ? ANDROID_LOG_WARN : record.level == "DEBUG" ? ANDROID_LOG_DEBUG : ANDROID_LOG_INFO;
@@ -153,6 +237,7 @@ void Run(Sink &s) noexcept {
             file.write(line.data(), line.size()); file.flush();
             if (!file) throw std::runtime_error("diagnostic write failed");
             bytes += line.size();
+            snapshot.Persist();
             { std::lock_guard lock(s.progressMutex); ++s.written; }
             s.progress.notify_all(); pendingRecord = false;
         }
@@ -160,12 +245,14 @@ void Run(Sink &s) noexcept {
         summary.sequence = s.accepted.load() + 1;
         summary.wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         summary.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
-        summary.dropped = s.dropped;
+        CopyDropCounts(summary, s);
         summary.category = "lifecycle"; summary.event = "SESSION_SUMMARY"; summary.level = "INFO"; summary.thread = "diagnostic-writer";
         { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.titleId = s.activeTitleId;
           summary.programId = s.activeProgramId; summary.cnmtId = s.activeCnmtId;
           summary.programContentId = s.activeProgramContentId; summary.launchId = s.activeLaunchId; }
-        summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())}, {"disk_errors", std::to_string(s.diskErrors.load())}};
+        summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())},
+            {"disk_errors", std::to_string(s.diskErrors.load())}, {"snapshot_errors", std::to_string(s.snapshotErrors.load())},
+            {"snapshot_evictions", std::to_string(s.snapshotEvictions.load())}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
         file.write(line.data(), line.size()); file.flush();
@@ -173,11 +260,16 @@ void Run(Sink &s) noexcept {
 #ifdef __ANDROID__
         __android_log_write(ANDROID_LOG_INFO, "PineDiag", line.c_str());
 #endif
+        summary.critical = true; snapshot.Observe(summary); snapshot.Persist(true);
     } catch (...) {
         s.producers.fetch_or(ProducersClosed, std::memory_order_acq_rel);
         { std::lock_guard lock(s.progressMutex); ++s.diskErrors; }
         s.progress.notify_all();
-        std::lock_guard lock(s.mutex); s.dropped += s.queue.size() + (pendingRecord ? 1 : 0); s.queue.clear();
+        std::lock_guard lock(s.mutex);
+        const auto lost = s.queue.size() + (pendingRecord ? 1 : 0);
+        s.dropped += lost; s.droppedDisk += lost;
+        s.criticalDropped += std::count_if(s.queue.begin(), s.queue.end(), [](const auto &record) { return record.critical; }) + (pendingRecord && pendingCritical ? 1 : 0);
+        s.queue.clear();
     }
 }
 void StopLocked(Sink &s) {
@@ -203,25 +295,35 @@ void Enqueue(Sink &s, std::string_view category, std::string_view event,
              std::string_view level, const std::string_view *stage = nullptr) noexcept {
     Producer producer(s);
     if (!producer) return;
+    const bool critical = CriticalEvent(category, event, level);
+    auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
     try {
-        std::unique_lock lock(s.mutex, std::try_to_lock);
-        if (!lock.owns_lock()) { ++s.dropped; return; }
-        if (!IsEnabled(s) || s.stopping) return;
-        if (!CategorySelected(s.config.categories, category)) return;
-        if (stage) s.stage = Sanitize(*stage, 128);
-        if (s.queue.size() >= s.config.queueCapacity) { ++s.dropped; return; }
-        Record r;
-        r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16); r.stage = s.stage; r.titleId = s.activeTitleId;
-        r.programId = s.activeProgramId; r.cnmtId = s.activeCnmtId; r.programContentId = s.activeProgramContentId; r.launchId = s.activeLaunchId;
+        // Field sanitation and host thread formatting do not hold the admission lock.
+        Record r; r.critical = critical;
+        const auto nextStage = stage ? Sanitize(*stage, 128) : std::string{};
+        {
+            std::unique_lock lock(s.mutex, std::try_to_lock);
+            if (!lock.owns_lock()) { drop(s.droppedContention); return; }
+            if (!IsEnabled(s) || s.stopping || !CategorySelected(s.config.categories, category)) return;
+            if (stage) s.stage = nextStage;
+            if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return; }
+            r.stage = s.stage; r.titleId = s.activeTitleId; r.programId = s.activeProgramId;
+            r.cnmtId = s.activeCnmtId; r.programContentId = s.activeProgramContentId; r.launchId = s.activeLaunchId;
+        }
+        r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16);
         char name[16]{}; pthread_getname_np(pthread_self(), name, sizeof(name));
         std::ostringstream thread; thread << name << ':' << std::this_thread::get_id(); r.thread = Sanitize(thread.str(), 128);
         r.wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         r.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
         size_t budget = 4096;
         for (auto &[key, value] : fields) { if (r.fields.size() == 16 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
-        r.sequence = s.accepted.load() + 1; r.dropped = s.dropped;
+        std::unique_lock lock(s.mutex, std::try_to_lock);
+        if (!lock.owns_lock()) { drop(s.droppedContention); return; }
+        if (!IsEnabled(s) || s.stopping) return;
+        if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return; }
+        r.sequence = s.accepted.load() + 1; CopyDropCounts(r, s);
         s.queue.push_back(std::move(r)); ++s.accepted; lock.unlock(); s.wake.notify_one();
-    } catch (...) { ++s.dropped; }
+    } catch (...) { drop(s.droppedAllocation); }
 }
 }
 std::string Sanitize(std::string_view input, size_t limit) {
@@ -336,7 +438,9 @@ bool Start(const Config &config) noexcept {
         if (config.directory.empty() || config.sessionId.empty() || !config.queueCapacity || config.queueCapacity > 65536 || config.maxFiles < 1 || config.maxFiles > 16 || config.maxFileBytes < 65536) return false;
         try {
             { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.clear(); s.stage.clear(); s.stopping = false; }
-            s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0; s.verbose = config.verbose;
+            s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0;
+            s.droppedContention = 0; s.droppedFull = 0; s.droppedAllocation = 0; s.droppedDisk = 0;
+            s.criticalDropped = 0; s.snapshotErrors = 0; s.snapshotEvictions = 0; s.verbose = config.verbose;
             s.producers.store(0, std::memory_order_release);
             s.worker = std::thread([&s] { Run(s); });
             return true;
@@ -401,5 +505,7 @@ void Stage(std::string_view stage) noexcept {
     Enqueue(s, "lifecycle", "STAGE_COMPLETED", {{"stage", stage}}, "INFO", &stage);
 }
 std::string LastStage() { auto &s = Get(); std::lock_guard lock(s.mutex); return s.stage; }
-Statistics Stats() noexcept { auto &s = Get(); return {s.accepted.load(), s.dropped.load(), s.written.load(), s.diskErrors.load()}; }
+Statistics Stats() noexcept { auto &s = Get(); return {s.accepted.load(), s.dropped.load(), s.written.load(), s.diskErrors.load(),
+    s.droppedContention.load(), s.droppedFull.load(), s.droppedAllocation.load(), s.droppedDisk.load(),
+    s.criticalDropped.load(), s.snapshotErrors.load(), s.snapshotEvictions.load()}; }
 }

@@ -1,5 +1,9 @@
 # Diagnostics v1 validation and owner checks
 
+See [integrated candidate validation and current environment limits](diagnostics-candidate-validation.md)
+for the startup repair, required lifecycle tests and hardware-qualified CI.
+Each changed APK requires its own source-bound build and runtime evidence.
+
 The authoritative binary identity is `build-identity.json` beside the Debug APK.
 It contains the full source commit, APK/ARM64 ELF SHA-256 values, application ID,
 ABI, JVM test totals and verification of the release emulation-process manifest.

@@ -109,8 +109,11 @@ jobs:
           path: app/build/reports/tests/
   optimized-runtime:
     needs: optimized-apk
-    runs-on: macos-15-intel
+    runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      PINE_CI_REQUIRE_ACCELERATION: '1'
+      PINE_DIAGNOSTICS_OWNED_AVD_PROFILE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -157,5 +160,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diagnostics-O2-macos-runtime-${{ github.sha }}
+          name: diagnostics-O2-qualified-runtime-${{ github.sha }}
           path: runtime-evidence/

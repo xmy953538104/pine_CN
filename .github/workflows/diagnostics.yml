@@ -25,6 +25,8 @@ jobs:
           python3 tools/tests/test-apk-signer.py
           python3 tools/tests/test-native-symbols.py
           python3 tools/tests/test-android-smoke-deadlines.py
+          python3 tools/tests/test-owned-ci-avd-profile.py
+          python3 tools/tests/test-android-host-qualification.py
           python3 tools/tests/test-android-first-boot.py
           python3 tools/tests/test-android-startup-probe.py
       - name: Pinned VMA allocation contract regression
@@ -151,15 +153,18 @@ jobs:
     name: Android runtime attempt (${{ matrix.runner }})
     needs: debug-apk
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
-    # Standard runners are free for this public repository. Intel macOS offers
-    # an independent official Hypervisor.Framework probe without changing KVM
-    # permissions on Linux. ARM macOS hosted runners do not support nesting.
+    # Qualify actual hardware acceleration first. Retained macOS attempts had
+    # severe system-app/attach failures; repeating that matrix is not reliable
+    # acceptance. Linux must not silently fall back when KVM access is denied.
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-15-intel]
+        runner: [ubuntu-latest]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      PINE_CI_REQUIRE_ACCELERATION: '1'
+      PINE_DIAGNOSTICS_OWNED_AVD_PROFILE: '1'
     steps:
       - uses: actions/checkout@v4
         with:

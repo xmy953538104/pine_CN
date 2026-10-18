@@ -1,0 +1,613 @@
+{
+  "schema": "pine.content-metadata-handoff.v1",
+  "data_kind": "synthetic_example",
+  "container": {
+    "report_id": "synthetic-container",
+    "enumeration": {
+      "state": "observed",
+      "value": "complete",
+      "observation_id": "container-enumeration"
+    },
+    "unreadable_metadata": []
+  },
+  "observations": [
+    {
+      "observation_id": "container-enumeration",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "synthetic-container",
+      "scope": "raw_container",
+      "method": "directory_enumeration",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "meta-nca-header",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "meta-nca",
+      "scope": "raw_nca",
+      "method": "header_fields",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "meta-nca-hash",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "meta-nca",
+      "scope": "raw_nca",
+      "method": "full_raw_sha256",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "program-nca-a-header",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "program-nca-a",
+      "scope": "raw_nca",
+      "method": "header_fields",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "program-nca-a-hash",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "program-nca-a",
+      "scope": "raw_nca",
+      "method": "full_raw_sha256",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "program-nca-b-header",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "program-nca-b",
+      "scope": "raw_nca",
+      "method": "header_fields",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "program-nca-b-hash",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "program-nca-b",
+      "scope": "raw_nca",
+      "method": "full_raw_sha256",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "aoc-meta-nca-header",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "aoc-meta-nca",
+      "scope": "raw_nca",
+      "method": "header_fields",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "aoc-meta-nca-hash",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "aoc-meta-nca",
+      "scope": "raw_nca",
+      "method": "full_raw_sha256",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "aoc-data-nca-header",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "aoc-data-nca",
+      "scope": "raw_nca",
+      "method": "header_fields",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "aoc-data-nca-hash",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "aoc-data-nca",
+      "scope": "raw_nca",
+      "method": "full_raw_sha256",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "application-cnmt-decode",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "application-cnmt",
+      "scope": "cnmt",
+      "method": "cnmt_decode",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    },
+    {
+      "observation_id": "aoc-cnmt-decode",
+      "container_report_id": "synthetic-container",
+      "subject_report_id": "aoc-cnmt",
+      "scope": "cnmt",
+      "method": "cnmt_decode",
+      "state": "observed",
+      "source_tool": "synthetic-fixture-generator",
+      "tool_revision": "v1"
+    }
+  ],
+  "ncas": [
+    {
+      "report_id": "meta-nca",
+      "container_report_id": "synthetic-container",
+      "discovery": {
+        "state": "observed",
+        "value": "discovered",
+        "observation_id": "meta-nca-header"
+      },
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "meta-nca-header"
+      },
+      "nca_type": {
+        "state": "observed",
+        "value": 1,
+        "observation_id": "meta-nca-header"
+      },
+      "program_id": {
+        "state": "observed",
+        "value": "010000000000A000",
+        "observation_id": "meta-nca-header"
+      },
+      "raw_size": {
+        "state": "observed",
+        "value": 4096,
+        "observation_id": "meta-nca-header"
+      },
+      "raw_sha256": {
+        "state": "observed",
+        "value": "1111111111111111111111111111111111111111111111111111111111111111",
+        "observation_id": "meta-nca-hash"
+      },
+      "requires_base": {
+        "state": "unknown",
+        "value": null
+      },
+      "section_crypto": {
+        "state": "observed",
+        "value": "CTR",
+        "observation_id": "meta-nca-header"
+      },
+      "exefs_present": {
+        "state": "observed",
+        "value": false,
+        "observation_id": "meta-nca-header"
+      }
+    },
+    {
+      "report_id": "program-nca-a",
+      "container_report_id": "synthetic-container",
+      "discovery": {
+        "state": "observed",
+        "value": "discovered",
+        "observation_id": "program-nca-a-header"
+      },
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "program-nca-a-header"
+      },
+      "nca_type": {
+        "state": "observed",
+        "value": 0,
+        "observation_id": "program-nca-a-header"
+      },
+      "program_id": {
+        "state": "observed",
+        "value": "010000000000A000",
+        "observation_id": "program-nca-a-header"
+      },
+      "raw_size": {
+        "state": "observed",
+        "value": 8192,
+        "observation_id": "program-nca-a-header"
+      },
+      "raw_sha256": {
+        "state": "observed",
+        "value": "2222222222222222222222222222222222222222222222222222222222222222",
+        "observation_id": "program-nca-a-hash"
+      },
+      "requires_base": {
+        "state": "unknown",
+        "value": null
+      },
+      "section_crypto": {
+        "state": "observed",
+        "value": "CTR",
+        "observation_id": "program-nca-a-header"
+      },
+      "exefs_present": {
+        "state": "observed",
+        "value": true,
+        "observation_id": "program-nca-a-header"
+      }
+    },
+    {
+      "report_id": "program-nca-b",
+      "container_report_id": "synthetic-container",
+      "discovery": {
+        "state": "observed",
+        "value": "discovered",
+        "observation_id": "program-nca-b-header"
+      },
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "program-nca-b-header"
+      },
+      "nca_type": {
+        "state": "observed",
+        "value": 0,
+        "observation_id": "program-nca-b-header"
+      },
+      "program_id": {
+        "state": "observed",
+        "value": "010000000000A001",
+        "observation_id": "program-nca-b-header"
+      },
+      "raw_size": {
+        "state": "observed",
+        "value": 12288,
+        "observation_id": "program-nca-b-header"
+      },
+      "raw_sha256": {
+        "state": "observed",
+        "value": "3333333333333333333333333333333333333333333333333333333333333333",
+        "observation_id": "program-nca-b-hash"
+      },
+      "requires_base": {
+        "state": "unknown",
+        "value": null
+      },
+      "section_crypto": {
+        "state": "observed",
+        "value": "CTR",
+        "observation_id": "program-nca-b-header"
+      },
+      "exefs_present": {
+        "state": "observed",
+        "value": true,
+        "observation_id": "program-nca-b-header"
+      }
+    },
+    {
+      "report_id": "aoc-meta-nca",
+      "container_report_id": "synthetic-container",
+      "discovery": {
+        "state": "observed",
+        "value": "discovered",
+        "observation_id": "aoc-meta-nca-header"
+      },
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "aoc-meta-nca-header"
+      },
+      "nca_type": {
+        "state": "observed",
+        "value": 1,
+        "observation_id": "aoc-meta-nca-header"
+      },
+      "program_id": {
+        "state": "observed",
+        "value": "010000000000B001",
+        "observation_id": "aoc-meta-nca-header"
+      },
+      "raw_size": {
+        "state": "observed",
+        "value": 4096,
+        "observation_id": "aoc-meta-nca-header"
+      },
+      "raw_sha256": {
+        "state": "observed",
+        "value": "4444444444444444444444444444444444444444444444444444444444444444",
+        "observation_id": "aoc-meta-nca-hash"
+      },
+      "requires_base": {
+        "state": "unknown",
+        "value": null
+      },
+      "section_crypto": {
+        "state": "observed",
+        "value": "CTR",
+        "observation_id": "aoc-meta-nca-header"
+      },
+      "exefs_present": {
+        "state": "observed",
+        "value": false,
+        "observation_id": "aoc-meta-nca-header"
+      }
+    },
+    {
+      "report_id": "aoc-data-nca",
+      "container_report_id": "synthetic-container",
+      "discovery": {
+        "state": "observed",
+        "value": "discovered",
+        "observation_id": "aoc-data-nca-header"
+      },
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "aoc-data-nca-header"
+      },
+      "nca_type": {
+        "state": "observed",
+        "value": 5,
+        "observation_id": "aoc-data-nca-header"
+      },
+      "program_id": {
+        "state": "observed",
+        "value": "010000000000B001",
+        "observation_id": "aoc-data-nca-header"
+      },
+      "raw_size": {
+        "state": "observed",
+        "value": 16384,
+        "observation_id": "aoc-data-nca-header"
+      },
+      "raw_sha256": {
+        "state": "observed",
+        "value": "5555555555555555555555555555555555555555555555555555555555555555",
+        "observation_id": "aoc-data-nca-hash"
+      },
+      "requires_base": {
+        "state": "unknown",
+        "value": null
+      },
+      "section_crypto": {
+        "state": "observed",
+        "value": "CTR",
+        "observation_id": "aoc-data-nca-header"
+      },
+      "exefs_present": {
+        "state": "observed",
+        "value": false,
+        "observation_id": "aoc-data-nca-header"
+      }
+    }
+  ],
+  "cnmts": [
+    {
+      "report_id": "application-cnmt",
+      "container_report_id": "synthetic-container",
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "application-cnmt-decode"
+      },
+      "meta_nca_report_id": {
+        "state": "observed",
+        "value": "meta-nca",
+        "observation_id": "application-cnmt-decode"
+      },
+      "role": {
+        "state": "observed",
+        "value": "Application",
+        "observation_id": "application-cnmt-decode"
+      },
+      "title_id": {
+        "state": "observed",
+        "value": "010000000000A000",
+        "observation_id": "application-cnmt-decode"
+      },
+      "version": {
+        "state": "observed",
+        "value": 1,
+        "observation_id": "application-cnmt-decode"
+      },
+      "contents": [
+        {
+          "report_id": "application-cnmt-content-0",
+          "container_report_id": "synthetic-container",
+          "nca_report_id": {
+            "state": "observed",
+            "value": "program-nca-a",
+            "observation_id": "application-cnmt-decode"
+          },
+          "content_type": {
+            "state": "observed",
+            "value": 1,
+            "observation_id": "application-cnmt-decode"
+          },
+          "content_id": {
+            "state": "observed",
+            "value": "A0000000000000000000000000000000",
+            "observation_id": "application-cnmt-decode"
+          },
+          "expected_raw_sha256": {
+            "state": "observed",
+            "value": "2222222222222222222222222222222222222222222222222222222222222222",
+            "observation_id": "application-cnmt-decode"
+          },
+          "expected_raw_size": {
+            "state": "observed",
+            "value": 8192,
+            "observation_id": "application-cnmt-decode"
+          },
+          "raw_size_bytes": {
+            "state": "observed",
+            "value": "002000000000",
+            "observation_id": "application-cnmt-decode"
+          },
+          "size_profile": {
+            "state": "observed",
+            "value": "modern-40",
+            "observation_id": "application-cnmt-decode"
+          },
+          "id_offset": {
+            "state": "observed",
+            "value": 0,
+            "observation_id": "application-cnmt-decode"
+          },
+          "program_index": {
+            "state": "observed",
+            "value": 0,
+            "observation_id": "application-cnmt-decode"
+          },
+          "program_index_basis": {
+            "state": "observed",
+            "value": "cnmt_id_offset",
+            "observation_id": "application-cnmt-decode"
+          }
+        },
+        {
+          "report_id": "application-cnmt-content-1",
+          "container_report_id": "synthetic-container",
+          "nca_report_id": {
+            "state": "observed",
+            "value": "program-nca-b",
+            "observation_id": "application-cnmt-decode"
+          },
+          "content_type": {
+            "state": "observed",
+            "value": 1,
+            "observation_id": "application-cnmt-decode"
+          },
+          "content_id": {
+            "state": "observed",
+            "value": "A1000000000000000000000000000000",
+            "observation_id": "application-cnmt-decode"
+          },
+          "expected_raw_sha256": {
+            "state": "observed",
+            "value": "3333333333333333333333333333333333333333333333333333333333333333",
+            "observation_id": "application-cnmt-decode"
+          },
+          "expected_raw_size": {
+            "state": "observed",
+            "value": 12288,
+            "observation_id": "application-cnmt-decode"
+          },
+          "raw_size_bytes": {
+            "state": "observed",
+            "value": "003000000000",
+            "observation_id": "application-cnmt-decode"
+          },
+          "size_profile": {
+            "state": "observed",
+            "value": "modern-40",
+            "observation_id": "application-cnmt-decode"
+          },
+          "id_offset": {
+            "state": "observed",
+            "value": 1,
+            "observation_id": "application-cnmt-decode"
+          },
+          "program_index": {
+            "state": "observed",
+            "value": 1,
+            "observation_id": "application-cnmt-decode"
+          },
+          "program_index_basis": {
+            "state": "observed",
+            "value": "cnmt_id_offset",
+            "observation_id": "application-cnmt-decode"
+          }
+        }
+      ]
+    },
+    {
+      "report_id": "aoc-cnmt",
+      "container_report_id": "synthetic-container",
+      "readability": {
+        "state": "observed",
+        "value": "readable",
+        "observation_id": "aoc-cnmt-decode"
+      },
+      "meta_nca_report_id": {
+        "state": "observed",
+        "value": "aoc-meta-nca",
+        "observation_id": "aoc-cnmt-decode"
+      },
+      "role": {
+        "state": "observed",
+        "value": "AddOnContent",
+        "observation_id": "aoc-cnmt-decode"
+      },
+      "title_id": {
+        "state": "observed",
+        "value": "010000000000B001",
+        "observation_id": "aoc-cnmt-decode"
+      },
+      "version": {
+        "state": "observed",
+        "value": 1,
+        "observation_id": "aoc-cnmt-decode"
+      },
+      "contents": [
+        {
+          "report_id": "aoc-cnmt-content-0",
+          "container_report_id": "synthetic-container",
+          "nca_report_id": {
+            "state": "observed",
+            "value": "aoc-data-nca",
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "content_type": {
+            "state": "observed",
+            "value": 2,
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "content_id": {
+            "state": "observed",
+            "value": "B0000000000000000000000000000000",
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "expected_raw_sha256": {
+            "state": "observed",
+            "value": "5555555555555555555555555555555555555555555555555555555555555555",
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "expected_raw_size": {
+            "state": "observed",
+            "value": 16384,
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "raw_size_bytes": {
+            "state": "observed",
+            "value": "004000000000",
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "size_profile": {
+            "state": "observed",
+            "value": "modern-40",
+            "observation_id": "aoc-cnmt-decode"
+          },
+          "id_offset": {
+            "state": "observed",
+            "value": 0,
+            "observation_id": "aoc-cnmt-decode"
+          }
+        }
+      ],
+      "application_parent": {
+        "state": "observed",
+        "value": "010000000000A000",
+        "observation_id": "aoc-cnmt-decode"
+      },
+      "application_parent_report_id": {
+        "state": "observed",
+        "value": "application-cnmt",
+        "observation_id": "aoc-cnmt-decode"
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "pine.content-metadata-handoff.v1",
+  "data_kind": "unknown_template",
+  "container": {
+    "report_id": "container-1",
+    "enumeration": {
+      "state": "unknown",
+      "value": null
+    },
+    "unreadable_metadata": []
+  },
+  "observations": [],
+  "ncas": [],
+  "cnmts": []
+}

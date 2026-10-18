@@ -1,0 +1,1874 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pine:content-metadata-handoff:v1",
+  "title": "Minimal nonsensitive content metadata INPUT v1",
+  "description": "Metadata assertions only; no file bytes, authentication, runtime selection, paths, logs or keys. Omitted facts are unknown.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "data_kind",
+    "container",
+    "observations",
+    "ncas",
+    "cnmts"
+  ],
+  "properties": {
+    "schema": {
+      "const": "pine.content-metadata-handoff.v1"
+    },
+    "data_kind": {
+      "enum": [
+        "synthetic_example",
+        "unknown_template",
+        "owner_metadata"
+      ]
+    },
+    "container": {
+      "$ref": "#/$defs/container"
+    },
+    "observations": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/observation"
+      }
+    },
+    "ncas": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/nca"
+      }
+    },
+    "cnmts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/cnmt"
+      }
+    }
+  },
+  "$defs": {
+    "idFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "hex16Fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{16}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{16}$"
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "hex32Fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{32}$"
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sha256Fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{64}$"
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "raw6Fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{12}$"
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "byteFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "uintFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "versionFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "boolFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "boolean"
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "enumerationFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "complete",
+                "partial"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "discoveryFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "discovered",
+                "not_inspected"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "discovered",
+                  "not_inspected"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "readabilityFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "readable",
+                "partial",
+                "unreadable",
+                "unsupported",
+                "not_inspected"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "readable",
+                  "partial",
+                  "unreadable",
+                  "unsupported",
+                  "not_inspected"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cryptoFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "CTR",
+                "BKTR",
+                "mixed",
+                "unsupported"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "none",
+                  "CTR",
+                  "BKTR",
+                  "mixed",
+                  "unsupported"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "roleFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "Application",
+                "Patch",
+                "AddOnContent",
+                "Delta",
+                "DataPatch",
+                "SystemProgram",
+                "SystemData",
+                "SystemUpdate",
+                "BootImagePackage",
+                "BootImagePackageSafe"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "Application",
+                  "Patch",
+                  "AddOnContent",
+                  "Delta",
+                  "DataPatch",
+                  "SystemProgram",
+                  "SystemData",
+                  "SystemUpdate",
+                  "BootImagePackage",
+                  "BootImagePackageSafe"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "profileFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "legacy-48",
+                "modern-40"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "legacy-48",
+                  "modern-40"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "indexBasisFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "cnmt_id_offset"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "cnmt_id_offset"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "runtimeFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_tested",
+                "started",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "enum": [
+                  "not_tested",
+                  "started",
+                  "failed"
+                ]
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "container_report_id",
+        "subject_report_id",
+        "scope",
+        "method",
+        "state",
+        "source_tool",
+        "tool_revision"
+      ],
+      "properties": {
+        "observation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "container_report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "subject_report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "scope": {
+          "enum": [
+            "raw_container",
+            "raw_nca",
+            "cnmt",
+            "filename_hint",
+            "runtime"
+          ]
+        },
+        "method": {
+          "enum": [
+            "directory_enumeration",
+            "header_fields",
+            "full_raw_sha256",
+            "raw_size",
+            "cnmt_decode",
+            "filename_content_id",
+            "runtime_observation",
+            "provided_report"
+          ]
+        },
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "source_tool": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "unreadableFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "value"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "observed",
+            "reported",
+            "unknown"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "nca_report_id",
+                "cnmt_report_id",
+                "reason"
+              ],
+              "properties": {
+                "nca_report_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                      "maxLength": 64
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cnmt_report_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                      "maxLength": 64
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "enum": [
+                    "encrypted",
+                    "unreadable",
+                    "unsupported",
+                    "not_inspected",
+                    "unclassified_candidate"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "observation_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "observation_id"
+            ],
+            "properties": {
+              "value": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "nca_report_id",
+                  "cnmt_report_id",
+                  "reason"
+                ],
+                "properties": {
+                  "nca_report_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "cnmt_report_id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "enum": [
+                      "encrypted",
+                      "unreadable",
+                      "unsupported",
+                      "not_inspected",
+                      "unclassified_candidate"
+                    ]
+                  }
+                }
+              },
+              "observation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+                "maxLength": 64
+              }
+            }
+          }
+        }
+      ]
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_id"
+      ],
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "enumeration": {
+          "$ref": "#/$defs/enumerationFact"
+        },
+        "raw_size": {
+          "$ref": "#/$defs/uintFact"
+        },
+        "raw_sha256": {
+          "$ref": "#/$defs/sha256Fact"
+        },
+        "runtime_report": {
+          "$ref": "#/$defs/runtimeFact"
+        },
+        "unreadable_metadata": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/unreadableFact"
+          }
+        }
+      }
+    },
+    "nca": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_id",
+        "container_report_id"
+      ],
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "container_report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "discovery": {
+          "$ref": "#/$defs/discoveryFact"
+        },
+        "readability": {
+          "$ref": "#/$defs/readabilityFact"
+        },
+        "nca_type": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "program_id": {
+          "$ref": "#/$defs/hex16Fact"
+        },
+        "raw_size": {
+          "$ref": "#/$defs/uintFact"
+        },
+        "raw_sha256": {
+          "$ref": "#/$defs/sha256Fact"
+        },
+        "filename_content_id_hint": {
+          "$ref": "#/$defs/hex32Fact"
+        },
+        "requires_base": {
+          "$ref": "#/$defs/boolFact"
+        },
+        "section_crypto": {
+          "$ref": "#/$defs/cryptoFact"
+        },
+        "exefs_present": {
+          "$ref": "#/$defs/boolFact"
+        },
+        "romfs_present": {
+          "$ref": "#/$defs/boolFact"
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_id",
+        "container_report_id"
+      ],
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "container_report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "nca_report_id": {
+          "$ref": "#/$defs/idFact"
+        },
+        "content_type": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "content_id": {
+          "$ref": "#/$defs/hex32Fact"
+        },
+        "expected_raw_sha256": {
+          "$ref": "#/$defs/sha256Fact"
+        },
+        "expected_raw_size": {
+          "$ref": "#/$defs/uintFact"
+        },
+        "raw_size_bytes": {
+          "$ref": "#/$defs/raw6Fact"
+        },
+        "size_profile": {
+          "$ref": "#/$defs/profileFact"
+        },
+        "content_attributes": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "id_offset": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "program_index": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "program_index_basis": {
+          "$ref": "#/$defs/indexBasisFact"
+        }
+      }
+    },
+    "cnmt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_id",
+        "container_report_id"
+      ],
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "container_report_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "maxLength": 64
+        },
+        "readability": {
+          "$ref": "#/$defs/readabilityFact"
+        },
+        "meta_nca_report_id": {
+          "$ref": "#/$defs/idFact"
+        },
+        "role": {
+          "$ref": "#/$defs/roleFact"
+        },
+        "title_id": {
+          "$ref": "#/$defs/hex16Fact"
+        },
+        "version": {
+          "$ref": "#/$defs/versionFact"
+        },
+        "application_parent": {
+          "$ref": "#/$defs/hex16Fact"
+        },
+        "application_parent_report_id": {
+          "$ref": "#/$defs/idFact"
+        },
+        "patch_id": {
+          "$ref": "#/$defs/hex16Fact"
+        },
+        "data_id": {
+          "$ref": "#/$defs/hex16Fact"
+        },
+        "storage_id": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "install_type": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "committed_raw": {
+          "$ref": "#/$defs/byteFact"
+        },
+        "committed": {
+          "$ref": "#/$defs/boolFact"
+        },
+        "contents": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/content"
+          }
+        }
+      }
+    }
+  }
+}

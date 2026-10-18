@@ -1,0 +1,59 @@
+name: Content metadata handoff
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - tools/content-handoff/**
+      - tools/validate-content-handoff.py
+      - tools/tests/test-content-handoff.py
+      - docs/content-metadata-handoff-v1.md
+      - .github/workflows/content-metadata-handoff.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - tools/content-handoff/**
+      - tools/validate-content-handoff.py
+      - tools/tests/test-content-handoff.py
+      - docs/content-metadata-handoff-v1.md
+      - .github/workflows/content-metadata-handoff.yml
+permissions:
+  contents: read
+jobs:
+  synthetic-input-contract:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Required schema dependency
+        run: python3 -m pip install --disable-pip-version-check 'jsonschema==4.25.1'
+      - name: Exact source and only synthetic inputs
+        run: |
+          mkdir -p handoff-evidence
+          git rev-parse HEAD > handoff-evidence/source-commit.txt
+          python3 -c 'import os,pathlib; assert pathlib.Path("handoff-evidence/source-commit.txt").read_text().strip() == os.environ["EXPECTED_SOURCE_COMMIT"]'
+          cp tools/content-handoff/*.json handoff-evidence/
+      - name: Mandatory schemas, unknowns, links and privacy tests
+        run: |
+          set -o pipefail
+          python3 tools/tests/test-content-handoff.py 2>&1 | tee handoff-evidence/test-log.txt
+      - name: Validate synthetic and unknown reports independently
+        run: |
+          python3 tools/validate-content-handoff.py tools/content-handoff/example.json > handoff-evidence/synthetic-validation.json
+          python3 tools/validate-content-handoff.py tools/content-handoff/unknown-template.json > handoff-evidence/unknown-validation.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: content-metadata-handoff-${{ github.event.pull_request.head.sha || github.sha }}
+          path: handoff-evidence/
+          if-no-files-found: error
+          retention-days: 14

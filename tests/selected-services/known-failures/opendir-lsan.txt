@@ -1,0 +1,18 @@
+KNOWN FAILURE: public synthetic unmatched DataID calls, diagnostics off.
+Production source commit: a901a470feddb55f6ff2e847931707b7aaa46c81
+Original runner input SHA256: 2f054ede82958f74af54649ab94190e2ed2f148f9ff60061b6a80317d63051a4
+Harness input SHA256: c4d3d4375834798b28a1e6465b9af9cc04aef26b9206d5de8ded9f1d2d221711
+Instrumented binary SHA256: 2e94fc8fc3952e32ef4890cf580b6123519fcbcf512a038f235f3214a0631a78
+Observed exit status: 1 (not a passing test). ASan leak detection enabled.
+Three fixtures each invoke the real OpenDirectoryImpl twice. No production fix.
+The libc-only fast-unwind stack is preserved below; final suppression requires
+slow-unwind symbolization of the exact source-guarded production method.
+
+=================================================================
+==22281==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 196896 byte(s) in 6 object(s) allocated from:
+    #0 0x7fe07ec3ac57 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x7fe07da5c704  (/lib/x86_64-linux-gnu/libc.so.6+0xdc704) (BuildId: 5e5b51f4c39af9ac589408c1dc432ba390a273cc)
+
+SUMMARY: AddressSanitizer: 196896 byte(s) leaked in 6 allocation(s).

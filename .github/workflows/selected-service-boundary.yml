@@ -1,0 +1,99 @@
+name: Selected real IPC service boundary
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'app/src/main/cpp/skyline/catalog/**'
+      - 'app/src/main/cpp/skyline/loader/**'
+      - 'app/src/main/cpp/skyline/vfs/**'
+      - 'app/src/main/cpp/skyline/crypto/**'
+      - 'app/src/main/cpp/skyline/common*'
+      - 'app/src/main/cpp/skyline/common/**'
+      - 'app/src/main/cpp/skyline/kernel/ipc.*'
+      - 'app/src/main/cpp/skyline/kernel/types/K*.h'
+      - 'app/src/main/cpp/skyline/services/**'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/libraries/boost'
+      - 'app/libraries/fmt'
+      - 'app/libraries/frozen'
+      - 'app/libraries/xxhash'
+      - 'app/libraries/mbedtls'
+      - 'app/libraries/lz4'
+      - '.gitmodules'
+      - 'tests/selected-services/**'
+      - 'tests/selected/fixtures.h'
+      - 'tests/catalog/native_aes_config.h'
+      - 'tools/run-selected-service-boundary.py'
+      - 'docs/selected-service-boundary-v1.md'
+      - '.github/workflows/selected-service-boundary.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'app/src/main/cpp/skyline/catalog/**'
+      - 'app/src/main/cpp/skyline/loader/**'
+      - 'app/src/main/cpp/skyline/vfs/**'
+      - 'app/src/main/cpp/skyline/crypto/**'
+      - 'app/src/main/cpp/skyline/common*'
+      - 'app/src/main/cpp/skyline/common/**'
+      - 'app/src/main/cpp/skyline/kernel/ipc.*'
+      - 'app/src/main/cpp/skyline/kernel/types/K*.h'
+      - 'app/src/main/cpp/skyline/services/**'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/libraries/boost'
+      - 'app/libraries/fmt'
+      - 'app/libraries/frozen'
+      - 'app/libraries/xxhash'
+      - 'app/libraries/mbedtls'
+      - 'app/libraries/lz4'
+      - '.gitmodules'
+      - 'tests/selected-services/**'
+      - 'tests/selected/fixtures.h'
+      - 'tests/catalog/native_aes_config.h'
+      - 'tools/run-selected-service-boundary.py'
+      - 'docs/selected-service-boundary-v1.md'
+      - '.github/workflows/selected-service-boundary.yml'
+permissions:
+  contents: read
+concurrency:
+  group: selected-services-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  positive-real-ipc:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Required pinned source dependencies
+        run: |
+          git submodule update --init --depth 1 app/libraries/boost app/libraries/fmt app/libraries/frozen app/libraries/xxhash app/libraries/mbedtls app/libraries/lz4
+          git -C app/libraries/boost submodule update --init --depth 1 libs/assert libs/config libs/container libs/intrusive libs/move libs/static_assert
+          clang++ --version
+          pkg-config --modversion openssl
+          mkdir -p "$RUNNER_TEMP/selected-service-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/selected-service-evidence/source-commit.txt"
+          git status --porcelain > "$RUNNER_TEMP/selected-service-evidence/source-status.txt"
+      - name: Required positive actual IPC and services with production AES and sanitizers
+        env:
+          CXX: clang++
+          CC: clang
+        run: |
+          set -o pipefail
+          python3 tools/run-selected-service-boundary.py --sanitize --evidence-dir "$RUNNER_TEMP/selected-service-evidence/positive" 2>&1 | tee "$RUNNER_TEMP/selected-service-evidence/positive.txt"
+      - name: Evidence hashes
+        if: always()
+        run: |
+          find "$RUNNER_TEMP/selected-service-evidence" -type f ! -name artifact-sha256.txt -print0 | sort -z | xargs -0 sha256sum > "$RUNNER_TEMP/selected-service-evidence/artifact-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-real-ipc-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/selected-service-evidence/
+          if-no-files-found: error

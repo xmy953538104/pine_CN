@@ -1,0 +1,3 @@
+# ONLY the unchanged, SHA-guarded legacy method that leaks its existence-check DIR.
+# No general opendir/libc suppression. All other allocation stacks remain checked.
+leak:^skyline::vfs::OsFileSystem::OpenDirectoryImpl(

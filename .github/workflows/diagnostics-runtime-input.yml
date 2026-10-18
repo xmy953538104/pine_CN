@@ -1,0 +1,89 @@
+name: Diagnostics existing APK observer
+on:
+  workflow_dispatch:
+    inputs:
+      apk_source_commit: {description: Full source SHA of the existing APK, required: true, type: string}
+      apk_sha256: {description: Exact existing APK byte SHA256, required: true, type: string}
+      run_id: {description: Successful trusted APK producer run ID, required: true, type: string}
+      artifact_id: {description: Existing APK artifact ID from that run, required: true, type: string}
+      run_runtime: {description: Explicit attempt after an authorized host is qualified, type: boolean, default: false}
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  # Retain independent runtime evidence. Unrelated labels use a different group.
+  group: diagnostics-reuse-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  existing-apk:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'verify-existing-apk' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PINE_CI_REQUIRE_ACCELERATION: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Bind immutable producer run/artifact/APK and observer sources
+        id: input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_SOURCE_COMMIT: ${{ inputs.apk_source_commit }}
+          APK_SHA256: ${{ inputs.apk_sha256 }}
+          APK_RUN_ID: ${{ inputs.run_id }}
+          APK_ARTIFACT_ID: ${{ inputs.artifact_id }}
+        run: |
+          if [[ '${{ github.event_name }}' == pull_request ]]; then
+            python3 tools/ci/runtime-input.py metadata --request tools/ci/runtime-input.json --output reuse-evidence/input-binding.json --github-output "$GITHUB_OUTPUT"
+          else
+            python3 tools/ci/runtime-input.py metadata --output reuse-evidence/input-binding.json --github-output "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.input.outputs.run_id }}
+          name: ${{ steps.input.outputs.artifact_name }}
+          path: existing-apk
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'build-tools;35.0.0'
+      - name: Verify original APK bytes, DEX/ELF source, ABI and existing public signer
+        run: |
+          python3 tools/ci/runtime-input.py verify --directory existing-apk --binding reuse-evidence/input-binding.json \
+            --apksigner "$ANDROID_HOME/build-tools/35.0.0/apksigner" --aapt "$ANDROID_HOME/build-tools/35.0.0/aapt"
+      - name: Official runtime tools only on explicit request
+        if: github.event_name == 'workflow_dispatch' && inputs.run_runtime
+        run: sdkmanager emulator 'system-images;android-35;google_apis;x86_64'
+      - name: Existing APK through current observer; no Gradle/native/signing build
+        if: github.event_name == 'workflow_dispatch' && inputs.run_runtime
+        run: bash tools/tests/attempt-android-runtime.sh existing-apk/app-full-debug.apk '${{ steps.input.outputs.apk_source_commit }}' reuse-evidence/runtime
+      - name: Record separate execution outcome
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('reuse-evidence'); root.mkdir(exist_ok=True)
+          report=root/'runtime/runtime-report.json'
+          result=json.loads(report.read_text()) if report.is_file() else {'status':'not_run','apk_installed':False}
+          (root/'execution-outcome.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostics-existing-apk-evidence-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}
+          path: reuse-evidence/
+          if-no-files-found: error

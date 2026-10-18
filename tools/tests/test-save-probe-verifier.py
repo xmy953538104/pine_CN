@@ -85,7 +85,10 @@ class SaveProbeTest(unittest.TestCase):
                 for field in ("length", "hash", "nonce", "write_id", "format"):
                     self.assertEqual(layer["payload"][field]["state"], "observed_match")
                 self.assertEqual(layer["payload"]["sha256"], hashlib.sha256(self.payload).hexdigest())
-        self.assertEqual(result["evidence"]["export"]["zip"]["other_member_bodies_read"], 0)
+        access = result["evidence"]["export"]["zip"]
+        self.assertEqual(access["other_member_bodies_decoded"], 0)
+        self.assertTrue(access["unrelated_compressed_bytes_may_be_read"])
+        self.assertNotIn("other_member_bodies_read", access)
 
     def test_missing_fields_and_inputs_are_missing_evidence(self):
         self.manifest.pop("expected")
@@ -441,6 +444,68 @@ class SaveProbeTest(unittest.TestCase):
                     boundary = infos[index + 1].header_offset if index + 1 < len(infos) else directory_offset
                     self.assertEqual(probe.zip_local_metadata(guarded, info, boundary), bodies[index][0])
 
+    def test_complete_zip_reader_discloses_tail_body_reads_and_decodes_only_selected(self):
+        member = self.manifest["zip_member"]
+        original_open = probe.open_regular
+        original_decoder = probe.zlib.decompressobj
+        for unrelated_size in (17, 70000):
+            with self.subTest(unrelated_size=unrelated_size):
+                with zipfile.ZipFile(self.archive, "w", zipfile.ZIP_STORED) as archive:
+                    archive.writestr("unrelated-synthetic.bin", b"s" * unrelated_size)
+                    archive.writestr(member, self.payload, compress_type=zipfile.ZIP_DEFLATED)
+                raw = self.archive.read_bytes()
+                with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                    info = archive.getinfo("unrelated-synthetic.bin")
+                name_size, extra_size = struct.unpack_from("<2H", raw, info.header_offset + 26)
+                body_start = info.header_offset + 30 + name_size + extra_size
+                body_end = body_start + info.compress_size
+                reads = []
+
+                class TrackedStream:
+                    def __init__(self, stream):
+                        self.stream = stream
+
+                    def __getattr__(self, name):
+                        return getattr(self.stream, name)
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        self.stream.close()
+
+                    def read(self, size=-1):
+                        start = self.stream.tell()
+                        data = self.stream.read(size)
+                        reads.append((start, start + len(data)))
+                        return data
+
+                def track_open(path, limit):
+                    stream, before = original_open(path, limit)
+                    self.assertEqual(path, self.archive)
+                    return TrackedStream(stream), before
+
+                with patch.object(probe, "open_regular", side_effect=track_open), \
+                        patch.object(probe.zlib, "decompressobj", wraps=original_decoder) as decoder, \
+                        patch.object(zipfile.ZipFile, "open", side_effect=AssertionError("member reader outside explicit scope")):
+                    data, report = probe.read_zip_member(self.archive, member)
+                self.assertEqual(data, self.payload)
+                self.assertEqual(decoder.call_count, 1)
+                tail_start = max(0, len(raw) - 65557)
+                self.assertIn((tail_start, len(raw)), reads)
+                self.assertTrue(any(start < body_end and end > body_start for start, end in reads))
+                self.assertTrue(all(end - start <= 65557 for start, end in reads))
+                if unrelated_size == 17:
+                    self.assertIn((0, len(raw)), reads)
+                else:
+                    # The large body's prefix is skipped by metadata reads; its
+                    # suffix is still read by the independently observed tail scan.
+                    self.assertFalse(any(start < body_start + 100 and end > body_start + 100 for start, end in reads))
+                self.assertEqual(report["eocd_tail_scan_bytes"], min(len(raw), 65557))
+                self.assertEqual(report["other_member_bodies_decoded"], 0)
+                self.assertTrue(report["unrelated_compressed_bytes_may_be_read"])
+                self.assertNotIn("other_member_bodies_read", report)
+
     def test_zip_metadata_and_physical_archive_limits_precede_payload_read(self):
         self.zip()
         for field_offset, form, value in ((10, "<H", probe.MAX_ENTRIES + 1), (12, "<I", probe.MAX_CENTRAL_DIRECTORY + 1)):
@@ -544,7 +609,7 @@ class SaveProbeTest(unittest.TestCase):
         self.archive.write_bytes(raw)
         self.rejected(self.verify(), "export", "zip_descriptor_mismatch")
 
-    def test_stored_member_directories_and_unrelated_corrupt_bodies_are_not_read(self):
+    def test_stored_member_directories_and_unrelated_corrupt_bodies_are_not_crc_checked(self):
         member = self.manifest["zip_member"]
         self.zip([(member.split("/")[0] + "/", b""), (member, self.payload), ("unrelated-private.bin", b"DO NOT READ")], zipfile.ZIP_STORED)
         raw = bytearray(self.archive.read_bytes())

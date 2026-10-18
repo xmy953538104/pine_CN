@@ -80,11 +80,18 @@ arguments, or readiness timing are guessed or implemented here.
 
 ## ZIP and resource bounds
 
-No extraction or archive-wide CRC check occurs. The verifier parses ZIP metadata
-and reads/decompresses exactly the manifest's `zip_member`; unrelated member bodies
-are not processed. This permits a large private entry to remain unread, and an
-unread corrupt entry does not become an archive-wide integrity claim. Metadata may
-include unrelated names; they are not printed.
+No extraction or archive-wide CRC check occurs. The verifier decodes and checks
+the CRC of exactly the manifest's `zip_member`. It does not decode, hash, print or
+check the CRC of unrelated member bodies. Finding the ZIP end record requires a
+bounded tail scan of up to 65,557 bytes; that scan (and the standard-library ZIP
+metadata reader) can read compressed bytes belonging to unrelated members. A
+small ZIP can be read in full during this scan. This tool makes no guarantee that
+unrelated raw bytes remain unread. The report therefore records
+`other_member_bodies_decoded: 0`, `eocd_tail_scan_bytes` and
+`unrelated_compressed_bytes_may_be_read: true`; the scan count is the initial
+validation tail length, not a total I/O counter. Metadata may include unrelated
+names; they are not printed. Corrupt unrelated bodies do not imply an
+archive-wide integrity result.
 
 Limits are 64 KiB manifest, 1 KiB payload/output, 32 MiB physical ZIP, 1 MiB central
 directory, 2,048 entries, 4 KiB selected compressed bytes, and 100:1 selected ratio.
@@ -93,7 +100,9 @@ local records must use supported version 1.0 (Store without descriptor) or 2.0
 (Store/Deflate), with disk zero in each central record as well as the end record.
 Every local header, declared compressed-body range and optional descriptor must
 fit before the next local header or central directory. This metadata validation
-seeks over unrelated bodies without reading, decoding or checking their CRC.
+seeks over unrelated bodies; this local-header validation alone does not read
+their bodies. The separate end-record tail scan can overlap them as described
+above.
 Declared size, actual selected decompressor output, stream termination,
 local/central headers, descriptors, selected length and CRC are checked separately.
 ZIP64, multidisk, unsupported version/compression profiles,
@@ -102,9 +111,10 @@ Unicode-normalized/case aliases, absolute/traversal/backslash/control names,
 truncation and overlapping local-entry extents are rejected. Only ZIP Store/Deflate
 are supported, including Android-style version 2.0 streaming data descriptors. A
 metadata mismatch rejects the export even if selected bytes could otherwise match;
-unread body integrity remains unknown. Large ordinary save archives may exceed
+unrelated body integrity remains unknown. Large ordinary save archives may exceed
 these deliberate limits; the CLI never broadens its scope
-automatically. It does not read the whole ZIP to hash private entries.
+automatically. It never hashes private entries or deliberately reads the whole
+ZIP for that purpose; end-record discovery can still read an entire small ZIP.
 
 For `export.source: save_management_utils_v79a`, the declared original path is
 cross-checked against the fixed default-user subtree and the exact ZIP member.

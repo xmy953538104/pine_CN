@@ -339,7 +339,7 @@ def zip_local_metadata(stream, info, boundary):
 
 
 def read_zip_member(path, member):
-    """Read metadata and exactly one declared member; never extract or read other bodies."""
+    """Decode only the selected member; bounded ZIP tail reads may cross other bodies."""
     stream, before = open_regular(path, MAX_ZIP)
     with stream:
         count, directory_offset = zip_directory_bounds(stream, before.st_size)
@@ -411,7 +411,10 @@ def read_zip_member(path, member):
                 fail("zip_actual_length_or_crc_mismatch")
         unchanged(stream, before)
     return data, {"archive_bytes": before.st_size, "metadata_entries": count,
-                  "member_bytes": len(data), "member_sha256": sha256(data), "other_member_bodies_read": 0}
+                  "member_bytes": len(data), "member_sha256": sha256(data),
+                  "other_member_bodies_decoded": 0,
+                  "eocd_tail_scan_bytes": min(before.st_size, 65557),
+                  "unrelated_compressed_bytes_may_be_read": True}
 
 
 def compare(expected, observed, asserted=False):
@@ -609,7 +612,7 @@ def main(argv=None):
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--initial-file", type=Path, help="Explicit local dedicated probe snapshot")
     parser.add_argument("--restart-file", type=Path, help="Separate dedicated probe JSON captured from validated Get API after restart")
-    parser.add_argument("--export-zip", type=Path, help="Explicit local ZIP; reads only the exact manifest member")
+    parser.add_argument("--export-zip", type=Path, help="Explicit local ZIP; decodes only the exact manifest member; bounded tail/metadata reads may cross other bodies")
     args = parser.parse_args(argv)
     report = verify(args.manifest, args.initial_file, args.restart_file, args.export_zip)
     print(json.dumps(report, indent=2, sort_keys=True))

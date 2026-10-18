@@ -1,0 +1,8 @@
+{
+  "baseline_commit": "ad72d9665aa3e028cc4c7edf672a0ba88eb393ef",
+  "execute_prefix_sha256": "93475413a9c2d683dcf78368d22613fd094beda73a939ba711fb6ce4119f793a",
+  "execute_tail_sha256": "a8b482a903828c3d4aba9580daef7c7630ca66f6bdabdcf840fa31651afeca91",
+  "nsp_loader_sha256": "2cfd6ee3e54f9ac22f3f88c8dc65c13433f91c071250546012e9b89a05d4b3a1",
+  "aoc_manager_sha256": "c3f68f80b0b2b5e6d4824b5c01426cc868b7c237beb538dfa507d3248fe7f6b8",
+  "fs_proxy_sha256": "eb553e0b6c283714d0411615e12038dbaeeb164479b1f5139fb5084d73c86292"
+}

@@ -1,0 +1,91 @@
+name: Selected native content host checks
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'app/src/main/cpp/skyline/catalog/**'
+      - 'app/src/main/cpp/skyline/loader/**'
+      - 'app/src/main/cpp/skyline/vfs/**'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/src/main/cpp/skyline/common*'
+      - 'app/src/main/cpp/skyline/os.*'
+      - 'app/src/main/cpp/skyline/services/aocsrv/**'
+      - 'app/src/main/cpp/skyline/services/fssrv/IFileSystemProxy.*'
+      - 'app/src/main/cpp/skyline/crypto/aes_cipher.*'
+      - 'app/CMakeLists.txt'
+      - 'app/libraries/mbedtls'
+      - 'app/libraries/lz4'
+      - '.gitmodules'
+      - 'tests/selected/**'
+      - 'tests/catalog/**'
+      - 'tools/tests/test-selected-content.py'
+      - 'docs/selected-content*'
+      - 'docs/nsp-catalog-v1.schema.json'
+      - '.github/workflows/selected-content.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'app/src/main/cpp/skyline/catalog/**'
+      - 'app/src/main/cpp/skyline/loader/**'
+      - 'app/src/main/cpp/skyline/vfs/**'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/src/main/cpp/skyline/common*'
+      - 'app/src/main/cpp/skyline/os.*'
+      - 'app/src/main/cpp/skyline/services/aocsrv/**'
+      - 'app/src/main/cpp/skyline/services/fssrv/IFileSystemProxy.*'
+      - 'app/src/main/cpp/skyline/crypto/aes_cipher.*'
+      - 'app/CMakeLists.txt'
+      - 'app/libraries/mbedtls'
+      - 'app/libraries/lz4'
+      - '.gitmodules'
+      - 'tests/selected/**'
+      - 'tests/catalog/**'
+      - 'tools/tests/test-selected-content.py'
+      - 'docs/selected-content*'
+      - 'docs/nsp-catalog-v1.schema.json'
+      - '.github/workflows/selected-content.yml'
+permissions:
+  contents: read
+concurrency:
+  group: selected-content-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  selected:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Required schema validator and exact dependency pins
+        run: |
+          python3 -m pip install --disable-pip-version-check 'jsonschema==4.25.1'
+          git submodule update --init --depth 1 app/libraries/mbedtls app/libraries/lz4
+          mkdir -p "$RUNNER_TEMP/selected-content-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/selected-content-evidence/source-commit.txt"
+          git status --porcelain --untracked-files=no > "$RUNNER_TEMP/selected-content-evidence/source-status.txt"
+          git submodule status app/libraries/mbedtls app/libraries/lz4 > "$RUNNER_TEMP/selected-content-evidence/dependency-pins.txt"
+      - name: Controlled structural native objects and default source path checks
+        run: |
+          set -o pipefail
+          python3 tools/tests/test-selected-content.py --schema-check --evidence-dir "$RUNNER_TEMP/selected-content-evidence/controlled" 2>&1 | tee "$RUNNER_TEMP/selected-content-evidence/controlled.txt"
+      - name: Required production AES and LZ4 with independent synthetic encryption
+        run: |
+          set -o pipefail
+          python3 tools/tests/test-selected-content.py --real-aes --sanitize --schema-check --evidence-dir "$RUNNER_TEMP/selected-content-evidence/real-aes" 2>&1 | tee "$RUNNER_TEMP/selected-content-evidence/real-aes-sanitizer.txt"
+      - name: Evidence hashes
+        if: always()
+        run: |
+          find "$RUNNER_TEMP/selected-content-evidence" -type f ! -name artifact-sha256.txt -print0 | sort -z | xargs -0 sha256sum > "$RUNNER_TEMP/selected-content-evidence/artifact-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-content-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/selected-content-evidence/
+          if-no-files-found: error

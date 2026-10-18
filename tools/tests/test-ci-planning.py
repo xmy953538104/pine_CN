@@ -30,6 +30,17 @@ class PlanningTest(unittest.TestCase):
         self.assertTrue(all(classify(['.gitmodules']).values()))
         self.assertTrue(all(classify(['unknown-build-input']).values()))
         self.assertTrue(all(classify(['app/new-production-hook']).values()))
+        self.assertTrue(classify(['tests/diagnostics/metadata_jni_fixture.cpp'])['jvm'])
+        self.assertTrue(classify(['tools/tests/build-host-metadata-fixture.sh'])['jvm'])
+        self.assertTrue(classify(['tools/tests/ctrlc-console.c'])['windows'])
+        self.assertTrue(classify(['tools/tests/fixtures/native-sink.jsonl'])['windows'])
+
+    def test_unrelated_labels_use_unique_group_and_cannot_cancel_candidates(self):
+        text = (ROOT / '.github/workflows/diagnostics-performance.yml').read_text()
+        group = next(line for line in text.splitlines() if line.strip().startswith('group:'))
+        self.assertIn("github.event.label.name == 'apk-o2'", group)
+        self.assertIn("contains(github.event.pull_request.labels.*.name, 'ci')", group)
+        self.assertIn('|| github.run_id', group)
 
     def test_jvm_graph_rejects_build_and_signing_before_test(self):
         verify = load('verify-jvm-only').verify

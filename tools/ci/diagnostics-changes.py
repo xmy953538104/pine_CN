@@ -24,6 +24,12 @@ def classify(paths):
             result['jvm'] = True
         if name.startswith('tools/'):
             result['tools'] = True
+        if name in ('tests/diagnostics/metadata_jni_fixture.cpp', 'tools/tests/build-host-metadata-fixture.sh'):
+            result['jvm'] = True
+        if name == 'tools/tests/ctrlc-console.c' or name.startswith('tools/tests/fixtures/'):
+            result['windows'] = True
+        if name.startswith('tools/tests/fixtures/'):
+            result['jvm'] = True
         if name.endswith(('.ps1', '.cs')) or '/fake-adb' in name or name.endswith('test-ctrlc.py'):
             result['windows'] = True
         if not name.startswith(('tools/', 'tests/diagnostics/')):

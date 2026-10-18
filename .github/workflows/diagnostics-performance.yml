@@ -16,7 +16,8 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: diagnostics-candidate-${{ github.event.pull_request.number || github.ref }}
+  # An unrelated label wake-up must never cancel a running/pending candidate.
+  group: diagnostics-candidate-${{ (github.event_name == 'workflow_dispatch' || (github.event.label.name == 'apk-o2' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'ci'))) && (github.event.pull_request.number || github.ref) || github.run_id }}
   cancel-in-progress: true
 jobs:
   fast-gate:

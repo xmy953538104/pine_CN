@@ -123,6 +123,8 @@ namespace {
     }
     void RejectionPaths() {
         Input normal;
+        auto unknownMode = normal.request; unknownMode.mode = static_cast<SelectedMode>(99);
+        Reject("unknown selected mode cannot fall through to standalone Patch", "selected_mode_unsupported", [&] { PrepareSelectedContent(normal.catalog, unknownMode, Keys()); });
         auto missing = normal.request; missing.primary.programIndex.reset();
         Reject("missing Program index rejected", "selected_program_selector_missing", [&] { PrepareSelectedContent(normal.catalog, missing, Keys()); });
         auto wrong = normal.request; wrong.primary.programId = App + 1;

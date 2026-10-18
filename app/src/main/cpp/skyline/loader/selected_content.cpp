@@ -134,6 +134,7 @@ namespace skyline::loader {
     std::shared_ptr<SelectedContent> PrepareSelectedContent(const catalog::Catalog &previous, const SelectionRequest &request,
                                                           std::shared_ptr<crypto::KeyStore> providedKeys) {
         using namespace catalog;
+        Need(request.mode == SelectedMode::Application || request.mode == SelectedMode::StandaloneRebuiltPatch, "selected_mode_unsupported");
         Need(previous.source && providedKeys && request.applicationId && request.profile != ContentInfoProfile::Unknown &&
              request.profile == previous.options.profile, "selected_explicit_source_profile_and_keys_required");
         previous.CheckUnchanged();

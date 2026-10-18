@@ -6,33 +6,26 @@ import subprocess
 from pathlib import Path
 
 
+# Only these existing standalone Android observer inputs have a proven host-only
+# consumer. Everything else is conservative: run all fast suites. In particular,
+# native shell/Python checkers and JSON fixtures are transitive native inputs.
+OBSERVER_INPUTS = frozenset((
+    'tools/android-diagnostics-smoke.py', 'tools/android-startup-probe.py',
+    'tools/tests/test-android-smoke-deadlines.py', 'tools/tests/test-android-startup-probe.py',
+    'tools/tests/test-android-host-qualification.py', 'tools/tests/test-android-first-boot.py',
+    'tools/tests/test-owned-ci-avd-profile.py', 'tools/tests/configure-owned-ci-avd.py',
+    'tools/tests/wait-android-first-boot.py', 'tools/tests/attempt-android-runtime.sh',
+))
+
+
 def classify(paths):
     result = dict.fromkeys(('native', 'tools', 'windows', 'jvm'), False)
     for name in paths:
-        if not name or name.startswith('docs/') or name.endswith('.md'):
+        if not name or name.startswith('docs/') or name in ('README.md', 'LICENSE'):
             continue
-        if name.startswith(('.github/workflows/', 'tools/ci/', 'gradle/')) or name.endswith('.gradle') or name == '.gitmodules':
-            return dict.fromkeys(result, True)
-        if name.startswith('app/'):
-            return dict.fromkeys(result, True)
-        if name.startswith(('app/src/main/cpp/', 'tests/diagnostics/')) or name in (
-                'tools/tests/run-native-diagnostics.sh', 'tools/tests/run-content-diagnostics.sh',
-                'tools/tests/run-mapped-vma.sh'):
-            result['native'] = True
-        if name.startswith(('app/src/main/java/', 'app/src/main/res/', 'app/src/test/')) or name in (
-                'app/src/main/AndroidManifest.xml', 'app/proguard-rules.pro'):
-            result['jvm'] = True
-        if name.startswith('tools/'):
+        if name in OBSERVER_INPUTS:
             result['tools'] = True
-        if name in ('tests/diagnostics/metadata_jni_fixture.cpp', 'tools/tests/build-host-metadata-fixture.sh'):
-            result['jvm'] = True
-        if name == 'tools/tests/ctrlc-console.c' or name.startswith('tools/tests/fixtures/'):
-            result['windows'] = True
-        if name.startswith('tools/tests/fixtures/'):
-            result['jvm'] = True
-        if name.endswith(('.ps1', '.cs')) or '/fake-adb' in name or name.endswith('test-ctrlc.py'):
-            result['windows'] = True
-        if not name.startswith(('tools/', 'tests/diagnostics/')):
+        else:
             return dict.fromkeys(result, True)
     return result
 

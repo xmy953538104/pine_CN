@@ -8,10 +8,10 @@ on:
         default: true
   push:
     branches-ignore: [main]
-    paths-ignore: ['docs/**', '**/*.md']
+    paths-ignore: ['docs/**', 'README.md', 'LICENSE']
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore: ['docs/**', '**/*.md']
+    paths-ignore: ['docs/**', 'README.md', 'LICENSE']
 permissions:
   contents: read
 concurrency:

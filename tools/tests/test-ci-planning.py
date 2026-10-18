@@ -84,7 +84,9 @@ class PlanningTest(unittest.TestCase):
         qualify = load('require-fast-checks').qualify
         runs = [dict(id=1, name='Diagnostics fast checks', head_sha='old', conclusion='success')]
         jobs = lambda run: [dict(name=scope, id=1, conclusion='success', html_url=scope) for scope in ('native', 'tools', 'windows', 'jvm')]
-        for name in ('app/src/main/cpp/skyline/os.cpp', '.gitmodules', 'CMakeLists.txt', 'unknown-build-input'):
+        for name in ('app/src/main/cpp/skyline/os.cpp', '.gitmodules', 'CMakeLists.txt', 'unknown-build-input',
+                     'tools/tests/check-native-trace-fixture.sh', 'tools/tests/check-native-adb-fixtures.sh',
+                     'tools/tests/check-native-adb-fixtures.py', 'tools/tests/fixtures/native-trace-snapshot.jsonl'):
             with self.assertRaises(ValueError):
                 qualify(runs, 'new', jobs, lambda previous, current: [name])
 

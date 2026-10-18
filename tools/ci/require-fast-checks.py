@@ -12,11 +12,17 @@ scopes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scopes)
 
 
-def require(runs, commit, repository=None):
+def trusted(run, repository):
+    return (run.get('name') == 'Diagnostics fast checks' and
+            run.get('path') == '.github/workflows/diagnostics-fast.yml' and
+            run.get('event') in ('push', 'workflow_dispatch') and
+            run.get('head_repository', {}).get('full_name') == repository)
+
+
+def require(runs, commit, repository):
     matching = [run for run in runs if run.get('name') == 'Diagnostics fast checks'
                 and run.get('head_sha') == commit
-                and not (repository and run.get('event') == 'pull_request' and
-                         run.get('head_repository', {}).get('full_name') == repository)]
+                and trusted(run, repository)]
     latest = max(matching, key=lambda run: run['id'], default={})
     if latest.get('status') != 'completed' or latest.get('conclusion') != 'success':
         raise ValueError(f'Fast checks have not passed for exact source {commit}: {latest.get("html_url", "no run")}')
@@ -51,8 +57,7 @@ if __name__ == '__main__':
     runs = get('actions/workflows/diagnostics-fast.yml/runs?per_page=50')['workflow_runs']
     # Fork and intentionally skipped same-repository PR wake-ups are not trusted
     # build qualifications. Push/manual runs use the source branch directly.
-    runs = [run for run in runs if run.get('event') in ('push', 'workflow_dispatch')
-            and run.get('head_repository', {}).get('full_name') == repository]
+    runs = [run for run in runs if trusted(run, repository)]
     exact = require(runs, commit, repository)
     def differences(previous, current):
         if previous == current: return []

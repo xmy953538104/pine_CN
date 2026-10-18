@@ -53,12 +53,20 @@ class PlanningTest(unittest.TestCase):
 
     def test_candidate_requires_exact_latest_success(self):
         require = load('require-fast-checks').require
-        good = dict(id=1, name='Diagnostics fast checks', head_sha='a', status='completed', conclusion='success', html_url='run1')
-        self.assertEqual(require([good], 'a'), 'run1')
+        good = dict(id=1, name='Diagnostics fast checks', head_sha='a', status='completed', conclusion='success', html_url='run1',
+                    path='.github/workflows/diagnostics-fast.yml', event='push', head_repository={'full_name': 'owner/repo'})
+        self.assertEqual(require([good], 'a', 'owner/repo'), 'run1')
         for runs, commit in (([good], 'b'), ([good, dict(good, id=2, status='in_progress')], 'a'),
                              ([dict(good, conclusion='failure')], 'a')):
             with self.assertRaises(ValueError):
-                require(runs, commit)
+                require(runs, commit, 'owner/repo')
+        # A later successful partial fork PR cannot override a failed trusted
+        # push for the same source, even if GitHub assigns it a greater run ID.
+        fork = dict(good, id=2, event='pull_request', head_repository={'full_name': 'fork/repo'})
+        with self.assertRaises(ValueError):
+            require([dict(good, conclusion='failure'), fork], 'a', 'owner/repo')
+        with self.assertRaises(ValueError):
+            require([dict(good, path='.github/workflows/other.yml')], 'a', 'owner/repo')
 
     def test_observer_only_increment_reuses_unchanged_suites_with_sha_evidence(self):
         qualify = load('require-fast-checks').qualify

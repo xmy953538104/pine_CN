@@ -42,6 +42,7 @@ class VirtualRomfsTest(unittest.TestCase):
                    'app/src/main/cpp/skyline/vfs/prototype/virtual_romfs.cpp',
                    'app/src/main/cpp/skyline/vfs/rom_filesystem.cpp',
                    'app/src/main/cpp/skyline/services/fssrv/IStorage.cpp',
+                   'tests/virtual-romfs/allocation_probe.cpp',
                    'tests/virtual-romfs/virtual_romfs_test.cpp', '-o', str(cls.binary)]
         if ARGS.sanitize:
             command[1:1] = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-fno-pie', '-no-pie']

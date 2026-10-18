@@ -14,13 +14,7 @@
 #include <new>
 #include <thread>
 
-static std::atomic<size_t> allocationCount{};
-void *operator new(size_t size) { ++allocationCount; if(auto*p=std::malloc(size?size:1))return p;throw std::bad_alloc{}; }
-void operator delete(void*p)noexcept{std::free(p);}
-void operator delete(void*p,size_t)noexcept{std::free(p);}
-void *operator new[](size_t size){return ::operator new(size);}
-void operator delete[](void*p)noexcept{std::free(p);}
-void operator delete[](void*p,size_t)noexcept{std::free(p);}
+extern std::atomic<size_t> allocationCount;
 
 namespace skyline::diagnostics {
 bool Enabled()noexcept{return false;}

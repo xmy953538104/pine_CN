@@ -101,7 +101,8 @@ def main():
     inputs = set()
     for pattern in ["app/src/main/cpp/skyline/catalog/*", "app/src/main/cpp/skyline/loader/selected*",
                     "app/src/main/cpp/skyline/vfs/*", "app/src/main/cpp/skyline/diagnostics/*",
-                    "app/src/main/cpp/skyline/crypto/aes_cipher.*", "app/src/main/cpp/skyline/services/aocsrv/*", "tests/selected/**/*",
+                    "app/src/main/cpp/skyline/crypto/*", "app/src/main/cpp/skyline/common/**/*", "app/src/main/cpp/skyline/common.h",
+                    "app/src/main/cpp/skyline/services/aocsrv/*", "tests/selected/**/*",
                     "tests/catalog/native_stubs/**/*", "tests/catalog/native_real_stubs/**/*"]:
         inputs.update(path for path in root.glob(pattern) if path.is_file() and "__pycache__" not in path.parts)
     inputs.update(root / path for path in ["tools/tests/test-selected-content.py", "tests/catalog/native_aes_config.h",

@@ -14,12 +14,51 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def parse_lsan_summary(stderr, expected):
+    """Accept only the complete one-rule table for the fixed legacy allocation.
+
+    A matching row elsewhere in stderr is not evidence of a suppression table.
+    The count and byte size are both fixed by the guarded host fixture profile.
+    """
+    count, size, allocation = (expected[key] for key in
+                               ["expected_allocations", "expected_bytes", "expected_allocation_bytes"])
+    if any(type(value) is not int or value <= 0 for value in [count, size, allocation]) or count * allocation != size:
+        raise ValueError("inconsistent fixed legacy allocation profile")
+    lines = stderr.splitlines()
+    headings = [index for index, line in enumerate(lines) if line.strip() == "Suppressions used:"]
+    if len(headings) != 1:
+        raise ValueError("expected exactly one LSan suppression table")
+    start = headings[0] + 1
+    if start >= len(lines) or not re.fullmatch(r"\s*count\s+bytes\s+template\s*", lines[start]):
+        raise ValueError("invalid LSan suppression table header")
+    rows, row_indices = [], []
+    for index in range(start + 1, len(lines)):
+        line = lines[index].strip()
+        if re.fullmatch(r"-{3,}", line):
+            break
+        match = re.fullmatch(r"\s*(\d+)\s+(\d+)\s+(.+?)\s*", lines[index])
+        if not match:
+            raise ValueError("invalid LSan suppression table row")
+        rows.append((int(match[1]), int(match[2]), match[3]))
+        row_indices.append(index)
+    else:
+        raise ValueError("unterminated LSan suppression table")
+    expected_row = (count, size, "^" + expected["suppressed_function"])
+    if rows != [expected_row]:
+        raise ValueError("unexpected LSan rule, allocation count or exact byte size")
+    if any(index not in row_indices and re.fullmatch(r"\s*\d+\s+\d+\s+.+?\s*", line)
+           for index, line in enumerate(lines)):
+        raise ValueError("suppression-like row outside the sole LSan table")
+    return {"allocations": count, "bytes": size, "allocation_bytes": allocation}
 
 
 def main():
@@ -86,6 +125,7 @@ def main():
              "loader/selected_content.cpp", "loader/selected_validation.h", "loader/selected_validation.cpp"]
     inputs.update(src / name for name in extra)
     inputs.update(root / name for name in ["tests/selected/fixtures.h", "tests/catalog/native_aes_config.h",
+                                          "tools/tests/test-selected-service-runner.py",
                                           "tools/run-selected-service-boundary.py", ".github/workflows/selected-service-boundary.yml",
                                           "docs/selected-service-boundary-v1.md"])
     input_hashes = {str(path.relative_to(root)): sha(path.read_bytes()) for path in sorted(inputs)}
@@ -137,6 +177,11 @@ def main():
             copies[name] = sha(data)
 
         try:
+            parser_tests = run([sys.executable, str(root / "tools/tests/test-selected-service-runner.py")],
+                               text=True, capture_output=True)
+            (evidence / "runner-parser-tests.txt").write_text(parser_tests.stdout + parser_tests.stderr)
+            print(parser_tests.stdout + parser_tests.stderr, end="", flush=True)
+            manifest["runner_parser_regressions"] = "passed_stdlib_only_actual_parser"
             guard = json.loads((root / "tests/selected-services/legacy-opendir.expected.json").read_text())
             guarded_source = (root / guard["source"]).read_bytes()
             assert sha(guarded_source) == guard["source_sha256"], "legacy suppression invalid: source bytes changed"
@@ -276,11 +321,7 @@ ServiceManager::ServiceManager(const DeviceState &state) : state(state) {}
                 print(result.stderr, end="", flush=True)
                 assert result.stdout.count("PASS ") == 30
                 if args.sanitize and not args.unsuppressed_leaks:
-                    summary = re.findall(r"(?m)^\s*(\d+)\s+(\d+)\s+(\^skyline::vfs::OsFileSystem::OpenDirectoryImpl\()\s*$", result.stderr)
-                    assert len(summary) == 1 and summary[0][0] == "6", "missing/unexpected narrowly suppressed leak count"
-                    leaked_bytes = int(summary[0][1])
-                    assert leaked_bytes > 0 and leaked_bytes % 6 == 0, "unexpected directory allocation summary"
-                    item = {"allocations": 6, "bytes": leaked_bytes, "allocation_bytes": leaked_bytes // 6}
+                    item = parse_lsan_summary(result.stderr, guard)
                     if mode == "on":
                         assert item == manifest["legacy_suppressed_leaks"]["off"], "diagnostics changed legacy directory allocation count/size"
                     manifest.setdefault("legacy_suppressed_leaks", {})[mode] = item

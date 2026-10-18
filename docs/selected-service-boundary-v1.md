@@ -37,8 +37,14 @@ The runner guards the entire production source SHA-256 and exact method-body
 SHA-256 against the a901 baseline before enabling that suppression; a source
 change invalidates it. No libc/opendir wildcard is used. The suppression file,
 source guard and actual suppression summary are retained. Each diagnostics-off
-and diagnostics-on process must report precisely six allocations from this
-function and the same total bytes. Other leak stacks remain failures. This is
+and diagnostics-on process must report precisely six 32,816-byte allocations
+from this function, totaling exactly 196,896 bytes. The fixed expected JSON
+records this observed Linux x86_64/glibc allocation profile; a different size
+fails rather than inheriting approval from the function name. A stdlib-only
+regression suite calls the actual runner parser and rejects missing, duplicated,
+misplaced or extra table rows and incorrect counts/bytes, including 6×40,000.
+The runner requires one complete LSan table containing only that exact rule.
+Other leak stacks remain failures. This is
 not a leak-clean claim. `--sanitize --unsuppressed-leaks` removes the suppression
 and is expected to fail on that known legacy leak, never treated as a pass.
 

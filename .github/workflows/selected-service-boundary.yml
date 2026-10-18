@@ -25,6 +25,7 @@ on:
       - 'tests/selected/fixtures.h'
       - 'tests/catalog/native_aes_config.h'
       - 'tools/run-selected-service-boundary.py'
+      - 'tools/tests/test-selected-service-runner.py'
       - 'docs/selected-service-boundary-v1.md'
       - '.github/workflows/selected-service-boundary.yml'
   pull_request:
@@ -51,6 +52,7 @@ on:
       - 'tests/selected/fixtures.h'
       - 'tests/catalog/native_aes_config.h'
       - 'tools/run-selected-service-boundary.py'
+      - 'tools/tests/test-selected-service-runner.py'
       - 'docs/selected-service-boundary-v1.md'
       - '.github/workflows/selected-service-boundary.yml'
 permissions:

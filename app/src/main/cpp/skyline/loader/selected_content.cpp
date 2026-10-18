@@ -5,6 +5,7 @@
 #include <diagnostics/content.h>
 #include <kernel/types/KProcess.h>
 #include <os.h>
+#include <services/aocsrv/content_id.h>
 #include <vfs/npdm.h>
 #include <vfs/patch_manager.h>
 #include <vfs/rom_filesystem.h>
@@ -208,13 +209,18 @@ namespace skyline::loader {
             result->update = make(patch, &*request.update, false);
         }
         std::set<uint64_t> dataIds;
+        std::set<uint64_t> projectedIndices;
         for (const auto &id : request.addOnGroups) {
             const auto &aoc = group(id, 0x82);
             Need(aoc.applicationId == request.applicationId, "selected_aoc_parent_mismatch");
             Need(dataIds.insert(*aoc.titleId).second && (!aoc.dataPatchId || !*aoc.dataPatchId), "selected_aoc_identity_or_data_patch_unsupported");
+            const auto index = *aoc.titleId & service::aocsrv::constant::AOCTitleIdMask;
+            const auto base = result->primary->nacp->nacpContents.addOnContentBaseId;
+            Need(base != 0, "selected_nacp_aoc_base_missing");
+            Need(Add(base, index) == *aoc.titleId, "selected_aoc_service_data_id_mismatch");
+            Need(projectedIndices.insert(index).second, "selected_aoc_service_index_duplicate");
             result->addOns.push_back(make(aoc, nullptr, false));
         }
-        if (!result->addOns.empty()) Need(result->primary->nacp->nacpContents.addOnContentBaseId != 0, "selected_nacp_aoc_base_missing");
         result->Recheck(); return result;
     }
     void SelectedContent::Recheck() const {

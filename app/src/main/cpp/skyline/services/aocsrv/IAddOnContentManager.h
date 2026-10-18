@@ -5,13 +5,9 @@
 
 #include <kernel/types/KEvent.h>
 #include <services/serviceman.h>
+#include "content_id.h"
 
 namespace skyline::service::aocsrv {
-    namespace constant {
-        constexpr u64 AOCTitleIdMask{0x7FF};
-
-    }
-
     /**
      * @brief IAddOnContentManager or aoc:u is used by applications to access add-on content information
      * @url https://switchbrew.org/wiki/NS_Services#aoc:u

@@ -16,6 +16,9 @@ idea.module {
 def pineNativeDebugOptimization = project.findProperty('pineNativeDebugOptimization') ?: '0'
 if (!(pineNativeDebugOptimization in ['0', '2']))
     throw new GradleException('pineNativeDebugOptimization must be 0 or 2')
+def pineSelectedContent = project.findProperty('pineSelectedContent') ?: 'false'
+if (!(pineSelectedContent in ['false', 'true']))
+    throw new GradleException('pineSelectedContent must be false or true')
 
 android {
     namespace 'emu.skyline'
@@ -42,6 +45,9 @@ android {
         def diagnosticsCommit = commitResult.exitValue == 0 ? commitOutput.toString().trim() : 'unknown'
         buildConfigField "String", "DIAGNOSTICS_COMMIT", "\"${diagnosticsCommit}\""
         buildConfigField "String", "DIAGNOSTICS_NATIVE_OPTIMIZATION", '"build_type_default"'
+
+        // The developer entry requires an explicitly requested Debug build.
+        buildConfigField "boolean", "SELECTED_CONTENT_ENABLED", "false"
 
         ndk {
             //noinspection ChromeOsAbiSupport
@@ -121,10 +127,13 @@ android {
             applicationIdSuffix ".diagnostics.preview"
             versionNameSuffix "-diagnostics-v1"
             manifestPlaceholders += [appLabel: "Pine Diagnostics Preview"]
+            buildConfigField "boolean", "SELECTED_CONTENT_ENABLED", pineSelectedContent
             buildConfigField "String", "DIAGNOSTICS_NATIVE_OPTIMIZATION", "\"O${pineNativeDebugOptimization}\""
             externalNativeBuild {
                 cmake {
                     arguments "-DPINE_NATIVE_DEBUG_OPTIMIZATION=${pineNativeDebugOptimization}"
+                    arguments "-DPINE_ENABLE_NSP_CATALOG=${pineSelectedContent == 'true' ? 'ON' : 'OFF'}",
+                              "-DPINE_ENABLE_SELECTED_CONTENT=${pineSelectedContent == 'true' ? 'ON' : 'OFF'}"
                 }
             }
             debuggable true

@@ -148,6 +148,7 @@ add_subdirectory("libraries/dynarmic")
 add_library(skyline SHARED
         ${source_DIR}/driver_jni.cpp
         ${source_DIR}/emu_jni.cpp
+        ${source_DIR}/selected_jni.cpp
         ${source_DIR}/loader_jni.cpp
         ${source_DIR}/skyline/common.cpp
         ${source_DIR}/skyline/common/exception.cpp
@@ -416,8 +417,8 @@ add_library(skyline SHARED
         )
 target_include_directories(skyline PRIVATE ${source_DIR}/skyline)
 
-# Explicit internal read-only catalog API. There is no JNI/UI or runtime
-# selection entry point; ordinary loader builds keep the original source set.
+# Explicit catalog and selected launch APIs. Ordinary builds keep these OFF;
+# the Android developer entry additionally requires its Debug BuildConfig gate.
 option(PINE_ENABLE_NSP_CATALOG "Compile the opt-in native NSP catalog API" OFF)
 if(PINE_ENABLE_NSP_CATALOG)
     target_sources(skyline PRIVATE
@@ -434,6 +435,7 @@ if(PINE_ENABLE_SELECTED_CONTENT)
     target_compile_definitions(skyline PRIVATE PINE_ENABLE_SELECTED_CONTENT=1)
     target_sources(skyline PRIVATE
         ${source_DIR}/skyline/loader/selected_validation.cpp
+        ${source_DIR}/skyline/loader/selected_launch.cpp
         ${source_DIR}/skyline/loader/selected_content.cpp
         ${source_DIR}/skyline/loader/selected_execute.cpp)
 endif()

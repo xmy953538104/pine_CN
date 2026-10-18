@@ -8,6 +8,7 @@
 #include "skyline/diagnostics/utf16.h"
 #include "skyline/diagnostics/initialization.h"
 #include "skyline/diagnostics/identity_jni.h"
+#include "selected_jni.h"
 #include "skyline/nce.h"
 #include <csignal>
 #include <pthread.h>
@@ -85,7 +86,9 @@ static std::string ConvertDiagnosticJString(JNIEnv* env, jstring jStr) {
     return skyline::diagnostics::Utf16ToUtf8(units);
 }
 
-extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
+// Both Java entry points use the existing lifetime, signal classification and
+// FD owner. A selected request never falls back to the ordinary NSP loader.
+static void ExecuteApplication(
     JNIEnv *env,
     jobject instance,
     jstring romUriJstring,
@@ -99,7 +102,10 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
     jstring nativeLibraryPathJstring,
     jobject assetManager,
     jstring diagnosticTitleId,
-    jlong generationToken
+    jlong generationToken,
+    bool selected = false,
+    jobjectArray selectionFields = nullptr,
+    jintArray programIndices = nullptr
 ) {
     skyline::signal::ScopedStackBlocker stackBlocker; // We do not want anything to unwind past JNI code as there are invalid stack frames which can lead to a segmentation fault
     skyline::diagnostics::ScopedJavaContentIdentityObserver identityObserver(env, generationToken);
@@ -164,7 +170,10 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
         LOGDNF("Launching ROM {}", skyline::JniString(env, romUriJstring));
 
         skyline::diagnostics::Emit("lifecycle", "STAGE_STARTED", {{"stage", "OS_EXECUTE"}});
-        os->Execute(romFd, dlcFdsVector, updateFd, static_cast<skyline::loader::RomFormat>(romType));
+        if (selected)
+            skyline::ExecuteSelectedFromJava(env, *os, romFd, selectionFields, programIndices);
+        else
+            os->Execute(romFd, dlcFdsVector, updateFd, static_cast<skyline::loader::RomFormat>(romType));
         observedEndReason = "execute_returned";
         skyline::diagnostics::Emit("lifecycle", "EMULATION_RETURNED");
     } catch (std::exception &e) {
@@ -211,6 +220,26 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
         for (int i = 0; i < dlcArrSize; i++)
             close(env->GetIntArrayElements(dlcFds, nullptr)[i]);
 
+}
+
+extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
+    JNIEnv *env, jobject instance, jstring romUri, jint romType, jint romFd,
+    jintArray dlcFds, jint updateFd, jobject settings, jstring publicPath,
+    jstring privatePath, jstring libraryPath, jobject assets,
+    jstring diagnosticTitleId, jlong generationToken) {
+    ExecuteApplication(env, instance, romUri, romType, romFd, dlcFds, updateFd,
+                       settings, publicPath, privatePath, libraryPath, assets,
+                       diagnosticTitleId, generationToken);
+}
+
+extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeSelectedApplication(
+    JNIEnv *env, jobject instance, jstring romUri, jint romFd,
+    jobjectArray selectionFields, jintArray programIndices, jobject settings,
+    jstring publicPath, jstring privatePath, jstring libraryPath, jobject assets,
+    jstring diagnosticTitleId, jlong generationToken) {
+    ExecuteApplication(env, instance, romUri, static_cast<jint>(skyline::loader::RomFormat::NSP),
+                       romFd, nullptr, -1, settings, publicPath, privatePath, libraryPath,
+                       assets, diagnosticTitleId, generationToken, true, selectionFields, programIndices);
 }
 
 extern "C" JNIEXPORT jboolean Java_emu_skyline_EmulationActivity_stopEmulation(JNIEnv *, jobject, jboolean join) {

@@ -1,0 +1,73 @@
+{
+  "provenance": "Independent static literal/source layout; imports no production reader or writer.",
+  "cnmt": {
+    "file": "patch-sentinel.cnmt",
+    "size": 160,
+    "headerSize": 32,
+    "extendedHeaderSize": 24,
+    "contentCount": 1,
+    "contentMetaCount": 1,
+    "contentOffset": 56,
+    "contentMetaOffset": 112,
+    "extendedDataOffset": 128,
+    "digestOffset": 128,
+    "id": "0100000012345800",
+    "version": 287454020,
+    "role": "Patch",
+    "applicationId": "0100000012345000",
+    "content": {
+      "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "size": 305419896,
+      "type": 1,
+      "idOffset": 7
+    },
+    "contentMeta": {
+      "id": "8877665544332211",
+      "version": 2712847316,
+      "type": 130,
+      "attributes": 4
+    }
+  },
+  "layoutVariant": {
+    "file": "layout-sentinel.cnmt",
+    "rawSizeBytes": "7856341234a5",
+    "current40Size": 223643719288,
+    "currentAttributes": 165,
+    "legacy48Size": 181643062302328
+  },
+  "nca": {
+    "file": "851a1ad4dd01f997f7e3772f61683684.cnmt.nca",
+    "size": 4096,
+    "headerAuthentication": "unsigned/unverified",
+    "contentType": 1,
+    "sectionStart": 3072,
+    "sectionEnd": 4096,
+    "fsHeaderOffset": 1024,
+    "fsType": 1,
+    "hashType": 2,
+    "encryptionType": 1,
+    "hashTableOffsetInSection": 0,
+    "hashTableSize": 32,
+    "dataOffsetInSection": 512,
+    "dataSize": 512,
+    "cnmtAbsoluteOffset": 3648
+  },
+  "nsp": {
+    "file": "patch-sentinel.nsp",
+    "size": 4192,
+    "dataOffset": 96
+  },
+  "expectedCatalog": {
+    "groupCount": 1,
+    "role": "Patch",
+    "runnable": false,
+    "missingReferencedContent": true,
+    "contentMetaInfoIsNotContentHash": true
+  },
+  "sha256": {
+    "851a1ad4dd01f997f7e3772f61683684.cnmt.nca": "851a1ad4dd01f997f7e3772f616836841766f568c7d70f223d6a9507aa22dadc",
+    "layout-sentinel.cnmt": "6e33129ca27d4b9fe91f16a3df6695ce583701bbe0f290a31a8940b76d9fd26b",
+    "patch-sentinel.cnmt": "53adc31ca6d927c2d01cf32e5ec3381f79c3447c455936de36868c226467fbc4",
+    "patch-sentinel.nsp": "f1b7c8d337cb6d975cd7b2065d415169f5145a893f3493b2f28da6327533c14b"
+  }
+}

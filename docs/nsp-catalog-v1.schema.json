@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pine:nsp-catalog:v1",
+  "title": "Pine read-only NSP Catalog v1",
+  "description": "Discovery, structural association, raw NCA hash observations and runtime capability are distinct. The catalog never authenticates signatures or registers/runs content.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "fatal"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "fatal": {"$ref": "#/$defs/issue"}
+      }
+    },
+    {"$ref": "#/$defs/catalog"}
+  ],
+  "$defs": {
+    "uint": {"type": "integer", "minimum": 0},
+    "byte": {"type": "integer", "minimum": 0, "maximum": 255},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "optional_id": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "optional_uint": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]},
+    "optional_byte": {"anyOf": [{"$ref": "#/$defs/byte"}, {"type": "null"}]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "profile": {"enum": ["unknown", "legacy-48", "modern-40"]},
+    "issue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "detail"],
+      "properties": {"code": {"type": "string"}, "detail": {"type": "string"}}
+    },
+    "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
+    "section": {
+      "type": "object", "additionalProperties": false,
+      "required": ["index", "version", "fs_type", "hash_type", "encryption_type", "metadata_hash_type", "offset", "size", "sparse", "compressed", "requires_base", "patch_indirect_offset", "patch_indirect_size", "patch_ctr_ex_offset", "patch_ctr_ex_size", "support", "fs_header_hash_verification", "section_data_hash_verification", "readable_pfs"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0, "maximum": 3},
+        "version": {"$ref": "#/$defs/uint"},
+        "fs_type": {"$ref": "#/$defs/byte"},
+        "hash_type": {"$ref": "#/$defs/byte"},
+        "encryption_type": {"$ref": "#/$defs/byte"},
+        "metadata_hash_type": {"$ref": "#/$defs/byte"},
+        "offset": {"$ref": "#/$defs/uint"}, "size": {"$ref": "#/$defs/uint"},
+        "sparse": {"type": "boolean"}, "compressed": {"type": "boolean"}, "requires_base": {"type": "boolean"},
+        "patch_indirect_offset": {"$ref": "#/$defs/uint"}, "patch_indirect_size": {"$ref": "#/$defs/uint"},
+        "patch_ctr_ex_offset": {"$ref": "#/$defs/uint"}, "patch_ctr_ex_size": {"$ref": "#/$defs/uint"},
+        "support": {"type": "string"},
+        "fs_header_hash_verification": {"enum": ["unverified", "verified", "mismatch"]},
+        "section_data_hash_verification": {"const": "not_performed"},
+        "readable_pfs": {"type": "boolean"}
+      }
+    },
+    "nca": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "entry", "offset", "size", "discovery", "readability", "support", "content_type", "content_type_name", "program_id", "filename_content_id_hint", "content_id_hint_evidence", "actual_sha256", "signature_verification", "sections", "issues"],
+      "properties": {
+        "id": {"type": "string"}, "entry": {"type": "string"},
+        "offset": {"$ref": "#/$defs/uint"}, "size": {"$ref": "#/$defs/uint"},
+        "discovery": {"const": "discovered"}, "readability": {"type": "string"}, "support": {"type": "string"},
+        "content_type": {"$ref": "#/$defs/optional_byte"}, "content_type_name": {"type": "string"},
+        "program_id": {"$ref": "#/$defs/optional_id"},
+        "filename_content_id_hint": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{32}$"}, {"type": "null"}]},
+        "content_id_hint_evidence": {"const": "filename_only_unverified"},
+        "actual_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "signature_verification": {"const": "not_verified"},
+        "sections": {"type": "array", "items": {"$ref": "#/$defs/section"}},
+        "issues": {"$ref": "#/$defs/issues"}
+      }
+    },
+    "reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_id", "expected_sha256", "raw_size_bytes", "decoded_size", "attributes", "type", "type_name", "id_offset", "resolution", "reference_consistency", "hash_verification", "candidate_members", "member", "actual_nca_type", "actual_nca_size"],
+      "properties": {
+        "content_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "expected_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_size_bytes": {"type": "string", "pattern": "^[0-9a-f]{12}$"},
+        "decoded_size": {"$ref": "#/$defs/optional_uint"}, "attributes": {"$ref": "#/$defs/optional_byte"},
+        "type": {"$ref": "#/$defs/byte"}, "type_name": {"type": "string"}, "id_offset": {"$ref": "#/$defs/byte"},
+        "resolution": {"enum": ["unresolved", "missing", "ambiguous", "filename_hint_only", "sha256_match"]},
+        "reference_consistency": {"enum": ["unknown", "missing", "ambiguous", "invalid", "consistent"]},
+        "hash_verification": {"enum": ["unverified", "verified", "mismatch"]},
+        "candidate_members": {"$ref": "#/$defs/strings"}, "member": {"type": ["string", "null"]},
+        "actual_nca_type": {"$ref": "#/$defs/optional_byte"}, "actual_nca_size": {"$ref": "#/$defs/optional_uint"}
+      }
+    },
+    "meta_reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["title_id", "version", "type", "type_name", "attributes", "state", "candidate_groups"],
+      "properties": {
+        "title_id": {"$ref": "#/$defs/id"}, "version": {"$ref": "#/$defs/uint"}, "type": {"$ref": "#/$defs/byte"},
+        "type_name": {"type": "string"}, "attributes": {"$ref": "#/$defs/byte"},
+        "state": {"enum": ["unresolved", "missing", "resolved", "ambiguous"]}, "candidate_groups": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "program": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_id", "id_offset", "program_index", "index_evidence", "program_id", "capability", "requires_base"],
+      "properties": {
+        "content_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "id_offset": {"$ref": "#/$defs/byte"},
+        "program_index": {"$ref": "#/$defs/optional_byte"}, "index_evidence": {"type": "string"},
+        "program_id": {"$ref": "#/$defs/optional_id"}, "capability": {"enum": ["unknown", "not_assessed", "unsupported"]},
+        "requires_base": {"type": "boolean"}
+      }
+    },
+    "layout": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_info_profile", "extended_header_size", "content_table_offset", "content_meta_table_offset", "extended_data_offset", "extended_data_size", "extended_data_support"],
+      "properties": {
+        "content_info_profile": {"$ref": "#/$defs/profile"}, "extended_header_size": {"$ref": "#/$defs/uint"},
+        "content_table_offset": {"$ref": "#/$defs/uint"}, "content_meta_table_offset": {"$ref": "#/$defs/uint"},
+        "extended_data_offset": {"$ref": "#/$defs/uint"}, "extended_data_size": {"$ref": "#/$defs/uint"}, "extended_data_support": {"type": "string"}
+      }
+    },
+    "group": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title_id", "version", "type", "type_name", "source_member", "cnmt_entry", "discovery", "parsing", "cnmt_trailer_digest_observation", "digest_evidence", "explicit_application_id", "patch_id", "data_patch_id", "data_id", "parent_state", "application_candidates", "reference_consistency", "content_hash_verification", "content_support", "runnable", "aoc_registration", "layout", "contents", "content_meta_references", "programs", "issues"],
+      "properties": {
+        "id": {"type": "string"}, "title_id": {"$ref": "#/$defs/optional_id"}, "version": {"$ref": "#/$defs/optional_uint"},
+        "type": {"$ref": "#/$defs/optional_byte"}, "type_name": {"type": "string"}, "source_member": {"type": "string"}, "cnmt_entry": {"type": "string"},
+        "discovery": {"const": "discovered"}, "parsing": {"enum": ["unknown", "parsed", "unsupported", "invalid", "not_inspected"]},
+        "cnmt_trailer_digest_observation": {"enum": ["unverified", "verified", "mismatch"]},
+        "digest_evidence": {"const": "untrusted_embedded_digest_not_signature_authentication"},
+        "explicit_application_id": {"$ref": "#/$defs/optional_id"}, "patch_id": {"$ref": "#/$defs/optional_id"},
+        "data_patch_id": {"$ref": "#/$defs/optional_id"}, "data_id": {"$ref": "#/$defs/optional_id"},
+        "parent_state": {"type": "string"}, "application_candidates": {"$ref": "#/$defs/strings"},
+        "reference_consistency": {"enum": ["unknown", "invalid", "consistent"]},
+        "content_hash_verification": {"enum": ["unverified", "verified", "mismatch"]},
+        "content_support": {"enum": ["unknown", "structure_only", "unsupported", "invalid"]},
+        "runnable": {"enum": ["unknown", "missing_program", "ambiguous", "not_assessed", "requires_base_or_runtime_validation", "not_a_program", "unsupported"]},
+        "aoc_registration": {"const": "not_performed"}, "layout": {"$ref": "#/$defs/layout"},
+        "contents": {"type": "array", "items": {"$ref": "#/$defs/reference"}},
+        "content_meta_references": {"type": "array", "items": {"$ref": "#/$defs/meta_reference"}},
+        "programs": {"type": "array", "items": {"$ref": "#/$defs/program"}}, "issues": {"$ref": "#/$defs/issues"}
+      }
+    },
+    "catalog": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "catalog_kind", "inspector", "content_info_profile", "filename_encoding", "physical_entry_scan_complete", "bounded_scan_complete", "all_metadata_enumerated", "runtime_integration", "container", "verification", "ncas", "groups", "other_entries", "issues"],
+      "properties": {
+        "schema_version": {"const": 1}, "catalog_kind": {"const": "readonly_multi_title_nsp"}, "inspector": {"type": "string"},
+        "content_info_profile": {"$ref": "#/$defs/profile"}, "filename_encoding": {"const": "byte_values_as_unicode_u00xx"},
+        "physical_entry_scan_complete": {"type": "boolean"}, "bounded_scan_complete": {"type": "boolean"}, "all_metadata_enumerated": {"type": "boolean"},
+        "runtime_integration": {"const": "not_implemented"},
+        "container": {
+          "type": "object", "additionalProperties": false,
+          "required": ["size", "identity_kind", "snapshot_token", "identity_scope", "whole_container_sha256_verification"],
+          "properties": {
+            "size": {"$ref": "#/$defs/uint"}, "identity_kind": {"enum": ["unknown", "open_file_stat_snapshot"]},
+            "snapshot_token": {"type": ["string", "null"]}, "identity_scope": {"type": "string"},
+            "whole_container_sha256_verification": {"const": "not_performed"}
+          }
+        },
+        "verification": {
+          "type": "object", "additionalProperties": false,
+          "required": ["whole_nca_hash_requested", "whole_nca_hash_bytes", "hash_scope", "signature_verification"],
+          "properties": {
+            "whole_nca_hash_requested": {"type": "boolean"}, "whole_nca_hash_bytes": {"$ref": "#/$defs/uint"},
+            "hash_scope": {"type": "string"}, "signature_verification": {"const": "not_verified"}
+          }
+        },
+        "ncas": {"type": "array", "items": {"$ref": "#/$defs/nca"}},
+        "groups": {"type": "array", "items": {"$ref": "#/$defs/group"}}, "other_entries": {"$ref": "#/$defs/strings"}, "issues": {"$ref": "#/$defs/issues"}
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@
 #include "skyline/catalog/native_adapter.h"
 #include "skyline/diagnostics/utf16.h"
 #include "skyline/diagnostics/content.h"
+#include "skyline/diagnostics/initialization.h"
 #include "skyline/os.h"
 
 namespace {
@@ -113,8 +114,9 @@ namespace skyline {
             request.addOnGroups = wire.addOnGroups;
             auto source = catalog::DuplicateFd(borrowedFd);
             auto keys = std::make_shared<crypto::KeyStore>(os.privateAppFilesPath + "keys/");
-            diagnostics::Stage("SELECTED_CATALOG_SCAN");
-            auto catalog = catalog::ScanNative(source, keys, InspectionOptions(request.profile));
+            auto catalog = diagnostics::ObserveInitialization("SELECTED_CATALOG_READY", [&] {
+                return catalog::ScanNative(source, keys, InspectionOptions(request.profile));
+            });
             PINE_DIAG_CONTENT("SELECTED_LAUNCH_REQUESTED", {"mode", wire.standalone ? "standalone_patch" : "application"},
                 {"application_id", catalog::Hex64(wire.applicationId)}, {"primary_group", wire.primary.groupId},
                 {"update_group", wire.update ? wire.update->groupId : ""}, {"aoc_count", std::to_string(wire.addOnGroups.size())},

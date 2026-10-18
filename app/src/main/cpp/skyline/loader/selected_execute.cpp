@@ -2,12 +2,15 @@
 #include "selected_content.h"
 #include <os.h>
 #include <diagnostics/content.h>
+#include <diagnostics/initialization.h>
 
 namespace skyline::kernel {
     void OS::ExecuteSelectedContent(const catalog::Catalog &catalog, const loader::SelectionRequest &request,
                                     std::shared_ptr<crypto::KeyStore> providedKeys) {
-        auto selected = loader::PrepareSelectedContent(catalog, request, std::move(providedKeys));
-        selected->Install(state);
+        auto selected = diagnostics::ObserveInitialization("SELECTED_CONTENT_PREPARED", [&] {
+            return loader::PrepareSelectedContent(catalog, request, std::move(providedKeys));
+        });
+        diagnostics::ObserveInitialization("SELECTED_CONTENT_COMMITTED", [&] { selected->Install(state); });
         try {
             const auto identity = diagnostics::DescribeContentIdentity(*state.loader);
             diagnostics::SetContentIdentity(identity.application, identity.program, identity.cnmt, identity.programContent, identity.source);

@@ -305,6 +305,13 @@ namespace {
         auto logDir = evidence.empty() ? std::filesystem::temp_directory_path() / ("pine-selected-diag-" + std::to_string(::getpid())) : evidence / "diagnostics";
         diagnostics::Config config; config.directory = logDir.string(); config.sessionId = "selected-synthetic";
         Check(diagnostics::Start(config), "diagnostics could not start");
+        diagnostics::Stage("last_success_before_rejected_selection");
+        kernel::OS rejected;
+        const auto rejectedError = Failure([&] { rejected.ExecuteSelectedContent(input.catalog, bad, Keys()); });
+        Check(rejectedError == disabledError && diagnostics::LastStage() == "last_success_before_rejected_selection" &&
+              !rejected.state.loader && !rejected.state.updateLoader && rejected.state.dlcLoaders.empty(),
+              "rejected validation published stage success or mutated launch state");
+        Pass("actual OS preflight failure preserves previous successful stage and empty loader state");
         const auto enabledError = Failure([&] { PrepareSelectedContent(input.catalog, bad, Keys()); });
         const auto on = input.Prepare(); kernel::OS enabled; enabled.ExecuteSelectedContent(input.catalog, input.request, Keys());
         Check(enabledError == disabledError && on->Primary()->selectedGroupId == off->Primary()->selectedGroupId &&

@@ -11,10 +11,10 @@ class LegacyErrorBudget {
 public:
     // Reset only after closing producers. Take never waits and does no formatting.
     void Reset() noexcept { window = used = 0; suppressed = 0; guard.clear(std::memory_order_release); }
-    bool Take(uint64_t second, uint64_t &priorSuppressed) noexcept {
+    bool Take(uint64_t second, uint64_t &priorSuppressed, uint64_t limit = 4) noexcept {
         if (guard.test_and_set(std::memory_order_acquire)) { ++suppressed; return false; }
         if (second != window) { window = second; used = 0; }
-        const bool allowed = used < 4;
+        const bool allowed = used < limit;
         if (allowed) { ++used; priorSuppressed = suppressed.exchange(0); } else ++suppressed;
         guard.clear(std::memory_order_release);
         return allowed;

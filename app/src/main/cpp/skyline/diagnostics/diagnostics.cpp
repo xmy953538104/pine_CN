@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "diagnostics.h"
 #include "admission.h"
+#include "bounded_queue.h"
+#include "read_snapshot.h"
 #include "legacy_error.h"
 #include <cerrno>
 #include <fcntl.h>
@@ -32,8 +34,12 @@ constexpr uint64_t ProducersClosed = uint64_t{1} << 63;
 struct Record {
     uint64_t sequence{}, wall{}, mono{}, dropped{}, contention{}, full{}, allocation{}, disk{}, criticalDropped{};
     bool critical{};
-    std::string category, event, level, thread, stage, guestStage, titleId, applicationSource, programId, cnmtId, programContentId, launchId;
+    std::string category, event, level, thread, stage, guestStage, titleId, applicationSource, programId, cnmtId, programContentId, launchId, effectiveProgramContentId, effectiveProgramId, effectiveSource;
     std::vector<std::pair<std::string, std::string>> fields;
+};
+struct Context {
+    std::string stage, guestStage, titleId, applicationSource, programId, cnmtId, programContentId, launchId;
+    std::string effectiveProgramContentId, effectiveProgramId, effectiveSource;
 };
 struct Sink {
     // The closed bit and active count share one atomic so Stop cannot miss an
@@ -41,41 +47,63 @@ struct Sink {
     std::atomic<uint64_t> producers{ProducersClosed};
     std::atomic<bool> verbose{};
     std::atomic<uint64_t> accepted{}, dropped{}, written{}, diskErrors{};
-    LegacyErrorBudget audioErrors, shaderErrors;
+    LegacyErrorBudget audioErrors, shaderErrors, guestProtocol;
+    std::atomic<uint64_t> guestProtocolSuppressed{};
     std::atomic<uint64_t> legacySuppressed{};
     std::atomic<uint64_t> droppedContention{}, droppedFull{}, droppedAllocation{}, droppedDisk{}, criticalDropped{}, snapshotErrors{}, snapshotEvictions{};
-    std::mutex lifecycle, mutex, progressMutex;
+    std::mutex lifecycle, mutex, progressMutex, firstObservationMutex;
     std::condition_variable wake, progress;
-    std::deque<Record> queue;
+    BoundedQueue<Record> queue;
+    ReadSnapshot<Context> context;
     Config config;
     std::string stage;
     std::string guestStage{"unknown"};
     // Game identity outlives a logging session; only true game boundaries clear it.
     std::string activeTitleId, activeApplicationSource;
     std::string activeProgramId, activeCnmtId, activeProgramContentId, activeLaunchId;
-    bool stopping{};
+    std::string effectiveProgramContentId, effectiveProgramId, effectiveSource;
+    std::atomic<uint64_t> presentReturns{}, presentAccepted{}, presentOther{}, firstPresentUs{}, launchStartedUs{};
+    std::atomic<int32_t> lastPresentResult{};
+    std::atomic<bool> stopRequested{};
+    std::atomic<uint64_t> observationEpoch{};
+    uint64_t firstRecordedEpoch{}; // protected by firstObservationMutex, ordinary observers only
+    std::atomic<bool> stopping{};
     std::thread worker;
     ~Sink();
 };
 Sink &Get() { static Sink sink; return sink; }
+// Caller owns the ordinary metadata mutex; producers use the published snapshot.
+void PublishContext(Sink &s) {
+    s.context.Publish({s.stage, s.guestStage, s.activeTitleId, s.activeApplicationSource,
+        s.activeProgramId, s.activeCnmtId, s.activeProgramContentId, s.activeLaunchId,
+        s.effectiveProgramContentId, s.effectiveProgramId, s.effectiveSource});
+}
+void CopyContext(Record &r, Context &&c) {
+    r.stage = std::move(c.stage); r.guestStage = std::move(c.guestStage); r.titleId = std::move(c.titleId); r.applicationSource = std::move(c.applicationSource);
+    r.programId = std::move(c.programId); r.cnmtId = std::move(c.cnmtId); r.programContentId = std::move(c.programContentId); r.launchId = std::move(c.launchId);
+    r.effectiveProgramContentId = std::move(c.effectiveProgramContentId); r.effectiveProgramId = std::move(c.effectiveProgramId); r.effectiveSource = std::move(c.effectiveSource);
+}
 bool IsEnabled(const Sink &s) { return !(s.producers.load(std::memory_order_relaxed) & ProducersClosed); }
 class Producer {
     Sink *sink{};
+    bool contended{};
 public:
     explicit Producer(Sink &s) {
         auto state = s.producers.load(std::memory_order_relaxed);
-        while (!(state & ProducersClosed)) {
+        for (unsigned attempt{}; attempt < 64 && !(state & ProducersClosed); ++attempt) {
             if (s.producers.compare_exchange_weak(state, state + 1, std::memory_order_acquire, std::memory_order_relaxed)) {
                 sink = &s;
                 break;
             }
         }
+        contended = !sink && !(state & ProducersClosed);
     }
     ~Producer() {
         if (sink && sink->producers.fetch_sub(1, std::memory_order_release) == ProducersClosed + 1)
             sink->producers.notify_all();
     }
     explicit operator bool() const { return sink != nullptr; }
+    bool Contended() const { return contended; }
 };
 void CloseProducers(Sink &s) {
     auto state = s.producers.fetch_or(ProducersClosed, std::memory_order_acq_rel) | ProducersClosed;
@@ -108,6 +136,10 @@ std::string Serialize(const Record &r, const Config &c, bool snapshot = false,
         + ",\"application_title_id\":" + Quote(r.titleId) + ",\"application_identity_source\":" + Quote(r.applicationSource)
         + ",\"program_id\":" + Quote(r.programId)
         + ",\"cnmt_title_id\":" + Quote(r.cnmtId) + ",\"program_nca_id\":" + Quote(r.programContentId)
+        + ",\"program_nca_id_scope\":\"legacy_base_program_container\",\"base_program_nca\":" + Quote(r.programContentId)
+        + ",\"effective_exefs_program_nca\":" + Quote(r.effectiveProgramContentId)
+        + ",\"effective_exefs_program_id\":" + Quote(r.effectiveProgramId)
+        + ",\"effective_exefs_source\":" + Quote(r.effectiveSource)
         + ",\"launch_id\":" + Quote(r.launchId) + ",\"process_run_id\":" + Quote(c.processRunId)
         + (snapshot ? ",\"snapshot_metadata\":{\"observed_event\":" + Quote(observedEvent) + ",\"observed_level\":" + Quote(observedLevel)
             + ",\"fields_omitted\":0,\"evictions\":" + std::to_string(evictions) + ",\"scope\":\"accepted_critical_last_state_not_replay\"}" : "")
@@ -132,12 +164,21 @@ public:
     void Observe(const Record &record) noexcept {
         if (!record.critical || failed) return;
         try {
-        std::string key = record.event;
+        std::string key = record.launchId + ':' + record.event;
         for (const auto &[name, value] : record.fields)
             if (name == "exit_record_id" || name == "title_id" || name == "loader_source" || name == "loader_index" || name == "nca_type") key += ":" + name + "=" + value;
         auto found = std::find_if(records.begin(), records.end(), [&](const auto &item) { return item.first == key; });
         if (found != records.end()) records.erase(found);
-        if (records.size() == 32) { records.pop_front(); ++sink.snapshotEvictions; }
+        auto evict = [&] {
+            // Keep up to eight most recent accepted launch endings even when
+            // other critical state changes within the same logging session.
+            auto victim = std::find_if(records.begin(), records.end(), [](const auto &item) { return item.second.event != "LAUNCH_ENDED"; });
+            records.erase(victim == records.end() ? records.begin() : victim); ++sink.snapshotEvictions;
+        };
+        if (record.event == "LAUNCH_ENDED" && std::count_if(records.begin(), records.end(), [](const auto &item) { return item.second.event == "LAUNCH_ENDED"; }) >= 8) {
+            records.erase(std::find_if(records.begin(), records.end(), [](const auto &item) { return item.second.event == "LAUNCH_ENDED"; })); ++sink.snapshotEvictions;
+        }
+        if (records.size() == 32) evict();
         records.emplace_back(std::move(key), record); pending = true;
         } catch (...) { ++sink.snapshotErrors; failed = true; pending = false; }
     }
@@ -159,7 +200,8 @@ public:
                     text += Serialize(record, config, true, original.event, original.level, sink.snapshotEvictions.load());
                 }
                 if (text.size() <= 65536) break;
-                records.pop_front(); ++sink.snapshotEvictions;
+                auto victim = std::find_if(records.begin(), records.end(), [](const auto &item) { return item.second.event != "LAUNCH_ENDED"; });
+                records.erase(victim == records.end() ? records.begin() : victim); ++sink.snapshotEvictions;
             }
             const auto directory = std::filesystem::path(config.directory);
             const auto temporary = directory / "critical-state.tmp";
@@ -183,11 +225,61 @@ public:
         }
     }
 };
+uint64_t MonotonicUs() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
+}
+bool Enqueue(Sink &, std::string_view, std::string_view,
+    std::span<const std::pair<std::string_view, std::string_view>>, std::string_view,
+    const std::string_view *, std::string_view) noexcept;
+bool EmitProgress(Sink &s, std::string_view event, std::string_view expectedLaunch = {}) {
+    const auto epoch = s.observationEpoch.load();
+    if (epoch & 1) return false;
+    Context context;
+    if (!s.context.Read(context) || context.launchId.empty() || (!expectedLaunch.empty() && context.launchId != expectedLaunch)) return false;
+    const auto accepted = s.presentAccepted.load(std::memory_order_relaxed);
+    const auto other = s.presentOther.load(std::memory_order_relaxed);
+    const auto returns = s.presentReturns.load(std::memory_order_relaxed);
+    const auto started = s.launchStartedUs.load();
+    const std::pair<std::string, std::string> values[]{
+        {"source", "vulkan_queue_present_khr_return"},
+        {"observation_layer", "host_vulkan_api_return"}, {"counter_scope", "diagnostics_enabled_observations_per_launch"},
+        {"present_returns", std::to_string(returns)}, {"present_accepted", std::to_string(accepted)},
+        {"present_other_results", std::to_string(other)}, {"last_present_result", std::to_string(s.lastPresentResult.load())},
+        {"first_accepted_present_monotonic_us", std::to_string(s.firstPresentUs.load())},
+        {"launch_elapsed_us", std::to_string(started ? MonotonicUs() - started : 0)},
+        {"visibility", "not_observed"}, {"guest_execution_phase", "not_inferred"}};
+    std::array<std::pair<std::string_view, std::string_view>, std::size(values)> fields;
+    for (size_t i{}; i < fields.size(); ++i) fields[i] = values[i];
+    if (s.observationEpoch.load() != epoch) return false;
+    return Enqueue(s, "lifecycle", event, fields, "INFO", nullptr, context.launchId);
+}
+void EmitFirstPresent(Sink &s, std::string_view expectedLaunch = {}) {
+    std::lock_guard lock(s.firstObservationMutex);
+    const auto epoch = s.observationEpoch.load();
+    if (!(epoch & 1) && s.firstRecordedEpoch != epoch && s.firstPresentUs.load() &&
+        EmitProgress(s, "FIRST_PRESENT_OBSERVED", expectedLaunch)) s.firstRecordedEpoch = epoch;
+}
+// Only fixed names are rotated. Preserve completed prior session state instead
+// of overwriting it on the next application/session start. No directory crawl.
+void RotateCriticalState(const Config &c) {
+    const auto path = [&](size_t i) { return std::filesystem::path(c.directory) / (i ? "critical-state-" + std::to_string(i) + ".jsonl" : "critical-state.jsonl"); };
+    const auto keep = std::min<size_t>(8, c.maxFiles);
+    for (size_t i = keep; i < 8; ++i) std::filesystem::remove(path(i));
+    std::filesystem::remove(path(keep - 1));
+    for (size_t i = keep - 1; i > 0; --i) {
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(path(i - 1), ec);
+        if (ec == std::errc::no_such_file_or_directory) continue;
+        if (ec) throw std::runtime_error("state retention failed");
+        if (std::filesystem::exists(status)) std::filesystem::rename(path(i - 1), path(i));
+    }
+}
 void Run(Sink &s) noexcept {
     bool pendingRecord{}, pendingCritical{};
     try {
         const Config c = s.config;
         CriticalSnapshot snapshot(s, c);
+        auto nextProgress = Clock::now() + std::chrono::seconds(5);
         auto path = [&](size_t i) { return std::filesystem::path(c.directory) / ("diagnostics-" + std::to_string(i) + ".jsonl"); };
         std::ofstream file;
         size_t bytes{};
@@ -212,6 +304,7 @@ void Run(Sink &s) noexcept {
             if (!file) throw std::runtime_error("diagnostic open failed");
         };
         std::filesystem::create_directories(c.directory);
+        try { RotateCriticalState(c); } catch (...) { ++s.snapshotErrors; }
         // Prune only our fixed allowlisted filenames when retention is reduced.
         for (size_t i = c.maxFiles; i < 16; ++i) {
             std::error_code ec;
@@ -220,16 +313,30 @@ void Run(Sink &s) noexcept {
         }
         rotate();
         while (true) {
+            if (!s.stopping && IsEnabled(s)) {
+                Context context;
+                if (s.context.Read(context) && !context.launchId.empty()) {
+                    if (s.firstPresentUs.load(std::memory_order_relaxed)) EmitFirstPresent(s, context.launchId);
+                    if (Clock::now() >= nextProgress) EmitProgress(s, "LAUNCH_PROGRESS", context.launchId);
+                }
+                if (Clock::now() >= nextProgress) nextProgress = Clock::now() + std::chrono::seconds(5);
+            }
             Record record;
             {
                 std::unique_lock lock(s.mutex);
-                if (snapshot.Pending()) s.wake.wait_until(lock, snapshot.Deadline(), [&] { return s.stopping || !s.queue.empty(); });
-                else s.wake.wait(lock, [&] { return s.stopping || !s.queue.empty(); });
-                if (s.queue.empty()) {
-                    if (s.stopping) break;
+                s.wake.wait_for(lock, std::chrono::milliseconds(50), [&] { return s.stopping || !s.queue.Empty(); });
+                uint64_t sequence{};
+                if (!s.queue.Pop(record, sequence)) {
+                    if (s.stopping && s.queue.Empty()) break;
                     lock.unlock(); snapshot.Persist(); continue;
                 }
-                record = std::move(s.queue.front()); s.queue.pop_front();
+                record.sequence = sequence;
+                if (record.category == "guest" && record.launchId == s.activeLaunchId) {
+                    if (record.event == "DFX_MAIN_ENTER" || record.event == "DFX_MODINDEX_READY" || record.event == "DFX_MODMAIN_OK" || record.event == "DFX_HAMLET_ENTER") s.guestStage = record.event;
+                    else if (s.guestStage == "unknown" && (record.event == "GUEST_DEBUG_MESSAGE" || record.event == "GUEST_RUNTIME_ERROR")) s.guestStage = "guest_message_observed";
+                    if (record.guestStage != s.guestStage) PublishContext(s);
+                    record.guestStage = s.guestStage;
+                }
                 pendingRecord = true; pendingCritical = record.critical;
             }
             auto line = Serialize(record, c);
@@ -260,10 +367,13 @@ void Run(Sink &s) noexcept {
         summary.category = "lifecycle"; summary.event = "SESSION_SUMMARY"; summary.level = "INFO"; summary.thread = "diagnostic-writer";
         { std::lock_guard lock(s.mutex); summary.stage = s.stage; summary.guestStage = s.guestStage; summary.titleId = s.activeTitleId; summary.applicationSource = s.activeApplicationSource;
           summary.programId = s.activeProgramId; summary.cnmtId = s.activeCnmtId;
-          summary.programContentId = s.activeProgramContentId; summary.launchId = s.activeLaunchId; }
+          summary.programContentId = s.activeProgramContentId; summary.launchId = s.activeLaunchId;
+          summary.effectiveProgramContentId = s.effectiveProgramContentId; summary.effectiveProgramId = s.effectiveProgramId; summary.effectiveSource = s.effectiveSource; }
         summary.fields = {{"accepted", std::to_string(s.accepted.load())}, {"written", std::to_string(s.written.load())},
             {"disk_errors", std::to_string(s.diskErrors.load())}, {"snapshot_errors", std::to_string(s.snapshotErrors.load())},
-            {"snapshot_evictions", std::to_string(s.snapshotEvictions.load())}, {"legacy_error_rate_suppressed", std::to_string(s.legacySuppressed.load())}};
+            {"snapshot_evictions", std::to_string(s.snapshotEvictions.load())}, {"legacy_error_rate_suppressed", std::to_string(s.legacySuppressed.load())},
+            {"guest_protocol_rate_suppressed", std::to_string(s.guestProtocolSuppressed.load())},
+            {"admission_policy", "bounded_mpsc_64_cas_and_64_context_attempts_no_mutex_wait"}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
         file.write(line.data(), line.size()); file.flush();
@@ -276,11 +386,12 @@ void Run(Sink &s) noexcept {
         s.producers.fetch_or(ProducersClosed, std::memory_order_acq_rel);
         { std::lock_guard lock(s.progressMutex); ++s.diskErrors; }
         s.progress.notify_all();
-        std::lock_guard lock(s.mutex);
-        const auto lost = s.queue.size() + (pendingRecord ? 1 : 0);
-        s.dropped += lost; s.droppedDisk += lost;
-        s.criticalDropped += std::count_if(s.queue.begin(), s.queue.end(), [](const auto &record) { return record.critical; }) + (pendingRecord && pendingCritical ? 1 : 0);
-        s.queue.clear();
+        CloseProducers(s);
+        uint64_t sequence{}; Record lost;
+        if (pendingRecord) { ++s.dropped; ++s.droppedDisk; if (pendingCritical) ++s.criticalDropped; }
+        while (s.queue.Pop(lost, sequence)) {
+            ++s.dropped; ++s.droppedDisk; if (lost.critical) ++s.criticalDropped;
+        }
     }
 }
 void StopLocked(Sink &s) {
@@ -303,28 +414,20 @@ bool CategorySelected(std::string_view selected, std::string_view category) {
 }
 bool Enqueue(Sink &s, std::string_view category, std::string_view event,
              std::span<const std::pair<std::string_view, std::string_view>> fields,
-             std::string_view level, const std::string_view *stage = nullptr) noexcept {
-    Producer producer(s);
-    if (!producer) return false;
+             std::string_view level, const std::string_view *stage = nullptr, std::string_view expectedLaunch = {}) noexcept {
     const bool critical = CriticalEvent(category, event, level);
     auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
+    Producer producer(s);
+    if (!producer) { if (producer.Contended()) drop(s.droppedContention); return false; }
     try {
         // Field sanitation and host thread formatting do not hold the admission lock.
         Record r; r.critical = critical;
-        const auto nextStage = stage ? Sanitize(*stage, 128) : std::string{};
-        {
-            std::unique_lock lock(s.mutex, std::try_to_lock);
-            if (!lock.owns_lock()) { drop(s.droppedContention); return false; }
-            if (!IsEnabled(s) || s.stopping || !CategorySelected(s.config.categories, category)) return false;
-            if (stage) s.stage = nextStage;
-            if (category == "guest") {
-                if (event == "DFX_MAIN_ENTER" || event == "DFX_MODINDEX_READY" || event == "DFX_MODMAIN_OK" || event == "DFX_HAMLET_ENTER") s.guestStage = event;
-                else if (s.guestStage == "unknown" && (event == "GUEST_DEBUG_MESSAGE" || event == "GUEST_RUNTIME_ERROR")) s.guestStage = "guest_message_observed";
-            }
-            if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return false; }
-            r.stage = s.stage; r.guestStage = s.guestStage; r.titleId = s.activeTitleId; r.applicationSource = s.activeApplicationSource; r.programId = s.activeProgramId;
-            r.cnmtId = s.activeCnmtId; r.programContentId = s.activeProgramContentId; r.launchId = s.activeLaunchId;
-        }
+        (void)stage;
+        if (!CategorySelected(s.config.categories, category)) return false;
+        Context context;
+        if (!s.context.Read(context)) { drop(s.droppedContention); return false; }
+        if (!expectedLaunch.empty() && context.launchId != expectedLaunch) return false;
+        CopyContext(r, std::move(context));
         r.category = Sanitize(category, 64); r.event = Sanitize(event, 96); r.level = Sanitize(level, 16);
         char name[16]{}; pthread_getname_np(pthread_self(), name, sizeof(name));
         std::ostringstream thread; thread << name << ':' << std::this_thread::get_id(); r.thread = Sanitize(thread.str(), 128);
@@ -332,12 +435,12 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         r.mono = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
         size_t budget = 4096;
         for (auto &[key, value] : fields) { if (r.fields.size() == 24 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
-        std::unique_lock lock(s.mutex, std::try_to_lock);
-        if (!lock.owns_lock()) { drop(s.droppedContention); return false; }
         if (!IsEnabled(s) || s.stopping) return false;
-        if (s.queue.size() >= AdmissionLimit(s.config.queueCapacity, critical)) { drop(s.droppedFull); return false; }
-        r.sequence = s.accepted.load() + 1; CopyDropCounts(r, s);
-        s.queue.push_back(std::move(r)); ++s.accepted; lock.unlock(); s.wake.notify_one(); return true;
+        CopyDropCounts(r, s);
+        const auto result = s.queue.Push(std::move(r), AdmissionLimit(s.config.queueCapacity, critical));
+        if (result == Admission::Full) { drop(s.droppedFull); return false; }
+        if (result == Admission::Contended) { drop(s.droppedContention); return false; }
+        ++s.accepted; s.wake.notify_one(); return true;
     } catch (...) { drop(s.droppedAllocation); return false; }
 }
 }
@@ -452,11 +555,11 @@ bool Start(const Config &config) noexcept {
         std::lock_guard life(s.lifecycle); StopLocked(s);
         if (config.directory.empty() || config.sessionId.empty() || !config.queueCapacity || config.queueCapacity > 65536 || config.maxFiles < 1 || config.maxFiles > 16 || config.maxFileBytes < 65536) return false;
         try {
-            { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.clear(); s.stage.clear(); s.stopping = false; }
+            { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.Reset(config.queueCapacity); s.stage.clear(); s.stopping = false; PublishContext(s); }
             s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0;
             s.droppedContention = 0; s.droppedFull = 0; s.droppedAllocation = 0; s.droppedDisk = 0;
             s.criticalDropped = 0; s.snapshotErrors = 0; s.snapshotEvictions = 0;
-            s.audioErrors.Reset(); s.shaderErrors.Reset(); s.legacySuppressed = 0; s.verbose = config.verbose;
+            s.audioErrors.Reset(); s.shaderErrors.Reset(); s.guestProtocol.Reset(); s.guestProtocolSuppressed = 0; s.legacySuppressed = 0; s.verbose = config.verbose;
             s.producers.store(0, std::memory_order_release);
             s.worker = std::thread([&s] { Run(s); });
             return true;
@@ -464,7 +567,8 @@ bool Start(const Config &config) noexcept {
             // Keep the lifecycle lock while undoing a failed start so it cannot
             // disable or clear a different caller's newly started session.
             CloseProducers(s);
-            std::lock_guard lock(s.mutex); s.dropped += s.queue.size(); s.queue.clear();
+            Record lost; uint64_t sequence{};
+            while (s.queue.Pop(lost, sequence)) { ++s.dropped; if (lost.critical) ++s.criticalDropped; }
             ++s.diskErrors; return false;
         }
     } catch (...) { return false; }
@@ -506,12 +610,19 @@ void EmitLegacyError(std::string_view component, std::string_view message) noexc
              {"rate_policy", "first_4_per_component_per_second"}, {"prior_rate_suppressed", std::to_string(suppressed)}}, "ERROR");
     } catch (...) {}
 }
+bool AllowGuestProtocol(uint64_t &priorSuppressed) noexcept {
+    auto &s = Get(); if (!IsEnabled(s)) return false;
+    Producer producer(s); if (!producer) return false;
+    const auto second = std::chrono::duration_cast<std::chrono::seconds>(Clock::now().time_since_epoch()).count();
+    if (s.guestProtocol.Take(static_cast<uint64_t>(second), priorSuppressed, 16)) return true;
+    ++s.guestProtocolSuppressed; return false;
+}
 void SetTitleId(std::string_view titleId) noexcept {
     try {
         auto copy = Sanitize(titleId, 32);
         auto &s = Get();
         std::lock_guard lock(s.mutex);
-        s.activeTitleId = std::move(copy); s.activeApplicationSource = s.activeTitleId.empty() ? "" : "ui_metadata_hint_not_runtime_verified";
+        s.activeTitleId = std::move(copy); s.activeApplicationSource = s.activeTitleId.empty() ? "" : "ui_metadata_hint_not_runtime_verified"; PublishContext(s);
     } catch (...) {}
 }
 void ClearTitleId() noexcept {
@@ -520,6 +631,7 @@ void ClearTitleId() noexcept {
         std::lock_guard lock(s.mutex);
         s.activeTitleId.clear(); s.activeApplicationSource.clear();
         s.activeProgramId.clear(); s.activeCnmtId.clear(); s.activeProgramContentId.clear(); s.guestStage = "unknown";
+        s.effectiveProgramContentId.clear(); s.effectiveProgramId.clear(); s.effectiveSource.clear(); PublishContext(s);
     } catch (...) {}
 }
 void SetContentIdentity(std::string_view applicationId, std::string_view programId,
@@ -531,17 +643,65 @@ void SetContentIdentity(std::string_view applicationId, std::string_view program
         {
             auto &s = Get(); std::lock_guard lock(s.mutex);
             s.activeTitleId = app; s.activeApplicationSource = source; s.activeProgramId = std::move(program);
-            s.activeCnmtId = std::move(cnmt); s.activeProgramContentId = std::move(content);
+            s.activeCnmtId = std::move(cnmt); s.activeProgramContentId = std::move(content); PublishContext(s);
         }
         NotifyContentIdentity(app, source); // Never call Java under the sink mutex.
     } catch (...) {}
 }
 std::string ApplicationTitleId() { auto &s = Get(); std::lock_guard lock(s.mutex); return s.activeTitleId; }
+void SetEffectiveExeFs(std::string_view programId, std::string_view contentId, std::string_view source) noexcept {
+    try {
+        auto program = Sanitize(programId, 32), content = Sanitize(contentId, 64), origin = Sanitize(source, 64);
+        auto &s = Get(); std::lock_guard lock(s.mutex);
+        s.effectiveProgramId = std::move(program); s.effectiveProgramContentId = std::move(content);
+        s.effectiveSource = std::move(origin); PublishContext(s);
+    } catch (...) {}
+}
 void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
-    try { auto value = Sanitize(launchId, 128); auto &s = Get(); std::lock_guard lock(s.mutex); s.activeLaunchId = std::move(value); if (newLaunch) s.stage.clear(); if (newLaunch || launchId.empty()) s.guestStage = "unknown"; } catch (...) {}
+    try {
+        auto value = Sanitize(launchId, 128); auto &s = Get(); std::lock_guard lock(s.mutex);
+        s.observationEpoch.fetch_add(1); // Reject a timer snapshot during the reset/publication boundary.
+        try {
+        s.activeLaunchId = std::move(value);
+        if (newLaunch) {
+            s.stage.clear(); s.presentReturns = 0; s.presentAccepted = 0; s.presentOther = 0;
+            s.firstPresentUs = 0; s.lastPresentResult = 0; s.stopRequested = false; s.launchStartedUs = MonotonicUs();
+        }
+        if (newLaunch || launchId.empty()) s.guestStage = "unknown";
+        PublishContext(s);
+        } catch (...) { s.observationEpoch.fetch_add(1); throw; }
+        s.observationEpoch.fetch_add(1);
+    } catch (...) {}
+}
+void PresentResult(int32_t result) noexcept {
+    auto &s = Get(); if (!IsEnabled(s)) return;
+    s.presentReturns.fetch_add(1, std::memory_order_relaxed); s.lastPresentResult.store(result, std::memory_order_relaxed);
+    if (result == 0 || result == 1000001003) { // VK_SUCCESS / VK_SUBOPTIMAL_KHR: accepted by the host API.
+        s.presentAccepted.fetch_add(1, std::memory_order_relaxed);
+        uint64_t empty{};
+        if (!s.firstPresentUs.load(std::memory_order_relaxed)) s.firstPresentUs.compare_exchange_strong(empty, MonotonicUs(), std::memory_order_relaxed);
+    } else s.presentOther.fetch_add(1, std::memory_order_relaxed);
+}
+void RequestLaunchStop() noexcept {
+    auto &s = Get(); s.stopRequested = true;
+    Emit("lifecycle", "LAUNCH_STOP_REQUESTED", {{"source", "JNI_stopEmulation"}, {"scope", "host_stop_request_not_crash_classification"}});
+}
+void EndLaunch(std::string_view observedReason) noexcept {
+    auto &s = Get(); if (!IsEnabled(s)) return;
+    try {
+        EmitFirstPresent(s);
+        EmitProgress(s, "LAUNCH_PROGRESS");
+        Emit("lifecycle", "LAUNCH_ENDED", {{"end_reason", observedReason},
+            {"end_reason_source", "JNI_executeApplication_control_flow"}, {"host_stop_requested", s.stopRequested ? "true" : "false"},
+            {"last_success_stage_before_end", LastStage()}, {"present_returns", std::to_string(s.presentReturns.load())},
+            {"present_accepted", std::to_string(s.presentAccepted.load())}, {"present_other_results", std::to_string(s.presentOther.load())},
+            {"first_accepted_present_monotonic_us", std::to_string(s.firstPresentUs.load())},
+            {"visibility", "not_observed"}, {"guest_execution_phase", "not_inferred"}});
+    } catch (...) {}
 }
 void Stage(std::string_view stage) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return;
+    try { std::lock_guard lock(s.mutex); s.stage = Sanitize(stage, 128); PublishContext(s); } catch (...) {}
     const std::pair<std::string_view, std::string_view> fields[]{ {"stage", stage} };
     Enqueue(s, "lifecycle", "STAGE_COMPLETED", fields, "INFO", &stage);
 }

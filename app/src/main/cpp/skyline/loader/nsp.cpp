@@ -59,6 +59,7 @@ namespace skyline::loader {
     }
 
     void *NspLoader::LoadProcessData(const std::shared_ptr<kernel::type::KProcess> &process, const DeviceState &state) {
+        try { diagnostics::SetEffectiveExeFs(diagnostics::ContentTitleId(programNca->header.titleId), diagnosticProgramContentId, "base"); } catch (...) {}
         if (state.updateLoader) {
             auto patchManager{std::make_shared<vfs::PatchManager>()};
             programNca->exeFs = patchManager->PatchExeFS(state, programNca->exeFs);

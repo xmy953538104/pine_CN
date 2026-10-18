@@ -11,6 +11,8 @@
 #include <loader/loader.h>
 #include <kernel/types/KProcess.h>
 #include "presentation_engine.h"
+#include <diagnostics/diagnostics.h>
+#include <csignal>
 #include "native_window.h"
 #include "texture/format.h"
 
@@ -87,12 +89,17 @@ namespace skyline::gpu {
             }
 
         } catch (const signal::SignalException &e) {
+            if (e.signal != SIGINT)
+                diagnostics::Emit("exception", "CHOREOGRAPHER_SIGNAL_EXCEPTION", {{"source", "ChoreographerThread"}, {"message", e.what()}}, "ERROR");
+            else
+                diagnostics::Emit("lifecycle", "CHOREOGRAPHER_CANCELLED", {{"reason", "SIGINT"}});
             LOGE("{}\nStack Trace:{}", e.what(), state.loader->GetStackTrace(e.frames));
             if (state.process)
                 state.process->Kill(false);
             else
                 std::rethrow_exception(std::current_exception());
         } catch (const std::exception &e) {
+            diagnostics::Emit("exception", "CHOREOGRAPHER_EXCEPTION", {{"source", "ChoreographerThread"}, {"message", e.what()}}, "ERROR");
             LOGE("{}", e.what());
             if (state.process)
                 state.process->Kill(false);
@@ -214,13 +221,14 @@ namespace skyline::gpu {
 
         {
             std::scoped_lock queueLock{gpu.queueMutex};
-            std::ignore = gpu.vkQueue.presentKHR(vk::PresentInfoKHR{
+            const auto presentResult = gpu.vkQueue.presentKHR(vk::PresentInfoKHR{
                 .swapchainCount = 1,
                 .pSwapchains = &**vkSwapchain,
                 .pImageIndices = &nextImage.second,
                 .waitSemaphoreCount = 1,
                 .pWaitSemaphores = &*presentSemaphore,
             }); // We don't care about suboptimal images as they are caused by not respecting the transform hint, we handle transformations externally
+            diagnostics::PresentResult(static_cast<int32_t>(presentResult));
         }
 
         timestamp = (timestamp && (*state.settings->vsyncMode != 0 || *state.settings->vsyncMode != 1)) ? timestamp : getMonotonicNsNow(); // We tie FPS to the submission time rather than presentation timestamp, if we don't have the presentation timestamp available or if frame throttling is disabled as we want the maximum measured FPS to not be restricted to the refresh rate
@@ -269,12 +277,17 @@ namespace skyline::gpu {
                 vsyncEvent->Signal();
             }, [] {});
         } catch (const signal::SignalException &e) {
+            if (e.signal != SIGINT)
+                diagnostics::Emit("exception", "PRESENTATION_SIGNAL_EXCEPTION", {{"source", "PresentationThread"}, {"message", e.what()}}, "ERROR");
+            else
+                diagnostics::Emit("lifecycle", "PRESENTATION_CANCELLED", {{"reason", "SIGINT"}});
             LOGE("{}\nStack Trace:{}", e.what(), state.loader->GetStackTrace(e.frames));
             if (state.process)
                 state.process->Kill(false);
             else
                 std::rethrow_exception(std::current_exception());
         } catch (const std::exception &e) {
+            diagnostics::Emit("exception", "PRESENTATION_EXCEPTION", {{"source", "PresentationThread"}, {"message", e.what()}}, "ERROR");
             LOGE("{}", e.what());
             if (state.process)
                 state.process->Kill(false);

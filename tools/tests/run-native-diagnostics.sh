@@ -21,6 +21,10 @@ fi
 "$build/identity_test" "$build/identity-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/admission_test.cpp -o "$build/admission_test"
 "$build/admission_test" "$build/admission-logs"
+"${CXX:-c++}" "${flags[@]}" -I"$core" tests/diagnostics/queue_test.cpp -o "$build/queue_test"
+"$build/queue_test"
+"${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/launch_progress_test.cpp -o "$build/launch_progress_test"
+"$build/launch_progress_test" "$build/launch-progress-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/legacy_error_test.cpp -o "$build/legacy_error_test"
 "$build/legacy_error_test" "$build/legacy-logs"
 for test in pending_signal utf16; do
@@ -33,7 +37,7 @@ root=pathlib.Path(sys.argv[1])
 for folder,session in [('logs','native-test'),('guest-logs','guest-test'),
                        ('process-logs/main','process-main'),('process-logs/emulation','process-emulation')]:
     paths=[path for path in (root/folder).rglob('*.jsonl')
-           if path.is_file() and not path.is_symlink() and path.parent.name!='write-failure' and path.name!='critical-state.jsonl']
+           if path.is_file() and not path.is_symlink() and path.parent.name!='write-failure' and not path.name.startswith('critical-state')]
     assert paths
     for path in paths:
         rows=[json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]

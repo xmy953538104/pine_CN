@@ -49,7 +49,8 @@ int main(int argc, char **argv) {
     const auto bounded = Read(root / "critical-state.jsonl");
     assert(std::count(bounded.begin(), bounded.end(), '\n') <= 32);
 
-    // Both pressure reasons are exposed; critical admission is finite too.
+    // Saturation is exposed; CAS/context contention is permitted but no longer
+    // forced by unrelated producer/writer metadata mutex ownership.
     assert(Start(config));
     std::vector<std::thread> threads;
     for (int i = 0; i < 8; ++i) threads.emplace_back([&] {
@@ -58,7 +59,7 @@ int main(int argc, char **argv) {
     for (auto &thread : threads) thread.join();
     Stop();
     const auto stats = Stats();
-    assert(stats.dropped > 0 && stats.droppedContention > 0 && stats.droppedFull > 0);
+    assert(stats.dropped > 0 && stats.droppedFull > 0);
     assert(stats.dropped == stats.droppedContention + stats.droppedFull + stats.droppedAllocation + stats.droppedDisk);
     assert(stats.criticalDropped > 0 && stats.criticalDropped <= stats.dropped);
 

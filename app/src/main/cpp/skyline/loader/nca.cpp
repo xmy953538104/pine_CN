@@ -2,6 +2,7 @@
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
 #include <kernel/types/KProcess.h>
+#include <diagnostics/content.h>
 #include <vfs/npdm.h>
 #include "nso.h"
 #include "nca.h"
@@ -15,6 +16,9 @@ namespace skyline::loader {
     void *NcaLoader::LoadExeFs(Loader *loader, const std::shared_ptr<vfs::FileSystem> &exeFs, const std::shared_ptr<kernel::type::KProcess> &process, const DeviceState &state) {
         if (exeFs == nullptr)
             throw exception("Cannot load a null ExeFS");
+
+        PINE_DIAG_CONTENT("EXEFS_LOAD_ENTERED", {"source", "effective_exefs_context"},
+            {"observation_layer", "native_loader_exefs_argument"}, {"execution_status", "not_yet_loaded"});
 
         if (!exeFs->FileExists("rtld"))
             throw exception("Cannot load an ExeFS that doesn't contain rtld");
@@ -47,6 +51,7 @@ namespace skyline::loader {
     }
 
     void *NcaLoader::LoadProcessData(const std::shared_ptr<kernel::type::KProcess> &process, const DeviceState &state) {
+        try { diagnostics::SetEffectiveExeFs(diagnostics::ContentTitleId(nca.header.titleId), diagnosticProgramContentId, "direct_nca"); } catch (...) {}
         process->npdm = vfs::NPDM(nca.exeFs->OpenFile("main.npdm"));
         return LoadExeFs(this, nca.exeFs, process, state);
     }

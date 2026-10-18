@@ -45,8 +45,17 @@ bool EmitFields(std::string_view category, std::string_view event,
 void SetTitleId(std::string_view titleId) noexcept;
 void SetContentIdentity(std::string_view applicationId, std::string_view programId,
                         std::string_view cnmtId, std::string_view programContentId = {}, std::string_view applicationSource = {}) noexcept;
+// Identity of the ExeFS actually returned by the loader/patch manager. This is
+// separate from the base Program container and never computes document hashes.
+void SetEffectiveExeFs(std::string_view programId, std::string_view contentId, std::string_view source) noexcept;
 std::string ApplicationTitleId();
 void SetLaunchId(std::string_view launchId, bool newLaunch = false) noexcept;
+// Normal threads only. The rendering hook performs only a fast gate and atomic
+// updates, never formatting, queue admission, I/O or JNI. Vulkan returns are not
+// proof of visible pixels, a game menu or Lua execution.
+void PresentResult(int32_t result) noexcept;
+void RequestLaunchStop() noexcept;
+void EndLaunch(std::string_view observedReason) noexcept;
 // True game boundaries only: clear at launch and after the final session drains.
 void ClearTitleId() noexcept;
 void Stage(std::string_view stage) noexcept;

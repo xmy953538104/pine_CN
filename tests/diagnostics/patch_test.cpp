@@ -13,6 +13,10 @@ struct Observation {
     std::map<std::string, std::string> fields;
 };
 std::vector<Observation> observations;
+std::string effectiveProgram, effectiveContent, effectiveSource;
+void SetEffectiveExeFs(std::string_view program, std::string_view content, std::string_view source) noexcept {
+    effectiveProgram = program; effectiveContent = content; effectiveSource = source;
+}
 bool Enabled() noexcept { return enabled; }
 void Emit(std::string_view category, std::string_view event,
           std::initializer_list<std::pair<std::string_view, std::string_view>> fields,
@@ -35,6 +39,8 @@ int main() {
     state.loader->programNca.emplace();
     state.loader->programNca->romFs = std::make_shared<TestBacking>();
     state.updateLoader->programNca.emplace();
+    state.loader->diagnosticProgramContentId = "base-content";
+    state.updateLoader->diagnosticProgramContentId = "update-content";
     auto &update = *state.updateLoader->programNca;
     update.header.titleId = 0x1234;
     update.romFs = std::make_shared<TestBacking>();
@@ -42,12 +48,15 @@ int main() {
     auto originalExeFs = std::make_shared<vfs::FileSystem>();
     vfs::PatchManager manager;
     assert(manager.PatchExeFS(state, originalExeFs) == update.exeFs);
+    assert(effectiveProgram == "0000000000001234" && effectiveContent == "update-content" && effectiveSource == "update");
     assert(observations.empty());
     enabled = true;
     ContentScope scope("update");
     assert(manager.PatchExeFS(state, originalExeFs) == update.exeFs);
     assert(observations.back().event == "PATCH_EXEFS_SELECTED");
     assert(observations.back().fields.at("title_id") == "0000000000001234");
+    assert(observations.back().fields.at("base_program_nca") == "base-content");
+    assert(observations.back().fields.at("effective_exefs_program_nca") == "update-content");
     assert(manager.PatchRomFS(state, update, 123) == update.romFs);
     assert(vfs::NCA::receivedBase == state.loader->programNca->romFs.get());
     assert(vfs::NCA::receivedKeyStore == state.os->keyStore.get() && vfs::NCA::receivedOffset == 123);

@@ -418,6 +418,34 @@ class DiagnosticExportTest {
         }
     }
 
+    @Test fun previousSessionCriticalStatesUseFixedNamesAndKeepSourceIdentity() = sandbox { logs, textLog, cache, _ ->
+        val state = buildJsonObject {
+            put("schema", 1); put("session_id", "prior-session"); put("sequence", 3)
+            put("record_kind", "critical_snapshot"); put("event", "CRITICAL_STATE_SNAPSHOT")
+            put("launch_id", "prior-launch"); put("base_program_nca", "base-program")
+            put("effective_exefs_program_nca", "update-program"); put("effective_exefs_source", "update")
+            putJsonObject("snapshot_metadata") { put("observed_event", "LAUNCH_ENDED") }
+            putJsonObject("fields") { put("end_reason", "execute_returned"); put("host_stop_requested", "true") }
+        }.toString() + "\n"
+        log(logs, "main/critical-state-1.jsonl", state)
+        log(logs, "emulation/critical-state-7.jsonl", state)
+        log(logs, "main/critical-state-8.jsonl", state)
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            assertEquals(state.trim(), entries.getValue("main/critical-state-1.jsonl").trim())
+            assertTrue(entries.containsKey("emulation/critical-state-7.jsonl"))
+            assertFalse(entries.containsKey("main/critical-state-8.jsonl"))
+            assertTrue(entries.getValue("main/critical-state-1.jsonl").contains("prior-launch"))
+        }
+    }
+
+    @Test fun priorCriticalStateHasTheSame64KiBBoundAsCurrentState() = sandbox { logs, textLog, cache, _ ->
+        log(logs, "main/critical-state-1.jsonl", "x".repeat(65537))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            assertFalse(archive(snapshot).containsKey("main/critical-state-1.jsonl"))
+        }
+    }
+
     @Test fun snapshotsRemainValidWhileSourceRotatesAndAppendsPartialLines() = sandbox { logs, textLog, cache, _ ->
         val source = log(logs, "main/diagnostics-0.jsonl", record("concurrent", 1))
         val stop = AtomicBoolean(false)

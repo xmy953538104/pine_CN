@@ -137,6 +137,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
         perfetto::Tracing::Initialize(args);
         perfetto::TrackEvent::Register();
     });
+    std::string_view observedEndReason{"execute_not_returned"};
     try {
         skyline::JniString nativeLibraryPath(env, nativeLibraryPathJstring);
         skyline::JniString privateAppFilesPath{env, privateAppFilesPathJstring};
@@ -164,8 +165,10 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
 
         skyline::diagnostics::Emit("lifecycle", "STAGE_STARTED", {{"stage", "OS_EXECUTE"}});
         os->Execute(romFd, dlcFdsVector, updateFd, static_cast<skyline::loader::RomFormat>(romType));
+        observedEndReason = "execute_returned";
         skyline::diagnostics::Emit("lifecycle", "EMULATION_RETURNED");
     } catch (std::exception &e) {
+        observedEndReason = dynamic_cast<const skyline::nce::NCE::ExitException *>(&e) ? "exit_exception" : "cpp_exception";
         if (!dynamic_cast<const skyline::nce::NCE::ExitException *>(&e))
             skyline::diagnostics::Emit("exception", "UNHANDLED_CPP_EXCEPTION", {{"message", e.what()}}, "ERROR");
         else
@@ -173,6 +176,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
         skyline::diagnostics::Flush(250);
         LOGENF("An uncaught exception has occurred: {}", e.what());
     } catch (const skyline::signal::SignalException &e) {
+        observedEndReason = e.signal == SIGINT ? "sigint_stop" : "native_signal_exception";
         if (e.signal != SIGINT)
             skyline::diagnostics::Emit("exception", "NATIVE_SIGNAL_EXCEPTION", {{"message", e.what()}}, "ERROR");
         else
@@ -180,11 +184,13 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_executeApplication(
         skyline::diagnostics::Flush(250);
         LOGENF("An uncaught signal exception has occurred: {}", e.what());
     } catch (...) {
+        observedEndReason = "unknown_exception";
         skyline::diagnostics::Emit("exception", "UNKNOWN_EXCEPTION", {}, "ERROR");
         skyline::diagnostics::Flush(250);
         LOGENF("An unknown uncaught exception has occurred");
     }
 
+    skyline::diagnostics::EndLaunch(observedEndReason);
     perfetto::TrackEvent::Flush();
 
     InputWeak.reset();
@@ -214,6 +220,7 @@ extern "C" JNIEXPORT jboolean Java_emu_skyline_EmulationActivity_stopEmulation(J
     auto process{os->state.process};
     if (!process)
         return false;
+    skyline::diagnostics::RequestLaunchStop();
     process->Kill(join, false, true);
     return true;
 }

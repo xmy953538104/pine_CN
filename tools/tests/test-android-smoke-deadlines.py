@@ -582,9 +582,10 @@ class ObservationDeadlines(unittest.TestCase):
         return smoke, files
 
     def test_exact_critical_state_names_survive_preview_snapshot_and_zip_verification(self):
-        for index, prefix in enumerate(("", "main/", "emulation/")):
-            with self.subTest(scope=prefix):
-                name = prefix + "critical-state.jsonl"
+        names = [prefix + stem for prefix in ("", "main/", "emulation/")
+                 for stem in ("critical-state.jsonl", "critical-state-1.jsonl", "critical-state-7.jsonl")]
+        for index, name in enumerate(names):
+            with self.subTest(name=name):
                 smoke, files = self.critical_export_fixture("critical-" + str(index), name)
                 smoke.export_preview()
                 smoke.export_snapshot()
@@ -599,7 +600,8 @@ class ObservationDeadlines(unittest.TestCase):
 
     def test_critical_name_allowlist_does_not_accept_paths_keys_or_backups(self):
         for index, name in enumerate(("other/critical-state.jsonl", "main/sub/critical-state.jsonl",
-                                      "../critical-state.jsonl", "main/critical-state.jsonl.bak", "prod.keys")):
+                                      "../critical-state.jsonl", "main/critical-state.jsonl.bak", "prod.keys",
+                                      "main/critical-state-0.jsonl", "main/critical-state-8.jsonl")):
             with self.subTest(name=name):
                 smoke, _ = self.critical_export_fixture("critical-reject-" + str(index), name)
                 with self.assertRaisesRegex(AssertionError, "non-allowlisted"):

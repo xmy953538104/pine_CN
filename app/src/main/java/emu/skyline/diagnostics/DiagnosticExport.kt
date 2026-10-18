@@ -17,7 +17,8 @@ import java.util.zip.ZipOutputStream
 /** Only fixed log names in the two known process directories (and the v1 legacy directory). */
 object DiagnosticExport {
     private const val MAX_CRITICAL_BYTES = 64 * 1024
-    private fun fileLimit(name: String) = if (name.endsWith("critical-state.jsonl")) MAX_CRITICAL_BYTES else MAX_FILE_BYTES
+    private val criticalName = Regex("(?:^|/)(?:critical-state|critical-state-[1-7])\\.jsonl$")
+    private fun fileLimit(name: String) = if (criticalName.containsMatchIn(name)) MAX_CRITICAL_BYTES else MAX_FILE_BYTES
     const val MAX_FILE_BYTES = 8 * 1024 * 1024
     const val MAX_SNAPSHOT_BYTES = 40 * 1024 * 1024
     const val MAX_METADATA_BYTES = 1024 * 1024
@@ -30,7 +31,8 @@ object DiagnosticExport {
     private val credentialLine = Regex("(?i)(?:prod\\.keys|title\\.keys|\\b(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)\\b[\\s=:])")
     private val snapshotId = Regex("snapshot-[0-9a-f-]{36}")
     private val names = (listOf("emulation/", "main/", "").flatMap { scope ->
-        listOf("${scope}critical-state.jsonl") + (0..7).map { "${scope}diagnostics-$it.jsonl" }
+        listOf("${scope}critical-state.jsonl") + (1..7).map { "${scope}critical-state-$it.jsonl" } +
+            (0..7).map { "${scope}diagnostics-$it.jsonl" }
     } + "emulation.log")
 
     /**

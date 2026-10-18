@@ -39,7 +39,8 @@ SYSTEM_ANR_TARGETS = {
 }
 UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 LOG_NAME = re.compile(r"(?:(?:main|emulation)/)?diagnostics-[0-7]\.jsonl")
-CRITICAL_NAMES = {prefix + "critical-state.jsonl" for prefix in ("", "main/", "emulation/")}
+CRITICAL_NAMES = {prefix + name for prefix in ("", "main/", "emulation/")
+                  for name in ("critical-state.jsonl", *(f"critical-state-{i}.jsonl" for i in range(1, 8)))}
 ALLOWED = {"session-metadata.txt", "emulation.log"} | CRITICAL_NAMES | {
     prefix + "diagnostics-" + str(index) + ".jsonl"
     for prefix in ("", "main/", "emulation/") for index in range(8)

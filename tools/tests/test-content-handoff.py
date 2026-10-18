@@ -95,6 +95,53 @@ class HandoffTest(unittest.TestCase):
         self.report["cnmts"][0]["role"]["value"] = "Patch"
         self.contradiction("application_parent_role_mismatch")
 
+    def test_application_self_parent_link_without_parent_title_is_rejected(self):
+        group = self.report["cnmts"][0]
+        self.assertNotIn("application_parent", group)
+        group["application_parent_report_id"] = {"state": "observed", "value": group["report_id"],
+                                                  "observation_id": "application-cnmt-decode"}
+        self.contradiction("role_has_no_explicit_application_parent_field")
+        self.contradiction("application_parent_self_reference")
+
+    def test_application_and_system_roles_reject_known_parent_links_without_titles(self):
+        for role in ("Application", "SystemProgram", "SystemData", "SystemUpdate", "BootImagePackage", "BootImagePackageSafe"):
+            with self.subTest(role=role):
+                self.report = json.loads((BASE / "example.json").read_text())
+                group = self.report["cnmts"][1]
+                group["role"]["value"] = role
+                group.pop("application_parent")
+                self.contradiction("role_has_no_explicit_application_parent_field")
+
+    def test_unknown_parent_link_and_missing_parent_title_are_not_inferred(self):
+        for unknown in ({"state": "unknown", "value": None}, {"state": "unknown", "value": None, "observation_id": None}):
+            self.report["cnmts"][0]["application_parent_report_id"] = unknown
+            self.assertEqual(handoff.exit_code(self.validate()), 0)
+        self.report["cnmts"][0].pop("application_parent_report_id")
+        self.report["cnmts"][1].pop("application_parent")
+        self.assertEqual(handoff.exit_code(self.validate()), 0)
+
+    def test_known_self_parent_link_is_rejected_even_when_role_is_unknown(self):
+        self.report["container"]["enumeration"]["value"] = "partial"
+        group = self.report["cnmts"][1]
+        group["role"] = {"state": "unknown", "value": None}
+        group.pop("application_parent")
+        group["application_parent_report_id"]["value"] = group["report_id"]
+        self.contradiction("application_parent_self_reference")
+
+    def test_only_known_report_links_form_parent_cycles(self):
+        self.report["container"]["enumeration"]["value"] = "partial"
+        first, second = self.report["cnmts"]
+        for group in (first, second):
+            group["role"] = {"state": "unknown", "value": None}
+            group.pop("application_parent", None)
+        first["application_parent_report_id"] = {"state": "observed", "value": second["report_id"],
+                                                 "observation_id": "application-cnmt-decode"}
+        self.contradiction("application_parent_cycle")
+        first["application_parent_report_id"] = {"state": "unknown", "value": None}
+        self.assertEqual(handoff.exit_code(self.validate()), 0)
+        first.pop("application_parent_report_id")
+        self.assertEqual(handoff.exit_code(self.validate()), 0)
+
     def test_hash_size_and_raw_six_byte_profile_mismatches_are_reported_not_verified(self):
         self.report["ncas"][1]["raw_sha256"]["value"] = "f" * 64
         self.contradiction("raw_hash_mismatch")

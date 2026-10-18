@@ -59,6 +59,10 @@ ID or remains unknown; no hash prefix, filename, ID mask, parent arithmetic,
 first/highest candidate or content order chooses a relationship. CNMT Content ID
 need not equal a SHA prefix. Application `patch_id` is not its parent. Parent
 title/role contradictions are checked only when both supplied values are known.
+Known Application/system roles cannot carry an application-parent title or report
+link. Known self-parent links and cycles between existing CNMT report IDs are
+contradictions even when roles/titles are unknown. Missing/unknown links create no
+graph edges and remain unknown.
 
 `legacy-48` decodes all six size bytes little-endian; `modern-40` decodes five
 size bytes plus one attributes byte. With an unknown profile the raw six bytes

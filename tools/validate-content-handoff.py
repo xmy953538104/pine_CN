@@ -164,8 +164,10 @@ def semantic(report):
         parent = cnmts.get(parent_id) if parent_id is not None else None
         role = known(group.get("role"))
         explicit_parent = known(group.get("application_parent"))
-        if explicit_parent is not None and role in ("Application", "SystemProgram", "SystemData", "SystemUpdate", "BootImagePackage", "BootImagePackageSafe"):
+        if (explicit_parent is not None or parent_id is not None) and role in ("Application", "SystemProgram", "SystemData", "SystemUpdate", "BootImagePackage", "BootImagePackageSafe"):
             issue("role_has_no_explicit_application_parent_field")
+        if parent_id == group["report_id"]:
+            issue("application_parent_self_reference")
         if known(group.get("patch_id")) is not None and role not in (None, "Application"):
             issue("patch_id_field_role_mismatch")
         if known(group.get("data_id")) is not None and role not in (None, "DataPatch"):
@@ -226,6 +228,25 @@ def semantic(report):
                 elif basis == "cnmt_id_offset" and index != offset:
                     issue("program_index_id_offset_mismatch")
         ambiguous_groups += program_count > 1
+
+    # The schema bounds this graph to 256 CNMTs. Follow only supplied known links
+    # to existing records; absent/unknown titles or links never create edges.
+    parents = {}
+    for group in groups:
+        parent_id = known(group.get("application_parent_report_id"))
+        if parent_id in cnmts:
+            parents[group["report_id"]] = parent_id
+    visited = set()
+    for start in parents:
+        trail = set()
+        current = start
+        while current in parents and current not in visited:
+            if current in trail:
+                issue("application_parent_cycle")
+                break
+            trail.add(current)
+            current = parents[current]
+        visited.update(trail)
 
     unreadable = container.get("unreadable_metadata", [])
     for fact in unreadable:

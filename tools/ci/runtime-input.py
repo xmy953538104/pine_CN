@@ -42,7 +42,9 @@ def bind(value, run, artifact, repository, observer):
 
 def inspect_apk(directory, binding):
     apk = directory / 'app-full-debug.apk'
-    manifest = json.loads((directory / 'build-identity.json').read_text())
+    metadata = directory / 'build-identity.json'
+    if not apk.is_file() or apk.is_symlink() or not metadata.is_file() or metadata.is_symlink(): raise ValueError('Expected regular APK/identity files')
+    manifest = json.loads(metadata.read_text())
     with apk.open('rb') as stream: digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     if digest != binding['expected_apk_sha256'] or manifest.get('sha256') != digest or manifest.get('commit') != binding['apk_source_commit']: raise ValueError('Downloaded APK/source/manifest mismatch')
     with zipfile.ZipFile(apk) as archive:
@@ -100,6 +102,9 @@ def main():
         if "name='io.github.pine.emu.diagnostics.preview'" not in badging or "sdkVersion:'29'" not in badging or 'application-debuggable' not in badging: raise ValueError('APK package/SDK/Debug mismatch')
         result.update(apk_sha256=digest, skyline_elf_sha256=elf, certificate_sha256=cert, signature_verified=True,
                       apk_input_verified=True, original_build_manifest_preserved=True)
+        original = args.directory / 'build-identity.json'
+        result['original_build_manifest_sha256'] = hashlib.sha256(original.read_bytes()).hexdigest()
+        result['producer_reported_native_symbols'] = json.loads(original.read_text()).get('native_symbols')
         args.binding.write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))
 

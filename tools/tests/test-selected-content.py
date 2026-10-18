@@ -184,6 +184,10 @@ def main():
             catalog = json.loads((evidence / "selected-catalog.json").read_text())
             assert catalog["inspector"] == "pine_existing_nca" and catalog["bounded_scan_complete"] and catalog["all_metadata_enumerated"]
             assert len(catalog["groups"]) == 4 and catalog["verification"]["signature_verification"] == "not_verified"
+            preview = json.loads((evidence / "selected-preview.json").read_text())
+            assert preview["inspector"] == "pine_existing_nca" and preview["all_metadata_enumerated"]
+            assert preview["verification"]["whole_nca_hash_requested"] is False
+            assert preview["verification"]["whole_nca_hash_bytes"] == 0 and len(preview["groups"]) == 4
             runtime = json.loads((evidence / "selected-runtime.json").read_text())
             assert runtime["primary_cnmt_role"] == "application" and runtime["update_cnmt_role"] == "patch" and runtime["aoc_count"] == 2
             assert runtime["bktr_supported"] is False and runtime["guest_execution"] == "not_performed"
@@ -202,6 +206,7 @@ def main():
                 import jsonschema
                 schema = json.loads((root / "docs/nsp-catalog-v1.schema.json").read_text())
                 jsonschema.Draft202012Validator(schema).validate(catalog)
+                jsonschema.Draft202012Validator(schema).validate(preview)
             manifest["source_commit_after"] = git("rev-parse", "HEAD")
             manifest["source_status_after"] = git("status", "--porcelain", "--untracked-files=all")
             assert manifest["source_commit_after"] == manifest["source_commit"], "HEAD changed during this evidence run"

@@ -117,6 +117,12 @@ namespace {
         const auto other = programs.Prepare(); Check(other->Primary()->programNca->header.titleId == App + 1 && other->Primary()->selectedProgramIndex == 1, "Program index ignored");
         Pass("multiple Program indices require and honor explicit index and actual ProgramId");
         Write("selected-catalog.json", ToJson(update.catalog));
+        auto previewOptions = OptionsForTest(); previewOptions.verifyHashes = false;
+        const auto preview = ScanNative(update.source, Keys(), previewOptions);
+        Check(preview.complete && preview.AllMetadataEnumerated() && !preview.options.verifyHashes &&
+              preview.groups.size() == 4, "native metadata preview failed");
+        Write("selected-preview.json", ToJson(preview));
+        Pass("real native metadata-only preview retains explicit Application Patch and two AOC candidates");
         Write("selected-runtime.json", "{\"profile\":\"bounded_structural_v1\",\"application_id\":\"" + diagnostics::ContentTitleId(App) +
              "\",\"primary_cnmt_role\":\"application\",\"update_cnmt_role\":\"patch\",\"aoc_count\":2,\"bktr_supported\":false,"
              "\"signature_verification\":\"not_verified\",\"ivfc_tree_verification\":\"not_performed\",\"guest_execution\":\"not_performed\"}\n");

@@ -1,0 +1,179 @@
+name: Selected content Android integration
+on:
+  push:
+    branches: [feat/selected-content-integration-v1]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'app/**'
+      - 'tests/selected/**'
+      - 'tools/tests/test-selected*'
+      - 'tools/verify-selected-content-apk.py'
+      - '.github/workflows/selected-content-integration.yml'
+  workflow_dispatch:
+    inputs:
+      build_apk:
+        description: Build the opt-in selected-content Debug APK after tests
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: selected-integration-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name || 'checks' }}
+  cancel-in-progress: true
+jobs:
+  transfer:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || (github.event.action == 'labeled' && github.event.label.name == 'selected-apk')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Owned descriptor and pure explicit request boundaries
+        run: python3 tools/tests/test-selected-launch-primitives.py --sanitize --evidence-dir transfer-evidence/primitives
+      - name: Actual host JVM JNI transfer and ordinary-build native gate
+        env:
+          PINE_SELECTED_JNI_EVIDENCE: transfer-evidence/jni-manifest.json
+        run: python3 tools/tests/test-selected-jni.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-transfer-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.event_name }}
+          path: transfer-evidence/
+          if-no-files-found: error
+  jvm:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || (github.event.action == 'labeled' && github.event.label.name == 'selected-apk')
+    runs-on: ubuntu-latest
+    env:
+      IS_BUILD_SIGNED: 'false'
+      SIGNING_STORE_PATH: unused.jks
+    strategy:
+      fail-fast: false
+      matrix:
+        selected: ['false', 'true']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Require a JVM-only graph
+        run: |
+          ./gradlew --no-daemon -PpineNativeDebugOptimization=2 -PpineSelectedContent=${{ matrix.selected }} testFullDebugUnitTest --dry-run > unit-task-graph.txt
+          python3 tools/ci/verify-jvm-only.py unit-task-graph.txt
+      - name: Actual app JVM tests with the selected-entry build gate
+        run: ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 -PpineSelectedContent=${{ matrix.selected }} testFullDebugUnitTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-jvm-${{ matrix.selected }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.event_name }}
+          path: |
+            app/build/test-results/testFullDebugUnitTest/
+            app/build/reports/tests/
+            unit-task-graph.txt
+  debug-apk:
+    needs: [transfer, jvm]
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.build_apk) ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+       github.event.label.name == 'selected-apk' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      IS_BUILD_SIGNED: 'false'
+      SIGNING_STORE_PATH: unused.jks
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'ndk;27.3.13750724' 'cmake;3.22.1' 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: diagnostics-ndk-27.3-optimized-candidate
+          max-size: 3Gi
+      - name: Exact pinned native dependencies
+        run: git submodule update --init --recursive --depth 1 --jobs 8
+      - name: Existing authorized CI signer
+        env:
+          KEYSTORE_ENCODED: ${{ secrets.KEYSTORE }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_ENCODED" || -z "$SIGNING_STORE_PASSWORD" || -z "$SIGNING_KEY_ALIAS" || -z "$SIGNING_KEY_PASSWORD" ]]; then
+            echo 'Existing CI signer unavailable; no replacement signer is generated.' >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_ENCODED" | base64 --decode > "$RUNNER_TEMP/pine-ci-signing.jks"
+          test -s "$RUNNER_TEMP/pine-ci-signing.jks"
+      - name: Tests and opt-in O2 Debug APK
+        env:
+          IS_BUILD_SIGNED: 'true'
+          SIGNING_STORE_PATH: ${{ runner.temp }}/pine-ci-signing.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CCACHE_COMPILERCHECK: 'string:27.3.13750724'
+        run: ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 -PpineSelectedContent=true testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
+      - name: Remove temporary signer
+        if: always()
+        run: rm -f "$RUNNER_TEMP/pine-ci-signing.jks"
+      - name: Verify exact APK and actual compiled feature flags
+        env:
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          apk=app/build/outputs/apk/full/debug/app-full-debug.apk
+          python3 tools/verify-apk-signer.py --apk "$apk" --commit "$EXPECTED_COMMIT" --apksigner "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/full/debug/apk-badging.txt
+          python3 tools/verify-diagnostics-apk.py "$apk" "$EXPECTED_COMMIT"
+          python3 tools/verify-native-debug-flags.py --optimization 2 --apk "$apk" --output app/build/outputs/apk/full/debug/native-build-flags.json
+          python3 tools/verify-selected-content-apk.py "$apk" "$EXPECTED_COMMIT"
+          python3 tools/archive-native-symbols.py "$apk" "$EXPECTED_COMMIT" app/build/outputs/selected-symbols \
+            --artifact-name 'pine-selected-symbols-${{ github.event.pull_request.head.sha || github.sha }}' \
+            --root app/build/intermediates/cxx --root app/.cxx \
+            --readelf "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pine-selected-debug-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            app/build/outputs/apk/full/debug/*.apk
+            app/build/outputs/apk/full/debug/*.json
+            app/build/outputs/apk/full/debug/apk-badging.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pine-selected-symbols-${{ github.event.pull_request.head.sha || github.sha }}
+          path: app/build/outputs/selected-symbols/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-apk-jvm-${{ github.event.pull_request.head.sha || github.sha }}
+          path: app/build/reports/tests/

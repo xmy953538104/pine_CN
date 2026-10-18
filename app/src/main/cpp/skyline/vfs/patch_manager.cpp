@@ -12,12 +12,14 @@ namespace skyline::vfs {
 
     std::shared_ptr<FileSystem> PatchManager::PatchExeFS(const DeviceState &state, std::shared_ptr<FileSystem> exefs) {
         auto updateProgramNCA{state.updateLoader->programNca};
-        try { diagnostics::SetEffectiveExeFs(updateProgramNCA ? diagnostics::ContentTitleId(updateProgramNCA->header.titleId) : "",
-            state.updateLoader->diagnosticProgramContentId, updateProgramNCA && updateProgramNCA->exeFs ? "update" : "update_missing_exefs"); } catch (...) {}
+        try { diagnostics::SetEffectiveExeFs(updateProgramNCA && updateProgramNCA->exeFs ? diagnostics::ContentTitleId(updateProgramNCA->header.titleId) : "",
+            updateProgramNCA && updateProgramNCA->exeFs ? state.updateLoader->diagnosticProgramContentId : "",
+            updateProgramNCA && updateProgramNCA->exeFs ? "update" : "update_missing_exefs"); } catch (...) {}
         PINE_DIAG_CONTENT_LEVEL(updateProgramNCA && updateProgramNCA->exeFs ? "INFO" : "ERROR",
             updateProgramNCA && updateProgramNCA->exeFs ? "PATCH_EXEFS_SELECTED" : "PATCH_EXEFS_MISSING",
             {"source", "update"}, {"title_id", updateProgramNCA ? diagnostics::ContentTitleId(updateProgramNCA->header.titleId) : "unknown"},
-            {"effective_exefs_program_nca", state.updateLoader->diagnosticProgramContentId},
+            {"effective_exefs_program_nca", updateProgramNCA && updateProgramNCA->exeFs ? state.updateLoader->diagnosticProgramContentId : ""},
+            {"candidate_update_program_nca", state.updateLoader->diagnosticProgramContentId},
             {"base_program_nca", state.loader->diagnosticProgramContentId}, {"observation_layer", "patch_manager_returned_exefs"});
         return updateProgramNCA->exeFs;
     }

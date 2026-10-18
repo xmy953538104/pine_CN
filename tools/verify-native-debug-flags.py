@@ -22,6 +22,8 @@ def verify(arguments, expected):
                    for index,arg in enumerate(arguments) if arg.startswith('-D') and (arg != '-D' or index+1 < len(arguments))]
     if any(value.split('=', 1)[0] in ('NDEBUG', 'BOOST_DISABLE_ASSERTS') for value in definitions):
         raise ValueError('Assertions disabled')
+    if any(value.split('=', 1)[0] == 'PINE_DIAG_TEST_HOOKS' for value in definitions):
+        raise ValueError('Host fault-injection hooks must never enter a candidate APK')
     frame_flags = [arg for arg in arguments if arg in ('-fomit-frame-pointer', '-fno-omit-frame-pointer')]
     if '-g3' not in arguments or not frame_flags or frame_flags[-1] != '-fno-omit-frame-pointer':
         raise ValueError('Debug symbols or frame pointers missing')

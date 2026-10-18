@@ -57,6 +57,18 @@ class DiagnosticExportTest {
             assertTrue(entries.getValue("emulation.log").contains("OutputDebugString:"))
         }
     }
+
+    @Test fun dfxFragmentCannotReviveAWholeLineCredentialOrOmittedPrivatePathTail() = sandbox { logs, textLog, cache, _ ->
+        textLog.writeText("password=prefix DFX1|event=DFX_PROBE|probe_id=x|message=private-credential-tail\n" +
+            "open /data/user/0/Alice/private DFX1|event=DFX_PROBE|probe_id=x|message=private-path-tail\n")
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            val all = entries.values.joinToString("\n")
+            for (secret in listOf("private-credential-tail", "private-path-tail", "Alice", "password=prefix")) assertFalse(secret, all.contains(secret))
+            assertTrue(entries.getValue("emulation.log").contains("REDACTED_CREDENTIAL_LINE"))
+            assertTrue(entries.getValue("emulation.log").contains("REDACTED_PATH"))
+        }
+    }
     @Test fun criticalStateSharesSequenceWithoutReplayingAnErrorAndRemainsAllowlisted() = sandbox { logs, textLog, cache, _ ->
         val original = Json.parseToJsonElement(record("same", 7, "exception", "NATIVE_EXCEPTION", "ERROR")).jsonObject
         val state = JsonObject(original + mapOf("record_kind" to JsonPrimitive("critical_snapshot"),

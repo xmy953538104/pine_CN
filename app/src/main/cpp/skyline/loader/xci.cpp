@@ -70,7 +70,7 @@ namespace skyline::loader {
     }
 
     void *XciLoader::LoadProcessData(const std::shared_ptr<kernel::type::KProcess> &process, const DeviceState &state) {
-        try { diagnostics::SetEffectiveExeFs(diagnostics::ContentTitleId(programNca->header.titleId), diagnosticProgramContentId, "base"); } catch (...) {}
+        try { if (programNca) diagnostics::SetEffectiveExeFs(diagnostics::ContentTitleId(programNca->header.titleId), diagnosticProgramContentId, "base"); } catch (...) {}
         process->npdm = vfs::NPDM(programNca->exeFs->OpenFile("main.npdm"));
         return NcaLoader::LoadExeFs(this, programNca->exeFs, process, state);
     }

@@ -18,11 +18,11 @@ class DebugFlags(unittest.TestCase):
 
     def test_optimization_does_not_disable_assertions_or_protections(self):
         flags.verify(self.args, '2')
-        for extra in ['-O0', '-DNDEBUG', '-DNDEBUG=1', '-DBOOST_DISABLE_ASSERTS', '-fno-stack-protector', '-ffast-math', '-Ofast']:
+        for extra in ['-O0', '-DNDEBUG', '-DNDEBUG=1', '-DBOOST_DISABLE_ASSERTS', '-DPINE_DIAG_TEST_HOOKS', '-DPINE_DIAG_TEST_HOOKS=0', '-fno-stack-protector', '-ffast-math', '-Ofast']:
             with self.subTest(extra=extra), self.assertRaises(ValueError): flags.verify(self.args+[extra], '2')
         for removed in ['-g3', '-fno-omit-frame-pointer', '-fstack-protector-strong']:
             with self.subTest(removed=removed), self.assertRaises(ValueError): flags.verify([a for a in self.args if a!=removed], '2')
-        for extra in [['-D', 'NDEBUG'], ['-fomit-frame-pointer']]:
+        for extra in [['-D', 'NDEBUG'], ['-D', 'PINE_DIAG_TEST_HOOKS'], ['-fomit-frame-pointer']]:
             with self.subTest(extra=extra), self.assertRaises(ValueError): flags.verify(self.args+extra, '2')
 
     def test_missing_and_mixed_compiler_commands_are_rejected(self):

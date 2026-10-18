@@ -70,6 +70,9 @@ int main() {
     update.exeFs.reset();
     assert(!manager.PatchExeFS(state, originalExeFs));
     assert(observations.back().event == "PATCH_EXEFS_MISSING");
+    assert(effectiveContent.empty() && effectiveProgram.empty() && effectiveSource == "update_missing_exefs");
+    assert(observations.back().fields.at("effective_exefs_program_nca").empty());
+    assert(observations.back().fields.at("candidate_update_program_nca") == "update-content");
 
     vfs::NCA::fail = true;
     try { manager.PatchRomFS(state, update, 789); assert(false); } catch (const vfs::ControlledPatchFailure &) {}

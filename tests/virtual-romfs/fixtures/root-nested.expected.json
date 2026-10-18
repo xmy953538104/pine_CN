@@ -1,0 +1,27 @@
+{
+  "source_commit": "22756068dd0ed6ff9734c59cb4f99ebd3f62555b",
+  "sha256": "c7d6619a3d10e89e49b292f1d4c9d10cc4479dc95d094bcad4058ccba8176501",
+  "size": 680,
+  "header": {
+    "directory_hash": 532,
+    "directory_metadata": 544,
+    "file_hash": 596,
+    "file_metadata": 608,
+    "data": 512
+  },
+  "files": {
+    "c/a": "OK",
+    "c/d": "!"
+  },
+  "hash_vectors": {
+    "root_parent0_empty": "075bcd15",
+    "directory_parent0_c": "a83ade0b",
+    "file_parent24_a": "683ade09",
+    "file_parent24_d": "683ade0c"
+  },
+  "directory_bucket0": 24,
+  "directory_at24_next_hash": 0,
+  "file_bucket0": 36,
+  "file_at36_next_hash": 0,
+  "note": "The hash field is the next collision-chain metadata offset, not a computed hash value."
+}

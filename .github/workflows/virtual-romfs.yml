@@ -1,0 +1,56 @@
+name: Virtual RomFS prototype host checks
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'app/src/main/cpp/skyline/vfs/**'
+      - 'app/src/main/cpp/skyline/services/fssrv/IStorage.*'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/CMakeLists.txt'
+      - 'tests/virtual-romfs/**'
+      - 'tests/diagnostics/composite_stubs/common.h'
+      - 'tests/diagnostics/storage_stubs/**'
+      - 'tools/tests/test-virtual-romfs.py'
+      - 'tools/tests/virtual_romfs_fixture.py'
+      - 'docs/virtual-romfs-prototype.md'
+      - '.github/workflows/virtual-romfs.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'app/src/main/cpp/skyline/vfs/**'
+      - 'app/src/main/cpp/skyline/services/fssrv/IStorage.*'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/CMakeLists.txt'
+      - 'tests/virtual-romfs/**'
+      - 'tests/diagnostics/composite_stubs/common.h'
+      - 'tests/diagnostics/storage_stubs/**'
+      - 'tools/tests/test-virtual-romfs.py'
+      - 'tools/tests/virtual_romfs_fixture.py'
+      - 'docs/virtual-romfs-prototype.md'
+      - '.github/workflows/virtual-romfs.yml'
+permissions:
+  contents: read
+concurrency:
+  group: virtual-romfs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  host:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Actual RomFileSystem and IStorage, independent literal oracle
+        run: python3 tools/tests/test-virtual-romfs.py --evidence-dir "$RUNNER_TEMP/virtual-romfs-evidence/normal"
+      - name: Address and undefined-behavior sanitizers
+        run: python3 tools/tests/test-virtual-romfs.py --sanitize --evidence-dir "$RUNNER_TEMP/virtual-romfs-evidence/sanitized"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: virtual-romfs-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/virtual-romfs-evidence/
+          if-no-files-found: error

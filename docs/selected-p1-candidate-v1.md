@@ -41,7 +41,7 @@ both Kotlin and native opt-in flags; ordinary builds keep it disabled. See
 
 BKTR remains rejected with `selected_bktr_unsupported`, even with a matching
 Base. A controlled real-AES/UBSan read previously reached zero-length decrypt
-and a null destination passed to `memcpy` through the legacy BKTR reader.
+and a null internal-buffer source passed to `memcpy` through the legacy BKTR reader.
 Table validation alone does not establish arbitrary guest-read safety, and
 PatchManager reconstructs the effective NCA storage later. The minimum future
 path is a separately validated selected-only storage implementation (or an

@@ -16,8 +16,9 @@
 namespace skyline::vfs {
     using namespace loader;
 
-    NCA::NCA(std::shared_ptr<vfs::Backing> pBacking, std::shared_ptr<crypto::KeyStore> pKeyStore, bool pUseKeyArea)
-        : backing(std::move(pBacking)), keyStore(std::move(pKeyStore)), useKeyArea(pUseKeyArea) {
+    NCA::NCA(std::shared_ptr<vfs::Backing> pBacking, std::shared_ptr<crypto::KeyStore> pKeyStore, bool pUseKeyArea,
+             std::shared_ptr<const NcaReadValidator> pReadValidator)
+        : backing(std::move(pBacking)), keyStore(std::move(pKeyStore)), useKeyArea(pUseKeyArea), readValidator(std::move(pReadValidator)) {
         header = backing->Read<NCAHeader>();
 
         if (header.magic != util::MakeMagic<u32>("NCA3")) {
@@ -32,6 +33,9 @@ namespace skyline::vfs {
                 throw loader_exception(LoaderResult::ParsingError);
             encrypted = true;
         }
+
+        if (readValidator)
+            readValidator->ValidateHeader(header, backing->size);
 
         contentType = header.contentType;
         rightsIdEmpty = header.rightsId == crypto::KeyStore::Key128{};
@@ -54,6 +58,9 @@ namespace skyline::vfs {
             for (size_t i{}; i < lengthSections; i++)
                 sections.push_back(backing->Read<NCASectionHeader>());
         }
+
+        if (readValidator)
+            readValidator->ValidateSections(header, sections);
 
         for (std::size_t i = 0; i < sections.size(); ++i) {
             const auto &section = sections[i];
@@ -94,7 +101,16 @@ namespace skyline::vfs {
         size_t offset{static_cast<size_t>(entry.mediaOffset) * constant::MediaUnitSize + section.pfs0.pfs0HeaderOffset};
         size_t size{constant::MediaUnitSize * static_cast<size_t>(entry.mediaEndOffset - entry.mediaOffset)};
 
-        auto pfs{std::make_shared<PartitionFileSystem>(CreateBacking(section, std::make_shared<RegionBacking>(backing, offset, size), offset))};
+        auto decrypted{CreateBacking(section, std::make_shared<RegionBacking>(backing, offset, size), offset)};
+        if (readValidator) {
+            const auto boundedSize{readValidator->ValidatePfs0(section, entry, decrypted)};
+            // The policy validates the real PFS extent before the legacy parser
+            // sees it. The ordinary loader path retains its original backing.
+            if (!decrypted || boundedSize > decrypted->size)
+                throw exception("NCA inspection returned an invalid PFS extent");
+            decrypted = std::make_shared<RegionBacking>(decrypted, 0, boundedSize);
+        }
+        auto pfs{std::make_shared<PartitionFileSystem>(decrypted)};
 
         if (contentType == NCAContentType::Program) {
             // An ExeFS must always contain an NPDM and a main NSO, whereas the logo section will always contain a logo and a startup movie

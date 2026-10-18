@@ -304,6 +304,20 @@ namespace skyline {
         static_assert(sizeof(SubsectionBucketRaw) == 0x4000);
 
         /**
+         * @brief Additional read-only checks for explicit inspection callers.
+         * @note Ordinary loaders do not install this policy. It may only reject
+         * input or narrow a PFS backing; existing NCA checks still apply.
+         */
+        class NcaReadValidator {
+          public:
+            virtual ~NcaReadValidator() = default;
+            virtual void ValidateHeader(const NCAHeader &header, size_t backingSize) const = 0;
+            virtual void ValidateSections(const NCAHeader &header, const std::vector<NCASectionHeader> &sections) const = 0;
+            virtual size_t ValidatePfs0(const NCASectionHeader &section, const NCASectionTableEntry &entry,
+                                       const std::shared_ptr<Backing> &decrypted) const = 0;
+        };
+
+        /**
          * @brief The NCA class provides an easy way to access the contents of an Nintendo Content Archive
          * @url https://switchbrew.org/wiki/NCA_Format
          */
@@ -318,6 +332,7 @@ namespace skyline {
             std::vector<NCASectionHeader> sections;
             std::shared_ptr<vfs::Backing> bktrBaseRomfs;
             u64 bktrBaseIvfcOffset;
+            std::shared_ptr<const NcaReadValidator> readValidator;
 
             void ReadPfs0(const NCASectionHeader &sectionHeader, const NCASectionTableEntry &entry);
 
@@ -350,7 +365,8 @@ namespace skyline {
             NCAContentType contentType; //!< The content type of the NCA
             u64 ivfcOffset{0};
 
-            NCA(std::shared_ptr<vfs::Backing> backing, std::shared_ptr<crypto::KeyStore> keyStore, bool useKeyArea = false);
+            NCA(std::shared_ptr<vfs::Backing> backing, std::shared_ptr<crypto::KeyStore> keyStore, bool useKeyArea = false,
+                std::shared_ptr<const NcaReadValidator> readValidator = nullptr);
 
             NCA(std::optional<vfs::NCA> updateNca, std::shared_ptr<crypto::KeyStore> pKeyStore, std::shared_ptr<vfs::Backing> bktrBaseRomfs,
                      u64 bktrBaseIvfcOffset, bool useKeyArea = false);

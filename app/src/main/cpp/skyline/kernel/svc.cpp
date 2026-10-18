@@ -922,8 +922,7 @@ namespace skyline::kernel::svc {
     void OutputDebugString(const DeviceState &state, SvcContext &ctx) {
         auto string{span(reinterpret_cast<char *>(ctx.x0), ctx.x1).as_string()};
 
-        if (!string.empty() && string.back() == '\n')
-            string.remove_suffix(1);
+        string = diagnostics::StripGuestLogLineFeed(string);
 
         diagnostics::GuestMessage(string, "OutputDebugString");
         LOGI("{}", string);

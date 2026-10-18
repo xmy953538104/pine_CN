@@ -42,6 +42,21 @@ class DiagnosticExportTest {
         }
         assertEquals("DFX1|[REDACTED_MALFORMED_PROTOCOL]", DiagnosticExport.redact("DFX1|event=DFX_PROBE|message=%GG"))
     }
+
+    @Test fun realNativeLoggerPrefixCannotExportEncodedPrivateDfxPayload() = sandbox { logs, textLog, cache, _ ->
+        // AsyncLogger::WriteFile: "{:7} | {:>10} | {:^15} | {}\n", then SVC function prefix.
+        val prefix = "INFO    |     123456 |      HOS-1      | OutputDebugString: "
+        textLog.writeText(prefix + "DFX1|event=DFX_LUA_ERROR|probe_id=privacy|file=%2Fdata%2Fuser%2F0%2FAlice%2Fprivate.lua|message=error\n" +
+            prefix + "DFX1|event=DFX_PROBE|probe_id=privacy|message=password%3Dprivate-value\n")
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            val all = entries.values.joinToString("\n")
+            for (privateValue in listOf("Alice", "private.lua", "private-value", "%2Fdata", "password%3D")) assertFalse(privateValue, all.contains(privateValue))
+            assertTrue(entries.getValue("emulation.log").contains("REDACTED_PATH"))
+            assertTrue(entries.getValue("emulation.log").contains("REDACTED_CREDENTIAL_LINE"))
+            assertTrue(entries.getValue("emulation.log").contains("OutputDebugString:"))
+        }
+    }
     @Test fun criticalStateSharesSequenceWithoutReplayingAnErrorAndRemainsAllowlisted() = sandbox { logs, textLog, cache, _ ->
         val original = Json.parseToJsonElement(record("same", 7, "exception", "NATIVE_EXCEPTION", "ERROR")).jsonObject
         val state = JsonObject(original + mapOf("record_kind" to JsonPrimitive("critical_snapshot"),

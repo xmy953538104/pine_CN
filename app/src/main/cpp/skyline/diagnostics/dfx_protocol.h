@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include "guest_text.h"
 
 namespace skyline::diagnostics {
 struct DfxMessage {
@@ -34,7 +35,7 @@ inline DfxMessage ParseDfx1(std::string_view wire) {
     if (wire.size() > 2048) return fail("wire_limit_2048_bytes");
     // A logging transport may add one physical line terminator. No leading
     // prefix, embedded extra record or arbitrary substring is accepted.
-    if (wire.ends_with('\n')) { wire.remove_suffix(1); if (wire.ends_with('\r')) wire.remove_suffix(1); }
+    wire = GuestProtocolLine(wire); // SVC may already have removed LF from CRLF.
     wire.remove_prefix(5);
     std::array<std::string_view, 8> seen{};
     size_t count{}, decodedBytes{};

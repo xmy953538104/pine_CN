@@ -44,5 +44,28 @@ class ProbeTest(unittest.TestCase):
         for row in duplicate: row['session_id'] = 'another-session'
         with self.assertRaisesRegex(ValueError, 'reused'): probe.verify(rows + duplicate, 'controlled-host-001')
 
+    def test_derived_payload_cannot_certify_itself_against_a_forged_expectation(self):
+        rows = self.rows()
+        derived = next(row for row in rows if row['event'] == 'DFX_PROBE')
+        derived['fields']['game_message'] = 'forged'
+        with self.assertRaisesRegex(ValueError, 'Raw/derived payload mismatch'):
+            probe.verify(rows, 'controlled-host-001', expected_message='forged')
+
+    def test_malformed_raw_fields_and_redacted_payload_are_not_passes(self):
+        for suffix in ('|extra=x', '|message=%GG', '|message=%00'):
+            rows = self.rows()
+            for row in rows:
+                fields = row['fields']
+                if 'DFX1|' in fields.get('message', ''):
+                    fields['message'] = fields['message'].split('|message=')[0] + suffix
+            with self.assertRaises(ValueError): probe.verify(rows, 'controlled-host-001')
+        rows = self.rows()
+        for row in rows:
+            fields = row['fields']
+            if 'DFX1|' in fields.get('message', ''):
+                fields['message'] = fields['message'].split('|message=')[0] + '|message=%5BREDACTED_PATH%5D'
+                if row['event'] == 'DFX_PROBE': fields['game_message'] = '[REDACTED_PATH]'
+        with self.assertRaisesRegex(ValueError, 'unknown'): probe.verify(rows, 'controlled-host-001')
+
 
 if __name__ == '__main__': unittest.main()

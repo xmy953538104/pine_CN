@@ -16,6 +16,9 @@ int main(int argc, char **argv) {
     assert(parsed.recognized && parsed.valid && parsed.probe == "controlled-001");
     assert(parsed.message == "中文 | %" && parsed.file.empty() && parsed.line.empty());
     assert(ParseDfx1(std::string(probe) + "\r\n").valid);
+    const auto svcWire = std::string(probe) + "\r\n";
+    const auto normalizedBySvc = StripGuestLogLineFeed(svcWire);
+    assert(normalizedBySvc.ends_with('\r') && ParseDfx1(normalizedBySvc).valid);
     constexpr std::string_view error = "DFX1|event=DFX_LUA_ERROR|probe_id=controlled-001|file=scripts/test.lua|line=42|function=fixture|message=controlled%20error|traceback=scripts/test.lua:42%0Anext%20frame";
     parsed = ParseDfx1(error);
     assert(parsed.valid && parsed.file == "scripts/test.lua" && parsed.line == "42");

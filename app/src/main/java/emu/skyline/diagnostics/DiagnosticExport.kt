@@ -40,7 +40,10 @@ object DiagnosticExport {
      * contain spaces or quotes, so preserve preceding context and conservatively omit the line tail.
      */
     fun redact(text: String): String = text.lineSequence().joinToString("\n") { line ->
-        if (line.startsWith("DFX1|")) redactDfx1Wire(line) else redactPlainLine(line)
+        // Export redaction also handles the existing logger's level/time/thread
+        // prefix. This does not weaken the native event parser's first-token rule.
+        val marker = line.indexOf("DFX1|")
+        if (marker >= 0) redactPlainLine(line.take(marker)) + redactDfx1Wire(line.substring(marker)) else redactPlainLine(line)
     }
 
     private fun redactPlainLine(line: String): String =
@@ -60,12 +63,15 @@ object DiagnosticExport {
         if (line.toByteArray(Charsets.UTF_8).size > 2048) return "DFX1|[REDACTED_WIRE_LIMIT]"
         val fields = line.removePrefix("DFX1|").split('|')
         if (fields.size > 8) return "DFX1|[REDACTED_FIELD_LIMIT]"
+        val allowed = setOf("event", "probe_id", "file", "line", "function", "message", "traceback", "phase")
+        val seen = mutableSetOf<String>()
         var changed = false
         var decodedBytes = 0
         val safe = fields.map { field ->
             val equals = field.indexOf('=')
             if (equals < 0) return "DFX1|[REDACTED_MALFORMED_PROTOCOL]"
             val key = field.take(equals)
+            if (key !in allowed || !seen.add(key)) return "DFX1|[REDACTED_MALFORMED_PROTOCOL]"
             val bytes = field.substring(equals + 1).toByteArray(Charsets.UTF_8)
             val decoded = ByteArrayOutputStream()
             var index = 0

@@ -10,7 +10,7 @@ inconclusive about `main.lua` execution.
 ## Wire and compatibility
 
 One message begins exactly with `DFX1|`, followed by at most eight unique
-`key=value` fields separated by `|`. Optional final LF/CRLF is accepted; leading
+`key=value` fields separated by `|`. Optional final LF/CRLF (or SVC-stripped CR) is accepted; leading
 prefixes, substring matches and multiple physical records are not.
 
 ```text
@@ -51,7 +51,9 @@ Payload locations are named `game_script_file/line/function`; text is
 `game_message`, `game_traceback`, `game_phase`. LogManager's independently supplied
 `guest_file/line/function/thread` stay separate. OutputDebugString never invents
 source positions. Export also redacts percent-escaped private paths/credentials
-in this known protocol. Rotation/rate/queue/disk loss limits every absence claim.
+in this known protocol, including the prefixed legacy text log. Redacted payloads
+are unknown to the offline verifier and cannot produce a passing field check.
+Rotation/rate/queue/disk loss limits every absence claim.
 
 ## Minimal game-project handoff
 

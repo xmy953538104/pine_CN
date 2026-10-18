@@ -268,7 +268,7 @@ try {
     $files = @(Get-ChildItem $out -Filter '*.jsonl')
     Assert ($files.Count -eq 1) 'Session/title filtering should produce one file'
     $lines = @([IO.File]::ReadAllLines($files[0].FullName, [Text.Encoding]::UTF8))
-    Assert ($lines.Count -eq 6) 'Base title filter must retain DLC/guest/stage/summary context and known content before launch'
+    Assert ($lines.Count -eq 8) 'Base title filter must retain DLC/guest/DFX1/stage/summary context and known content before launch'
     # Compare the collected bytes with actual sink output, not a second event
     # serializer. The first BEFORE_TITLE record has neither known title field.
     for ($i = 0; $i -lt $lines.Count; $i++) { Assert ($lines[$i] -ceq $fixtureLines[$i + 1]) 'Collector altered or selected the wrong native sink record' }
@@ -308,7 +308,7 @@ try {
     $unknownFiles = @(Get-ChildItem $unknownOutput -Filter '*.jsonl')
     Assert ($unknownFiles.Count -eq 1) 'Unknown base must allow event-specific fields.title_id fallback'
     $unknownLines = @([IO.File]::ReadAllLines($unknownFiles[0].FullName, [Text.Encoding]::UTF8))
-    Assert ($unknownLines.Count -eq 1 -and $unknownLines[0] -ceq $fixtureLines[10]) 'Fallback must preserve the native unknown-base content record only'
+    Assert ($unknownLines.Count -eq 1 -and $unknownLines[0] -ceq $fixtureLines[12]) 'Fallback must preserve the native unknown-base content record only'
 
     # Controlled schema inputs only: canonical application identity must beat a
     # Patch CNMT legacy root, while the old root fallback remains supported.

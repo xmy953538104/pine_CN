@@ -4,7 +4,7 @@
 #include "catalog.h"
 
 namespace skyline::crypto { class KeyStore; }
-namespace skyline::vfs { class Backing; }
+namespace skyline::vfs { class Backing; class NCA; }
 
 namespace skyline::catalog {
     class NativeInspectionBudget;
@@ -12,6 +12,17 @@ namespace skyline::catalog {
     // FD again. Reads use ReadUnchecked's actual count. Backing exposes no
     // opened-file identity, so this source's snapshot token is unavailable.
     Source MakeBackingSource(std::shared_ptr<vfs::Backing> backing);
+    // Exact, read-only bridge. Every legacy read must return all requested bytes
+    // or throw; its own logical extent remains enforced by ReadUnchecked too.
+    std::shared_ptr<vfs::Backing> MakeSourceBacking(Source source);
+    struct OpenedNativeNca {
+        std::shared_ptr<vfs::NCA> nca;
+        std::shared_ptr<const NcaDescriptor> descriptor;
+    };
+    // Explicit runtime preparation reuses the same strict profile as inspection.
+    // It adds no BKTR/plaintext support and never downgrades existing checks.
+    OpenedNativeNca OpenNativeNca(const PfsEntry &entry, std::shared_ptr<crypto::KeyStore> keyStore,
+                                 const Options &options);
 
     // Explicit Pine-internal inspection. Keys must already be legally provided
     // by the caller. This API never searches for, creates or logs keys.

@@ -102,6 +102,10 @@ namespace skyline::kernel {
                     {"cnmt_version", dlc->cnmt ? std::to_string(dlc->cnmt->header.version) : "unknown"});
             }
 
+        ExecuteLoadedContent();
+    }
+
+    void OS::ExecuteLoadedContent(const char *metadataSource) {
         state.gpu->Initialise();
         diagnostics::Stage("gpu_initialized");
 
@@ -118,7 +122,7 @@ namespace skyline::kernel {
             if (publisher.empty())
                 publisher = nacp->GetApplicationPublisher(nacp->GetFirstSupportedTitleLanguage());
 
-            PINE_DIAG_CONTENT("APPLICATION_METADATA", {"source", "base_control"}, {"title_name", name},
+            PINE_DIAG_CONTENT("APPLICATION_METADATA", {"source", metadataSource}, {"title_name", name},
                 {"title_id", state.loader->cnmt ? state.loader->cnmt->GetTitleId() : "unknown"},
                 {"save_data_owner_id", nacp->GetSaveDataOwnerId()},
                 {"base_display_version", nacp->GetApplicationVersion()},

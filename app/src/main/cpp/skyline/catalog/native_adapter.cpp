@@ -93,13 +93,16 @@ namespace skyline::catalog {
             return id;
         }
         class InspectionValidator final : public vfs::NcaReadValidator {
+            std::shared_ptr<NcaDescriptor> owner;
             NcaDescriptor &result;
-            const Options &options;
+            Options options;
             Source raw;
             std::shared_ptr<NativeInspectionBudget> budget;
           public:
             InspectionValidator(NcaDescriptor &pResult, const Options &pOptions, Source pRaw, std::shared_ptr<NativeInspectionBudget> pBudget)
                 : result(pResult), options(pOptions), raw(std::move(pRaw)), budget(std::move(pBudget)) {}
+            InspectionValidator(std::shared_ptr<NcaDescriptor> pResult, const Options &pOptions, Source pRaw, std::shared_ptr<NativeInspectionBudget> pBudget)
+                : owner(std::move(pResult)), result(*owner), options(pOptions), raw(std::move(pRaw)), budget(std::move(pBudget)) {}
             void ValidateHeader(const vfs::NCAHeader &header, size_t backingSize) const override {
                 const auto bytes = BytesOf(header);
                 Require(std::memcmp(bytes.data() + 0x200, "NCA3", 4) == 0, "native_invalid_header", "existing backend did not decode an NCA3 header");
@@ -221,6 +224,27 @@ namespace skyline::catalog {
 
     Source MakeBackingSource(std::shared_ptr<vfs::Backing> backing) {
         return std::make_shared<BackingReader>(std::move(backing), Source{});
+    }
+    std::shared_ptr<vfs::Backing> MakeSourceBacking(Source source) {
+        Require(static_cast<bool>(source), "native_null_source", "native backing source is absent");
+        return std::make_shared<SourceBacking>(std::move(source));
+    }
+    OpenedNativeNca OpenNativeNca(const PfsEntry &entry, std::shared_ptr<crypto::KeyStore> keyStore, const Options &options) {
+        Require(static_cast<bool>(entry.source) && static_cast<bool>(keyStore), "native_missing_input", "native open requires an exact source and provided key store");
+        Require(entry.source->Size() == entry.size, "nca_size_mismatch", "NCA source size differs from its member extent");
+        entry.source->CheckUnchanged();
+        auto budget = std::make_shared<NativeInspectionBudget>();
+        budget->Reserve(0x1004, options.limits.maxMetadataBytes);
+        const auto prefix = entry.source->Bytes(0, 0x400);
+        Require(std::memcmp(prefix.data() + 0x200, "NCA3", 4) != 0, "native_plaintext_unsupported", "the existing plaintext NCA constructor is not used");
+        auto descriptor = std::make_shared<NcaDescriptor>();
+        descriptor->entry = entry.name; descriptor->offset = entry.offset; descriptor->size = entry.size;
+        descriptor->source = entry.source; descriptor->contentIdHint = IdHint(entry.name);
+        auto validator = std::make_shared<InspectionValidator>(descriptor, options, entry.source, std::move(budget));
+        auto nca = std::make_shared<vfs::NCA>(MakeSourceBacking(entry.source), std::move(keyStore), false, std::move(validator));
+        descriptor->support = "metadata_readable";
+        entry.source->CheckUnchanged();
+        return {std::move(nca), std::move(descriptor)};
     }
     NativeNcaInspector::NativeNcaInspector(std::shared_ptr<crypto::KeyStore> pKeyStore)
         : keyStore(std::move(pKeyStore)), budget(std::make_shared<NativeInspectionBudget>()) {}

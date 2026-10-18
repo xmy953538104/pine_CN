@@ -23,16 +23,16 @@ namespace skyline::vfs {
             },
             .mainThreadPriority = DefaultPriority,
             .idealCore = DefaultCore,
-            .mainThreadStackSize = DefaultStackSize,
             .systemResourceSize = DefaultSystemResourceSize,
+            .mainThreadStackSize = DefaultStackSize,
             .name = "Application",
         };
         aci0 = {
             .magic = MetaMagic,
         };
         threadInfo = {
-            .coreMask = 0b0111,
             .priority = {0, 59},
+            .coreMask = 0b0111,
         };
     }
 

@@ -426,6 +426,17 @@ if(PINE_ENABLE_NSP_CATALOG)
         ${source_DIR}/skyline/catalog/json.cpp
         ${source_DIR}/skyline/catalog/native_adapter.cpp)
 endif()
+option(PINE_ENABLE_SELECTED_CONTENT "Compile the explicit selected native content entry" OFF)
+if(PINE_ENABLE_SELECTED_CONTENT)
+    if(NOT PINE_ENABLE_NSP_CATALOG)
+        message(FATAL_ERROR "PINE_ENABLE_SELECTED_CONTENT requires PINE_ENABLE_NSP_CATALOG")
+    endif()
+    target_compile_definitions(skyline PRIVATE PINE_ENABLE_SELECTED_CONTENT=1)
+    target_sources(skyline PRIVATE
+        ${source_DIR}/skyline/loader/selected_validation.cpp
+        ${source_DIR}/skyline/loader/selected_content.cpp
+        ${source_DIR}/skyline/loader/selected_execute.cpp)
+endif()
 # target_precompile_headers(skyline PRIVATE ${source_DIR}/skyline/common.h) # PCH will currently break Intellisense
 target_compile_options(skyline PRIVATE -Wall -Wno-unknown-attributes -Wno-c++20-extensions -Wno-c++17-extensions -Wno-c99-designator -Wno-reorder -Wno-missing-braces -Wno-unused-variable -Wno-unused-private-field -Wno-dangling-else -Wconversion -fsigned-bitfields)
 

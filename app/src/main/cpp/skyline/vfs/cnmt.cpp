@@ -5,6 +5,18 @@
 
 namespace skyline::vfs {
 
+    CNMT::CNMT(std::shared_ptr<Backing> member) {
+        header = member->Read<PackagedContentMetaHeader>();
+        if (header.contentMetaType >= ContentMetaType::Application && header.contentMetaType <= ContentMetaType::AddOnContent)
+            optionalHeader = member->Read<OptionalHeader>(sizeof(PackagedContentMetaHeader));
+        const size_t contents{sizeof(PackagedContentMetaHeader) + header.extendedHeaderSize};
+        const size_t metas{contents + static_cast<size_t>(header.contentCount) * sizeof(PackagedContentInfo)};
+        for (u16 i{}; i < header.contentCount; ++i)
+            contentInfos.emplace_back(member->Read<PackagedContentInfo>(contents + static_cast<size_t>(i) * sizeof(PackagedContentInfo)));
+        for (u16 i{}; i < header.contentMetaCount; ++i)
+            contentMetaInfos.emplace_back(member->Read<ContentMetaInfo>(metas + static_cast<size_t>(i) * sizeof(ContentMetaInfo)));
+    }
+
     CNMT::CNMT(std::shared_ptr<FileSystem> cnmtSection) {
         auto root{cnmtSection->OpenDirectory("")};
         std::shared_ptr<vfs::Backing> cnmt;

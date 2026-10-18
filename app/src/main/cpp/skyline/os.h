@@ -9,6 +9,11 @@
 #include "loader/loader.h"
 #include "services/serviceman.h"
 
+#ifdef PINE_ENABLE_SELECTED_CONTENT
+namespace skyline::catalog { struct Catalog; }
+namespace skyline::loader { struct SelectionRequest; }
+#endif
+
 namespace skyline::kernel {
     /**
      * @brief The OS class manages the interaction between the various Skyline components
@@ -49,6 +54,15 @@ namespace skyline::kernel {
          */
         void Execute(int romFd, std::vector<int> dlcFds, int updateFd, loader::RomFormat romType);
 
+#ifdef PINE_ENABLE_SELECTED_CONTENT
+        // Explicit native entry only. It does not adopt FDs or search for keys.
+        void ExecuteSelectedContent(const catalog::Catalog &catalog, const loader::SelectionRequest &request,
+                                    std::shared_ptr<crypto::KeyStore> providedKeys);
+#endif
+
         std::shared_ptr<loader::Loader> GetLoader(int fd, std::shared_ptr<crypto::KeyStore> keyStore, loader::RomFormat romType);
+
+      private:
+        void ExecuteLoadedContent(const char *metadataSource = "base_control");
     };
 }

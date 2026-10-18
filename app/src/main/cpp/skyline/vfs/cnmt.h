@@ -96,6 +96,10 @@ namespace skyline::vfs {
 
         CNMT(std::shared_ptr<FileSystem> file);
 
+        // Explicit selected-content entry: the caller supplies one strictly
+        // validated CNMT member, rather than selecting a directory's last file.
+        explicit CNMT(std::shared_ptr<Backing> validatedMember);
+
         std::string GetTitleId();
 
         std::string GetParentTitleId();

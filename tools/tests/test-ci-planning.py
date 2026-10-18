@@ -49,6 +49,26 @@ class PlanningTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 require(runs, commit)
 
+    def test_observer_only_increment_reuses_unchanged_suites_with_sha_evidence(self):
+        qualify = load('require-fast-checks').qualify
+        runs = [dict(id=2, name='Diagnostics fast checks', head_sha='new', conclusion='success'),
+                dict(id=1, name='Diagnostics fast checks', head_sha='old', conclusion='success')]
+        def jobs(run):
+            return [dict(name=scope, id=run * 10 + i, conclusion='success' if run == 1 or scope == 'tools' else 'skipped', html_url=scope)
+                    for i, scope in enumerate(('native', 'tools', 'windows', 'jvm'))]
+        result = qualify(runs, 'new', jobs, lambda previous, current: [] if previous == current else ['tools/android-diagnostics-smoke.py'])
+        self.assertEqual(result['tools']['source_commit'], 'new')
+        self.assertEqual(result['native']['source_commit'], 'old')
+        self.assertEqual(result['jvm']['inputs'], 'exact unchanged scope')
+
+    def test_changed_production_hook_cannot_reuse_old_green_native_or_jvm(self):
+        qualify = load('require-fast-checks').qualify
+        runs = [dict(id=1, name='Diagnostics fast checks', head_sha='old', conclusion='success')]
+        jobs = lambda run: [dict(name=scope, id=1, conclusion='success', html_url=scope) for scope in ('native', 'tools', 'windows', 'jvm')]
+        for name in ('app/src/main/cpp/skyline/os.cpp', '.gitmodules', 'CMakeLists.txt', 'unknown-build-input'):
+            with self.assertRaises(ValueError):
+                qualify(runs, 'new', jobs, lambda previous, current: [name])
+
 
 if __name__ == '__main__':
     unittest.main()

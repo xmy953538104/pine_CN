@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Classify exact changed paths; an unavailable comparison fails open to all tests."""
 import argparse
+import os
 import subprocess
 from pathlib import Path
 
@@ -45,7 +46,7 @@ if __name__ == '__main__':
     parser.add_argument('--base', required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    values = classify(changed(args.base))
+    values = dict.fromkeys(('native', 'tools', 'windows', 'jvm'), True) if os.environ.get('FORCE_ALL') == 'true' else classify(changed(args.base))
     with args.output.open('a') as stream:
         for key, value in values.items():
             print(f'{key}={str(value).lower()}', file=stream)

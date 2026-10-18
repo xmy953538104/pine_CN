@@ -35,6 +35,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 tools/ci/require-fast-checks.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-fast-qualification-${{ github.event.pull_request.head.sha || github.sha }}
+          path: fast-qualification.json
+          if-no-files-found: error
   host-comparisons:
     needs: fast-gate
     if: github.event_name == 'workflow_dispatch' && inputs.host_comparisons

@@ -1,5 +1,11 @@
 name: Diagnostics fast checks
 on:
+  workflow_dispatch:
+    inputs:
+      all_checks:
+        description: Run every fast suite on this exact source
+        type: boolean
+        default: true
   push:
     branches-ignore: [main]
     paths-ignore: ['docs/**', '**/*.md']
@@ -28,7 +34,8 @@ jobs:
           fetch-depth: 2
       - id: scope
         env:
-          BASE: ${{ github.event.pull_request.base.sha || '908c76225e027b325eca319fb94820c403cb68c5' }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.all_checks }}
         run: python3 tools/ci/diagnostics-changes.py --base "$BASE" --output "$GITHUB_OUTPUT"
   native:
     needs: scope

@@ -13,6 +13,8 @@ import emu.skyline.BuildConfig
 import emu.skyline.R
 import emu.skyline.data.BaseAppItem
 import emu.skyline.data.AppItemTag
+import emu.skyline.emulation.contentSettingsIdentity
+import emu.skyline.emulation.selectedSettingsSelection
 import emu.skyline.preference.GpuDriverPreference
 import emu.skyline.preference.SeekBarPreference
 import emu.skyline.utils.GpuDriverHelper
@@ -24,6 +26,8 @@ import emu.skyline.utils.serializable
  */
 class GameSettingsFragment : PreferenceFragmentCompat() {
     private val item by lazy { requireArguments().serializable<BaseAppItem>(AppItemTag)!! }
+    private val selectedContent by lazy { selectedSettingsSelection(arguments) }
+    internal val settingsIdentity by lazy { contentSettingsIdentity(item, selectedContent) }
 
     override fun onViewCreated(view : View, savedInstanceState : Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -37,7 +41,7 @@ class GameSettingsFragment : PreferenceFragmentCompat() {
      * This constructs the preferences from XML preference resources
      */
     override fun onCreatePreferences(savedInstanceState : Bundle?, rootKey : String?) {
-        preferenceManager.sharedPreferencesName = EmulationSettings.prefNameForTitle(item.titleId ?: item.key())
+        preferenceManager.sharedPreferencesName = EmulationSettings.prefNameForTitle(settingsIdentity)
         addPreferencesFromResource(R.xml.custom_game_preferences)
         addPreferencesFromResource(R.xml.emulation_preferences)
 
@@ -61,7 +65,10 @@ class GameSettingsFragment : PreferenceFragmentCompat() {
         if (BuildConfig.BUILD_TYPE != "release")
             findPreference<Preference>("validation_layer")?.isVisible = true
 
-        findPreference<GpuDriverPreference>("gpu_driver")?.item = item
+        findPreference<GpuDriverPreference>("gpu_driver")?.apply {
+            item = this@GameSettingsFragment.item
+            selectedContent = this@GameSettingsFragment.selectedContent
+        }
 
         findPreference<SeekBarPreference>("executor_slot_count_scale")?.setMaxValue(Runtime.getRuntime().availableProcessors().toInt())
 

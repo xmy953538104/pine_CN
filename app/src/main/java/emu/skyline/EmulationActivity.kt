@@ -68,6 +68,10 @@ import emu.skyline.loader.RomFile
 import emu.skyline.loader.getRomFormat
 import emu.skyline.loader.AppEntry
 import emu.skyline.loader.RomType
+import emu.skyline.loader.RomFormat
+import emu.skyline.loader.LoaderResult
+import emu.skyline.loader.SelectedContentIntentTag
+import emu.skyline.loader.SelectedContentSelection
 import emu.skyline.settings.AppSettings
 import emu.skyline.settings.EmulationSettings
 import emu.skyline.settings.NativeSettings
@@ -185,6 +189,10 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      */
     private external fun executeApplication(romUri : String, romType : Int, romFd : Int, dlcFds : IntArray?, updateFd : Int, nativeSettings : NativeSettings, publicAppFilesPath : String, privateAppFilesPath : String, nativeLibraryPath : String, assetManager : AssetManager, diagnosticTitleId: String, generationToken: Long)
 
+    private external fun executeSelectedApplication(romUri: String, romFd: Int, selectionFields: Array<String>, programIndices: IntArray,
+        nativeSettings: NativeSettings, publicAppFilesPath: String, privateAppFilesPath: String, nativeLibraryPath: String,
+        assetManager: AssetManager, diagnosticTitleId: String, generationToken: Long)
+
     /**
      * @param join If the function should only return after all the threads join or immediately
      * @return If it successfully caused [emulationThread] to gracefully stop or do so asynchronously when not joined
@@ -291,6 +299,12 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      * @note Any caller has to handle the application potentially being restarted with the supplied intent
      */
     private fun executeApplication(intent : Intent) {
+        val selected = try {
+            readSelectedLaunch(intent).also { if (it != null) require(item.format == RomFormat.NSP) { "selected_requires_nsp" } }
+        } catch (error: Exception) {
+            rejectSelectedLaunch()
+            return
+        }
         val token = generations.begin()
         generationToken = token
         if (emulationThread?.isAlive == true) {
@@ -306,13 +320,13 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
 
         returnToMain = intent.getBooleanExtra(ReturnToMainTag, false)
 
-        val diagnosticTitle = item.diagnosticIdentity?.applicationId
+        val diagnosticTitle = selected?.applicationId ?: item.diagnosticIdentity?.applicationId
         val diagnosticFormat = item.format
         val rom = item.uri
         val romType = item.format.ordinal
 
         val contentFiles = try {
-            emu.skyline.emulation.openContentFiles(rom, dlcUris, updateUri) { uri ->
+            emu.skyline.emulation.openLaunchContentFiles(rom, selected, { dlcUris }, { updateUri }) { uri ->
                 contentResolver.openFileDescriptor(uri, "r")
             }
         } catch (error: emu.skyline.emulation.ContentOpenFailure) {
@@ -333,7 +347,11 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
             val beginDiagnosticLaunch = emu.skyline.diagnostics.Diagnostics.prepareLaunch(this, diagnosticTitle, token)
             if (!generations.session(token) {
                 beginDiagnosticLaunch()
-                emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED", diagnosticTitle) { "phase=ui_association execution_confirmed=false format=$diagnosticFormat" }
+                if (selected == null) {
+                    emu.skyline.diagnostics.Diagnostics.event("content", "BASE_SELECTED", diagnosticTitle) { "phase=ui_association execution_confirmed=false format=$diagnosticFormat" }
+                } else {
+                    emu.skyline.diagnostics.Diagnostics.event("content", "SELECTED_CONTENT_REQUESTED", diagnosticTitle) { "phase=ui_selection mode=${selected.mode.wire} identity_verified=false execution_confirmed=false" }
+                }
                 emu.skyline.diagnostics.Diagnostics.event("content", "CONTENT_FDS_OPENED", diagnosticTitle) { "phase=ui_association execution_confirmed=false update_fd_present=${updateFd >= 0} dlc_count=${dlcFds?.size ?: 0}" }
             }) {
                 // Superseded before native execution took ownership of these FDs.
@@ -344,7 +362,19 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                 return@Thread
             }
             runNativeForGeneration(token) {
-                executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets, emu.skyline.diagnostics.Diagnostics.normalizedTitleId(diagnosticTitle), token)
+                emu.skyline.emulation.dispatchContentLaunch(selected, ordinary = {
+                    executeApplication(rom.toString(), romType, romFd.detachFd(), dlcFds, updateFd, NativeSettings(this, emulationSettings), applicationContext.getPublicFilesDir().canonicalPath + "/", applicationContext.filesDir.canonicalPath + "/", applicationInfo.nativeLibraryDir + "/", assets, emu.skyline.diagnostics.Diagnostics.normalizedTitleId(diagnosticTitle), token)
+                }, selected = { selection ->
+                    romFd.use {
+                        val wire = selection.toNativeWire()
+                        val settings = NativeSettings(this, emulationSettings)
+                        val publicPath = applicationContext.getPublicFilesDir().canonicalPath + "/"
+                        val privatePath = applicationContext.filesDir.canonicalPath + "/"
+                        executeSelectedApplication(rom.toString(), it.detachFd(), wire.fields, wire.programIndices, settings,
+                            publicPath, privatePath, applicationInfo.nativeLibraryDir + "/", assets,
+                            emu.skyline.diagnostics.Diagnostics.normalizedTitleId(diagnosticTitle), token)
+                    }
+                })
             }
         }
 
@@ -371,6 +401,28 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
     }
 
     private fun populateAppItem(): Boolean {
+        val selected = try { readSelectedLaunch(intent) } catch (error: Exception) { rejectSelectedLaunch(); return false }
+        if (selected != null) {
+            // Do not call the ordinary RomFile/contents.dat association path.
+            try {
+                val supplied = intent.serializable<AppItem>(AppItemTag)
+                val uri = intent.data ?: supplied?.uri ?: throw IllegalArgumentException("selected_uri_missing")
+                require(uri != Uri.EMPTY && (supplied == null || (supplied.format == RomFormat.NSP && supplied.uri == uri))) { "selected_source_mismatch" }
+                selectedSettingsIdentity = selected.applicationId
+                // The old AppItem can describe a different Application inside
+                // this NSP. None of its title/save-owner/association is reused.
+                item = AppItem(AppEntry(name = getString(R.string.selected_user_intent, selected.applicationId),
+                    version = null, titleId = null, addOnContentBaseId = null, author = null, icon = null,
+                    romType = if (selected.mode == emu.skyline.loader.SelectedContentMode.Application) RomType.Base else RomType.Update,
+                    parentTitleId = if (selected.mode == emu.skyline.loader.SelectedContentMode.StandalonePatch) selected.applicationId else null,
+                    format = RomFormat.NSP, uri = uri, loaderResult = LoaderResult.Success),
+                    emptyList(), emptyList())
+                dlcUris = arrayListOf()
+                updateUri = Uri.EMPTY
+                return true
+            } catch (error: Exception) { rejectSelectedLaunch(); return false }
+        }
+        selectedSettingsIdentity = null
         val intentItem = intent.serializable(AppItemTag) as AppItem?
         if (intentItem != null) {
             item = intentItem
@@ -423,11 +475,25 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
         }
     }
 
+    internal var selectedContentAvailability: () -> Boolean = { emu.skyline.emulation.selectedContentIsAvailable() }
+    internal var selectedSettingsIdentity: String? = null
+        private set
+
+    private fun readSelectedLaunch(intent: Intent): SelectedContentSelection? = emu.skyline.emulation.selectedLaunchSelection(
+        intent.hasExtra(SelectedContentIntentTag), if (intent.hasExtra(SelectedContentIntentTag)) intent.getStringExtra(SelectedContentIntentTag) else null,
+        selectedContentAvailability)
+
+    private fun rejectSelectedLaunch() {
+        emu.skyline.diagnostics.Diagnostics.event("exception", "SELECTED_CONTENT_REJECTED") { "phase=ui_validation reason=invalid_or_unavailable_selection execution_confirmed=false" }
+        Toast.makeText(this, R.string.selected_invalid_launch, Toast.LENGTH_LONG).show()
+        finish()
+    }
+
     @SuppressLint("SetTextI18n", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState : Bundle?) {
         super.onCreate(savedInstanceState)
         if (!populateAppItem()) return
-        emulationSettings = EmulationSettings.forEmulation(item.titleId ?: item.key())
+        emulationSettings = EmulationSettings.forEmulation(selectedSettingsIdentity ?: item.titleId ?: item.key())
 
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
 
@@ -594,8 +660,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                 }
                 R.id.menu_settings -> {
                     startActivity(Intent(this@EmulationActivity, SettingsActivity::class.java).apply {
-                        val args = Bundle()
-                        args.putSerializable(AppItemTag, item)
+                        val args = emu.skyline.emulation.contentSettingsArguments(item, readSelectedLaunch(intent))
                         if (!emulationSettings.isGlobal && emulationSettings.useCustomSettings) putExtras(args)
                     })
                     true
@@ -988,10 +1053,10 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      */
     override fun onNewIntent(intent : Intent?) {
         super.onNewIntent(intent!!)
-        if (getIntent().data != intent.data) {
+        if (getIntent().data != intent.data || emu.skyline.emulation.selectedContentIntentChanged(getIntent(), intent)) {
             setIntent(intent)
             if (!populateAppItem()) return
-            emulationSettings = EmulationSettings.forEmulation(item.titleId ?: item.key())
+            emulationSettings = EmulationSettings.forEmulation(selectedSettingsIdentity ?: item.titleId ?: item.key())
             executeApplication(intent)
         }
     }

@@ -33,6 +33,8 @@ import emu.skyline.adapter.SelectableGenericAdapter
 import emu.skyline.adapter.SpacingItemDecoration
 import emu.skyline.data.BaseAppItem
 import emu.skyline.data.AppItemTag
+import emu.skyline.emulation.contentSettingsIdentity
+import emu.skyline.emulation.selectedSettingsSelection
 import emu.skyline.databinding.GpuDriverActivityBinding
 import emu.skyline.databinding.DialogKeyboardBinding
 import emu.skyline.settings.EmulationSettings
@@ -63,6 +65,7 @@ class GpuDriverActivity : AppCompatActivity() {
     private val binding by lazy { GpuDriverActivityBinding.inflate(layoutInflater) }
 
     private val item by lazy { intent.extras?.serializable(AppItemTag) as BaseAppItem? }
+    internal val settingsIdentity by lazy { item?.let { contentSettingsIdentity(it, selectedSettingsSelection(intent.extras)) } }
 
     private val adapter = SelectableGenericAdapter(0)
 
@@ -164,8 +167,7 @@ class GpuDriverActivity : AppCompatActivity() {
         emulationSettings = if (item == null) {
             EmulationSettings.global
         } else {
-            val appItem = item as BaseAppItem
-            EmulationSettings.forTitleId(appItem.titleId ?: appItem.key())
+            EmulationSettings.forTitleId(requireNotNull(settingsIdentity))
         }
 
         val layoutManager = LinearLayoutManager(this)

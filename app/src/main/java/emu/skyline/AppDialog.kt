@@ -43,6 +43,10 @@ import emu.skyline.loader.RomType
 import emu.skyline.loader.RomFormat
 import emu.skyline.loader.RomFormat.*
 import emu.skyline.loader.AppEntry
+import emu.skyline.loader.SelectedContentIntentTag
+import emu.skyline.loader.SelectedContentPicker
+import emu.skyline.emulation.selectedContentIsAvailable
+import androidx.lifecycle.Lifecycle
 import emu.skyline.settings.SettingsActivity
 import emu.skyline.settings.EmulationSettings
 import emu.skyline.utils.CacheManagementUtils
@@ -76,6 +80,7 @@ class AppDialog : BottomSheetDialogFragment() {
     }
 
     private lateinit var binding : AppDialogBinding
+    private var selectedContentPicker: SelectedContentPicker? = null
 
     private val item by lazy { requireArguments().serializable<BaseAppItem>(AppItemTag)!! }
 
@@ -168,6 +173,29 @@ class AppDialog : BottomSheetDialogFragment() {
             startActivity(Intent(activity, EmulationActivity::class.java).apply {
                 putExtras(requireArguments())
             })
+        }
+
+        binding.selectContent.visibility = if (item.format == NSP && selectedContentIsAvailable()) View.VISIBLE else View.GONE
+        binding.selectContent.setOnClickListener {
+            if (selectedContentPicker != null) return@setOnClickListener
+            val owner = viewLifecycleOwner
+            val currentBinding = binding
+            currentBinding.selectContent.isEnabled = false
+            var picker: SelectedContentPicker? = null
+            picker = SelectedContentPicker(this, item.uri, launch = { selection ->
+                startActivity(Intent(activity, EmulationActivity::class.java).apply {
+                    putExtras(requireArguments())
+                    data = item.uri
+                    putExtra(SelectedContentIntentTag, selection.encode())
+                })
+            }, finished = {
+                if (selectedContentPicker === picker) {
+                    selectedContentPicker = null
+                    if (owner.lifecycle.currentState != Lifecycle.State.DESTROYED) currentBinding.selectContent.isEnabled = true
+                }
+            })
+            selectedContentPicker = picker
+            picker?.show()
         }
 
         binding.gameSettings.isEnabled = item.loaderResult == LoaderResult.Success
@@ -292,6 +320,12 @@ class AppDialog : BottomSheetDialogFragment() {
                 false
             }
         }
+    }
+
+    override fun onDestroyView() {
+        // The picker observes this view's lifecycle and discards any late scan.
+        selectedContentPicker = null
+        super.onDestroyView()
     }
 
     private fun loadContent(uri: Uri?): LoaderResult {

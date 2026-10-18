@@ -14,8 +14,9 @@ import androidx.preference.Preference
 import androidx.preference.Preference.SummaryProvider
 import androidx.preference.R
 import emu.skyline.data.BaseAppItem
-import emu.skyline.data.AppItemTag
 import emu.skyline.settings.EmulationSettings
+import emu.skyline.loader.SelectedContentSelection
+import emu.skyline.emulation.contentSettingsArguments
 import emu.skyline.utils.GpuDriverHelper
 import emu.skyline.R as SkylineR
 
@@ -32,6 +33,7 @@ class GpuDriverPreference @JvmOverloads constructor(context : Context, attrs : A
      * This is populated by [emu.skyline.settings.GameSettingsFragment]
      */
     var item : BaseAppItem? = null
+    var selectedContent: SelectedContentSelection? = null
 
     init {
         val supportsCustomDriverLoading = GpuDriverHelper.supportsCustomDriverLoading()
@@ -57,6 +59,6 @@ class GpuDriverPreference @JvmOverloads constructor(context : Context, attrs : A
      * This launches [GpuDriverActivity] on click to manage driver packages
      */
     override fun onClick() = driverCallback.launch(Intent(context, GpuDriverActivity::class.java).apply {
-        putExtra(AppItemTag, item)
+        item?.let { putExtras(contentSettingsArguments(it, selectedContent)) }
     })
 }

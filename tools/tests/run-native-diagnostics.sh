@@ -15,6 +15,8 @@ fi
 "$build/first_allocation_test" "$build/first-allocation-logs"
 "${CXX:-c++}" "${flags[@]}" -DPINE_DIAG_TEST_HOOKS -I"$core" "$core/diagnostics.cpp" tests/diagnostics/admission_race_test.cpp -o "$build/admission_race_test"
 "$build/admission_race_test" "$build/admission-race-logs"
+"${CXX:-c++}" "${flags[@]}" -DPINE_DIAG_TEST_HOOKS -I"$core" "$core/diagnostics.cpp" tests/diagnostics/saturated_allocation_test.cpp -o "$build/saturated_allocation_test"
+"$build/saturated_allocation_test" "$build/saturated-allocation-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/process_test.cpp -o "$build/process_test"
 "$build/process_test" "$build/process-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" -Iapp/src/main/cpp -Iapp/src/main/cpp/skyline "$build/diagnostics.o" tests/diagnostics/guest_test.cpp -o "$build/guest_test"

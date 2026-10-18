@@ -11,11 +11,14 @@ struct Value { uint64_t id{}; std::string text; };
 int main() {
     BoundedQueue<Value> queue;
     Value value; uint64_t sequence{};
-    assert(queue.Empty() && !queue.Pop(value, sequence));
+    assert(queue.Empty() && queue.Full(1) && !queue.Pop(value, sequence));
     queue.Reset(64);
+    assert(!queue.Full(56) && !queue.Full(64));
     for (uint64_t i{}; i < 56; ++i) assert(queue.Push({i, std::to_string(i)}, 56) == Admission::Accepted);
+    assert(queue.Full(56) && !queue.Full(64));
     assert(queue.Push({56, "ordinary"}, 56) == Admission::Full);
     for (uint64_t i = 56; i < 64; ++i) assert(queue.Push({i, std::to_string(i)}, 64) == Admission::Accepted);
+    assert(queue.Full(56) && queue.Full(64));
     auto start = std::chrono::steady_clock::now();
     for (int i{}; i < 100000; ++i) assert(queue.Push({999, "full"}, 64) == Admission::Full);
     assert(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
@@ -23,6 +26,7 @@ int main() {
         assert(queue.Pop(value, sequence)); assert(sequence == i + 1 && value.id == i && value.text == std::to_string(i));
     }
     assert(queue.Empty() && !queue.Pop(value, sequence));
+    assert(!queue.Full(56) && !queue.Full(64));
     // Several writers wrap the production ring many times while its consumer
     // verifies reservation order, owned strings and exactly-once delivery.
     queue.Reset(256);
@@ -55,4 +59,11 @@ int main() {
     });
     setter.join(); for (auto &thread : producers) thread.join();
     assert(snapshot.Read(value) && value.id == 9999 && value.text == "9999");
+    bool inspected{};
+    assert(snapshot.Inspect([&](const Value &item) { inspected = item.id == 9999 && item.text == "9999"; }));
+    assert(inspected);
+    try { snapshot.Inspect([](const Value &) { throw 1; }); assert(false); }
+    catch (int) {}
+    snapshot.Publish({10000, "10000"});
+    assert(snapshot.Read(value) && value.id == 10000);
 }

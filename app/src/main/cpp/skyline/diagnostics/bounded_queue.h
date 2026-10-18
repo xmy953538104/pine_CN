@@ -28,6 +28,15 @@ public:
         slots = std::move(replacement); capacity = count;
         tail = 0; head = 0;
     }
+    // Advisory rejection before constructing an owned record. A consumer may
+    // pass our sampled tail; fail open in that case instead of treating unsigned
+    // subtraction as Full. Push still checks capacity after concurrent producers.
+    bool Full(size_t limit) const noexcept {
+        if (!capacity) return true;
+        const auto position = tail.load(std::memory_order_acquire);
+        const auto occupied = position - head.load(std::memory_order_acquire);
+        return occupied <= capacity && occupied >= limit;
+    }
     Admission Push(T &&value, size_t limit) noexcept {
         if (!capacity) return Admission::Full;
         auto position = tail.load(std::memory_order_relaxed);

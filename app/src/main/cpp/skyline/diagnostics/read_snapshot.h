@@ -15,19 +15,24 @@ template<class T> class ReadSnapshot {
     std::array<Slot, 8> slots;
     std::atomic<unsigned> active{};
 public:
-    bool Read(T &result) const {
+    // Inspect immutable metadata without constructing/copying an owned T.
+    // The visitor must not retain references beyond this call.
+    template<class Visitor> bool Inspect(Visitor &&visitor) const {
         for (unsigned attempt{}; attempt < 64; ++attempt) {
             auto index = active.load();
             auto &slot = slots[index];
             slot.readers.fetch_add(1);
             if (active.load() == index) {
-                try { result = slot.value; }
+                try { visitor(static_cast<const T &>(slot.value)); }
                 catch (...) { slot.readers.fetch_sub(1); throw; }
                 slot.readers.fetch_sub(1); return true;
             }
             slot.readers.fetch_sub(1);
         }
         return false;
+    }
+    bool Read(T &result) const {
+        return Inspect([&](const T &value) { result = value; });
     }
     void Publish(const T &value) {
         // Only infrequent ordinary-thread metadata setters may wait. Not Emit,

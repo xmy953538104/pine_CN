@@ -441,10 +441,22 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
     Producer producer(s);
     if (!producer) return false;
     try {
-        // Field sanitation and host thread formatting do not hold the admission lock.
-        Record r; r.critical = critical;
         (void)stage;
         if (!CategorySelected(s.config.categories, category)) return false;
+        // A stale launch is filtered rather than counted as a queue drop, even
+        // when Full. Inspect it without allocating the owned context first.
+        if (!expectedLaunch.empty()) {
+            bool matches{};
+            if (!s.context.Inspect([&](const Context &value) { matches = value.launchId == expectedLaunch; })) {
+                drop(s.droppedContention); return false;
+            }
+            if (!matches) return false;
+        }
+        const auto limit = AdmissionLimit(s.config.queueCapacity, critical);
+        if (s.queue.Full(limit)) { drop(s.droppedFull); return false; }
+        // Only a possible admission copies context, sanitizes fields, formats
+        // host thread metadata and reads clocks. Push rechecks concurrent fill.
+        Record r; r.critical = critical;
         Context context;
         if (!s.context.Read(context)) { drop(s.droppedContention); return false; }
         if (!expectedLaunch.empty() && context.launchId != expectedLaunch) return false;
@@ -458,7 +470,7 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         for (auto &[key, value] : fields) { if (r.fields.size() == 24 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
         if (!IsEnabled(s) || s.stopping) return false;
         CopyDropCounts(r, s);
-        const auto result = s.queue.Push(std::move(r), AdmissionLimit(s.config.queueCapacity, critical));
+        const auto result = s.queue.Push(std::move(r), limit);
         if (result == Admission::Full) { drop(s.droppedFull); return false; }
         if (result == Admission::Contended) { drop(s.droppedContention); return false; }
 #ifdef PINE_DIAG_TEST_HOOKS
@@ -468,6 +480,12 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
     } catch (...) { drop(s.droppedAllocation); return false; }
 }
 }
+#ifdef PINE_DIAG_TEST_HOOKS
+bool testing::EmitForLaunch(std::string_view expectedLaunch, std::string_view category, std::string_view event,
+                           std::span<const std::pair<std::string_view, std::string_view>> fields) noexcept {
+    return Enqueue(Get(), category, event, fields, "INFO", nullptr, expectedLaunch);
+}
+#endif
 std::string Sanitize(std::string_view input, size_t limit) {
     // Scan only the bounded input. Spaces/quotes are legal filename bytes, so a
     // recognized location consumes its line tail, preserving context and line endings.

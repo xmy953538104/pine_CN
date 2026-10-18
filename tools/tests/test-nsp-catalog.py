@@ -374,6 +374,81 @@ class CatalogTest(unittest.TestCase):
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(broken, schema)
 
+    def test_nonzero_packaged_header_fields_literal_and_full_nsp_keep_both_tables(self):
+        expected = json.loads((GOLDEN / 'header-fields-expected.json').read_text())
+        literal = (GOLDEN / 'header-fields-sentinel.cnmt').read_bytes()
+        self.assertEqual(literal[:0x20].hex(), '0058341200000001443322118100180001000100040501010102030400000000')
+        for name, digest in expected['sha256'].items():
+            self.assertEqual(hashlib.sha256((GOLDEN / name).read_bytes()).hexdigest(), digest)
+        binary = Path(self.build.name) / 'header-fields-test'
+        subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++20', '-Wall', '-Wextra', '-Werror',
+                        '-Iapp/src/main/cpp/skyline', 'app/src/main/cpp/skyline/catalog/wire.cpp',
+                        'app/src/main/cpp/skyline/catalog/catalog.cpp', 'tests/catalog/header_fields_test.cpp',
+                        '-o', str(binary)], cwd=ROOT, check=True)
+        subprocess.run([str(binary), str(GOLDEN / 'header-fields-sentinel.cnmt')], check=True)
+        result = self.scan_bytes((GOLDEN / 'header-fields-sentinel.nsp').read_bytes())
+        group = result['groups'][0]
+        self.assertEqual(group['parsing'], 'parsed')
+        header = group['packaged_header']
+        self.assertEqual(header['raw_bytes'], expected['header_hex'])
+        for field in ('attributes', 'storage_id', 'install_type', 'committed_raw', 'committed', 'required_download_system_version'):
+            self.assertEqual(header[field], expected[field])
+        self.assertEqual(header['field_evidence'], 'atmosphere_6b0c077_packaged_content_meta_header')
+        self.assertEqual(len(group['contents']), 1)
+        self.assertEqual(len(group['content_meta_references']), 1)
+        self.assertEqual(group['contents'][0]['content_id'], expected['content_id'])
+        self.assertEqual(group['content_meta_references'][0]['title_id'], expected['content_meta_id'])
+        self.assertEqual(group['layout']['content_table_offset'], 0x38)
+        self.assertEqual(group['layout']['content_meta_table_offset'], 0x70)
+        self.assertNotIn('invalid_cnmt_reserved', self.issues(result))
+        self.assertEqual(group['content_support'], 'unsupported')
+        self.assertEqual(group['runnable'], 'unsupported')
+        # Unknown enum/boolean encodings are retained as bytes without an
+        # installation-policy rejection hiding otherwise bounded references.
+        changed = bytearray(literal); changed[0x15:0x18] = b'\xff\xfe\xff'
+        changed[-32:] = hashlib.sha256(changed[:-32]).digest()
+        meta = fixture.nca(1, 0x1234, [('unknown-values.cnmt', bytes(changed))])
+        group = self.scan([fixture.named(meta, True)])['groups'][0]
+        self.assertEqual(group['parsing'], 'parsed')
+        self.assertEqual(group['packaged_header']['storage_id'], 255)
+        self.assertEqual(group['packaged_header']['install_type'], 254)
+        self.assertEqual(group['packaged_header']['committed_raw'], 255)
+        self.assertIsNone(group['packaged_header']['committed'])
+        self.assertEqual(len(group['contents']), 1)
+        self.assertEqual(len(group['content_meta_references']), 1)
+
+    def test_install_type_is_part_of_metadata_identity_and_meta_refs_default_to_full(self):
+        nonfull = self.scan(self.one_group(install_type=1))['groups'][0]
+        self.assertEqual(nonfull['parsing'], 'parsed')
+        self.assertEqual(nonfull['content_support'], 'unsupported')
+        self.assertEqual(nonfull['runnable'], 'unsupported')
+        self.assertEqual(nonfull['programs'][0]['capability'], 'unsupported')
+        parent = fixture.cnmt(0x1000, 0x80, [], meta_refs=[(0x2000, 3, 0x82, 0)])
+        fragment = fixture.cnmt(0x2000, 0x82, [], version=3, parent=0x1000, install_type=1, storage_id=5, committed=1)
+        meta = fixture.nca(1, 0x1000, [('parent.cnmt', parent), ('fragment.cnmt', fragment)])
+        groups = self.scan([fixture.named(meta, True)])['groups']
+        ref = groups[0]['content_meta_references'][0]
+        self.assertEqual(ref['state'], 'missing')
+        self.assertEqual(ref['candidate_groups'], [])
+        self.assertEqual(ref['resolution_install_type'], 0)
+        self.assertEqual(ref['resolution_install_type_evidence'], 'content_meta_info_to_key_default_full')
+        full = fixture.cnmt(0x2000, 0x82, [], version=3, parent=0x1000, install_type=0)
+        meta = fixture.nca(1, 0x1000, [('parent.cnmt', parent), ('fragment.cnmt', fragment), ('full.cnmt', full)])
+        result = self.scan([fixture.named(meta, True)])
+        ref = result['groups'][0]['content_meta_references'][0]
+        self.assertEqual(ref['state'], 'resolved')
+        target = next(g for g in result['groups'] if g['id'] == ref['candidate_groups'][0])
+        self.assertEqual(target['packaged_header']['install_type'], 0)
+        self.assertNotIn('metadata_ambiguity', self.issues(result))
+
+    def test_fifo_input_without_writer_is_rejected_without_blocking(self):
+        with tempfile.TemporaryDirectory(prefix='pine-catalog-fifo-') as temporary:
+            path = Path(temporary) / 'input.nsp'
+            os.mkfifo(path)
+            run = subprocess.run([str(self.binary), str(path)], capture_output=True, text=True, timeout=2)
+            self.assertEqual(run.returncode, 2)
+            self.assertEqual(json.loads(run.stdout)['fatal']['code'], 'input_not_regular')
+
 
 if __name__ == '__main__':
     unittest.main()

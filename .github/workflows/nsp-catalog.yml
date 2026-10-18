@@ -5,7 +5,7 @@ on:
     branches-ignore: [main]
     paths:
       - 'app/src/main/cpp/skyline/catalog/**'
-      - 'app/src/main/cpp/skyline/vfs/nca.*'
+      - 'app/src/main/cpp/skyline/vfs/**'
       - 'app/CMakeLists.txt'
       - 'app/src/main/cpp/skyline/crypto/aes_cipher.*'
       - 'app/libraries/mbedtls'
@@ -20,7 +20,7 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'app/src/main/cpp/skyline/catalog/**'
-      - 'app/src/main/cpp/skyline/vfs/nca.*'
+      - 'app/src/main/cpp/skyline/vfs/**'
       - 'app/CMakeLists.txt'
       - 'app/src/main/cpp/skyline/crypto/aes_cipher.*'
       - 'app/libraries/mbedtls'
@@ -53,6 +53,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/nsp-catalog-evidence"
           set -o pipefail
+          python3 tools/tests/test-nsp-catalog-ci.py 2>&1 | tee "$RUNNER_TEMP/nsp-catalog-evidence/ci-scope-tests.txt"
           python3 tools/tests/test-nsp-catalog.py 2>&1 | tee "$RUNNER_TEMP/nsp-catalog-evidence/host-tests.txt"
           python3 tools/tests/test-nsp-catalog-native.py --schema-check --evidence-dir "$RUNNER_TEMP/nsp-catalog-evidence/native-controlled" 2>&1 | tee "$RUNNER_TEMP/nsp-catalog-evidence/native-adapter-tests.txt"
       - name: Pinned crypto dependency for independent synthetic AES evidence

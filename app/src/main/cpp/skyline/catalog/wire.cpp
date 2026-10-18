@@ -58,7 +58,9 @@ namespace skyline::catalog {
             std::string path;
           public:
             explicit FileReader(const std::string &pPath) : path(std::filesystem::absolute(pPath).string()) {
-                fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+                // A FIFO must not block before fstat can reject non-regular
+                // input. O_NONBLOCK has no effect on ordinary file reads.
+                fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
                 if (fd < 0) throw Error("input_open_failed", "cannot open input read-only");
                 if (fstat(fd, &initial) || !S_ISREG(initial.st_mode) || initial.st_size < 0) {
                     close(fd); fd = -1;

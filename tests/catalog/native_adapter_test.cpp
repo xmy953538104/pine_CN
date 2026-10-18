@@ -308,11 +308,36 @@ namespace {
         const auto secondPfs = members[1].offset + 0xe00;
         container->readRanges.clear();
         const auto budgeted = ScanNative(container, Keys(), limited);
+        Evidence("native-pfs-budget.json", budgeted);
         Check(budgeted.ncas.size() == 2 && budgeted.groups.size() == 1, "native scan budget was reset per NCA");
         Check(IssueIs(budgeted.ncas[1], "scan_budget"), "second NCA was not rejected before its decrypted PFS read");
+        Check(!budgeted.complete, "native PFS budget exhaustion claimed a complete bounded scan");
+        Check(!budgeted.AllMetadataEnumerated(), "native PFS budget exhaustion claimed complete metadata enumeration");
+        Check(ToJson(budgeted).find("\"bounded_scan_complete\":false") != std::string::npos,
+              "native PFS budget exhaustion serialized bounded_scan_complete=true");
         Check(std::none_of(container->readRanges.begin(), container->readRanges.end(), [&](const auto &read) {
             return read.first < secondPfs + second.pfs.size() && read.first + read.second > secondPfs;
         }), "over-budget second PFS was read before rejection");
+
+        // The core's nominal 0xc00-byte header allowance admits this member,
+        // while the native prefix/header/FS reservation needs 0x1004 bytes.
+        // This returned-descriptor failure must also propagate incompleteness.
+        auto headerContainer = std::make_shared<MemoryBacking>(Pfs({{"header-budget.nca", first.Encode()}}));
+        const auto headerMembers = ReadPfs(MakeBackingSource(headerContainer), {});
+        const auto firstPfs = headerMembers[0].offset + 0xe00;
+        Options headerLimited; headerLimited.limits.maxMetadataBytes = 0xc00;
+        headerContainer->readRanges.clear();
+        const auto headerBudgeted = ScanNative(headerContainer, Keys(), headerLimited);
+        Evidence("native-header-budget.json", headerBudgeted);
+        Check(headerBudgeted.ncas.size() == 1 && headerBudgeted.groups.empty(), "native header reservation failure lost its member");
+        Check(IssueIs(headerBudgeted.ncas[0], "scan_budget"), "native header reservation failure did not retain scan_budget");
+        Check(headerBudgeted.ncas[0].readability == "unreadable", "core skipped the header before the native reservation was exercised");
+        Check(!headerBudgeted.complete && !headerBudgeted.AllMetadataEnumerated(), "native header budget exhaustion claimed a complete scan");
+        Check(ToJson(headerBudgeted).find("\"bounded_scan_complete\":false") != std::string::npos,
+              "native header budget exhaustion serialized bounded_scan_complete=true");
+        Check(std::none_of(headerContainer->readRanges.begin(), headerContainer->readRanges.end(), [&](const auto &read) {
+            return read.first < firstPfs + first.pfs.size() && read.first + read.second > firstPfs;
+        }), "native header reservation failure read decrypted PFS bytes");
         Check(catalog.containerSnapshot.empty(), "unbound Backing fabricated an opened-file identity");
     }
     void OsTests() {
@@ -369,11 +394,38 @@ namespace {
               "native whole-NCA hash was not calculated from raw ciphertext bytes");
         Check(catalog.ncas[0].signature == "not_verified", "synthetic AES became signature authentication");
     }
+    void NonzeroHeaderGoldenTests() {
+        std::ifstream input("tests/catalog/fixtures/header-fields-sentinel.cnmt", std::ios::binary);
+        Check(static_cast<bool>(input), "independent nonzero-header CNMT golden is missing");
+        std::vector<uint8_t> cnmt((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const auto goldenHash = Sha256(cnmt.data(), cnmt.size());
+        Check(Hex(goldenHash.data(), goldenHash.size()) == "3852a0f68ef82426946fed951dfc2a05c24de87a369eddfe01950371ea1e5391",
+              "independent nonzero-header CNMT golden changed");
+        Fixture fixture(Pfs({{"header-fields-sentinel.cnmt", cnmt}}));
+        Put(fixture.header, 0x210, 0x0100000012345800, 8);
+        auto container = std::make_shared<MemoryBacking>(Pfs({{"header-fields.cnmt.nca", fixture.Encode()}}));
+        Options options; options.profile = ContentInfoProfile::Modern40; options.verifyHashes = true;
+        const auto catalog = ScanNative(container, Keys(), options);
+        Evidence("native-nonzero-header.json", catalog);
+        Check(catalog.ncas.size() == 1 && catalog.groups.size() == 1, "nonzero packaged header hid the native CNMT group");
+        const auto &group = catalog.groups[0];
+        Check(group.parsing == "parsed" && group.digest == "verified", "valid nonzero packaged header was rejected");
+        Check(group.rawHeader == "0058341200000001443322118100180001000100040501010102030400000000" &&
+              group.platform == 0 && group.metaAttributes == 4 && group.storageId == 5 && group.installType == 1 &&
+              group.committedRaw == 1 && group.requiredDownloadSystemVersion == 0x04030201,
+              "native packaged header fields were lost or treated as padding");
+        Check(group.contents.size() == 1 && group.contents[0].contentId == "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf" &&
+              group.metaReferences.size() == 1 && group.metaReferences[0].titleId == 0x8877665544332211 &&
+              group.contentTableOffset == 0x38 && group.metaTableOffset == 0x70,
+              "nonzero packaged header hid or shifted a native content table");
+        Check(group.contentSupport == "unsupported" && group.runnable == "unsupported",
+              "non-full install metadata became a complete runtime Program");
+    }
 }
 int main(int argc, char **argv) {
     try {
         if (argc == 2) { evidenceDirectory = argv[1]; std::filesystem::create_directories(evidenceDirectory); }
-        ReaderTests(); NativeTests(); CatalogTests(); OsTests(); SnapshotTests(); GoldenTests();
+        ReaderTests(); NativeTests(); CatalogTests(); OsTests(); SnapshotTests(); GoldenTests(); NonzeroHeaderGoldenTests();
 #ifdef PINE_CATALOG_TEST_REAL_AES
         std::cout << "PASS: native bridge with production AES/NCA/PFS/CTR and pinned mbedTLS; independent OpenSSL synthetic XTS/ECB/CTR fixtures; no ROM/APK validation\n";
 #else

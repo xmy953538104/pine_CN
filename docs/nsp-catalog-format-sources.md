@@ -14,6 +14,7 @@ layout, but is not itself an untrusted-input bounds validator.
 | Evidence | Fixed source |
 | --- | --- |
 | Packaged CNMT header, extended headers, table addressing | [Atmosphere 6b0c077, ncm_content_meta.hpp](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_meta.hpp#L34-L183) |
+| Header storage/install/committed fields and install-aware metadata key | [Atmosphere 6b0c077, header](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_meta.hpp#L62-L78), [GetKey](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_meta.hpp#L224-L226), [ContentMetaKey/default Full](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_meta_key.hpp), [StorageId](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_storage_id.hpp) |
 | Digest followed by ContentInfo | [Atmosphere 6b0c077, ncm_content_info_data.hpp](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_info_data.hpp#L24-L54) |
 | Current ContentInfo: 40-bit size and attributes | [Atmosphere 6b0c077, ncm_content_info.hpp](https://github.com/Atmosphere-NX/Atmosphere/blob/6b0c077b4c608a3a2ee712b8dc35fee87ceb62e8/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_info.hpp#L23-L68) |
 | Historical ContentInfo: 48-bit size | [Atmosphere 77fe5cf, ncm_content_info.hpp](https://github.com/Atmosphere-NX/Atmosphere/blob/77fe5cf6f574a0df4198015af672acfad4b88acb/libraries/libstratosphere/include/stratosphere/ncm/ncm_content_info.hpp#L22-L61) |
@@ -62,7 +63,23 @@ content identity or association proof.
 | 0x10 | 2 | content count |
 | 0x12 | 2 | content-meta count |
 | 0x14 | 1 | meta attributes |
+| 0x15 | 1 | storage ID; not reserved |
+| 0x16 | 1 | content install type; not reserved |
+| 0x17 | 1 | committed flag; raw byte retained |
 | 0x18 | 4 | required download system version |
+| 0x1C | 4 | reserved bytes |
+
+The catalog preserves the complete raw `0x20` header plus each field above.
+Nonzero storage/install/committed values must not hide bounded content and
+metadata-reference tables. Unknown enum values remain raw observations;
+`committed` is decoded as a boolean only for raw values 0 and 1.
+Installation policy is separate: Full is 0, FragmentOnly is 1, and the known
+Unknown enum is 7. Non-Full groups remain parsed but unsupported as complete
+Programs. Metadata identity includes install type, as the primary `GetKey`
+does. A `ContentMetaInfo` has no install-type byte; its `ToKey()` uses `Make`'s
+default Full selector. `resolution_install_type=0` documents that accessor
+policy and is not presented as a wire field. A FragmentOnly CNMT must not
+satisfy a Full metadata reference.
 
 `PackagedContentInfo` is `0x38`: SHA256 bytes `[0,0x20)`, content-ID
 bytes `[0x20,0x30)`, size/profile region `[0x30,0x36)`, content type
@@ -237,6 +254,19 @@ SHA256 is `53adc31ca6d927c2d01cf32e5ec3381f79c3447c455936de36868c226467fbc4`.
 A reader using the old incorrect meta-table offset instead reads the content
 hash's first bytes as the sentinel ID, so a reader/writer sharing that bug
 cannot satisfy this literal oracle.
+
+The separate `tests/catalog/fixtures/header-fields-sentinel.cnmt` literal
+sets header `+0x14..+0x17` to `04 05 01 01` (attributes, storage ID,
+FragmentOnly install type, committed), plus download version `0x04030201`.
+Its content and meta tables remain nonempty at `0x38` and `0x70`, with the
+same two distinct sentinel IDs. Its full SHA256 is
+`3852a0f68ef82426946fed951dfc2a05c24de87a369eddfe01950371ea1e5391`.
+The independent real NSP wrapper's SHA256 is
+`817957479f04f30cff7ffaec26718842a23697baf8d15dbfb15b27cbb4c0df3f`.
+`make_header_fields_golden.py` imports no production reader or fixture writer.
+Both direct `ParseCnmt` and the complete NSP/PFS/Meta/CNMT path must retain
+both tables and these nonzero fields. FragmentOnly stays structurally parsed
+while complete-Program support is explicitly unsupported.
 
 A second policy oracle changes CNMT absolute `0x6C` to `0x34` and
 `0x6D` to `0xA5`, then recomputes its trailer. The six size/profile bytes

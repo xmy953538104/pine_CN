@@ -71,7 +71,8 @@ def content(data, kind, index=0, content_id=None, size=None, attributes=0, size_
 
 
 def cnmt(title, role, refs=(), *, version=1, parent=0, patch=0, data_patch=0,
-         data_id=0, meta_refs=(), extended_data=b'', legacy_aoc=False):
+         data_id=0, meta_refs=(), extended_data=b'', legacy_aoc=False,
+         storage_id=0, install_type=0, committed=0, meta_attributes=0, required_download=0):
     if role == 0x80:
         ext = struct.pack('<QII', patch, 0, 0)
     elif role == 0x81:
@@ -84,7 +85,8 @@ def cnmt(title, role, refs=(), *, version=1, parent=0, patch=0, data_patch=0,
         ext = struct.pack('<QQIIQ', data_id, parent, 0, len(extended_data), 0)
     else:
         ext = b''
-    header = struct.pack('<QIBBHHHBBHII', title, version, role, 0, len(ext), len(refs), len(meta_refs), 0, 0, 0, 0, 0)
+    header = struct.pack('<QIBBHHHBBBBII', title, version, role, 0, len(ext), len(refs), len(meta_refs),
+                         meta_attributes, storage_id, install_type, committed, required_download, 0)
     assert len(header) == 0x20
     metadata = b''.join(struct.pack('<QIBBH', tid, ver, kind, attrs, 0) for tid, ver, kind, attrs in meta_refs)
     raw = header + ext + b''.join(refs) + metadata + extended_data
@@ -108,7 +110,7 @@ def multi_title():
     update2 = nca(0, patch2, [('main', b'dummy patch two'), ('main.npdm', b'dummy NPDM')])
     public1, public2, public3 = [nca(5, title, payload=f'AOC {i}'.encode()) for i, title in enumerate((app1 + 0x1001, app1 + 0x1002, app2 + 0x1001))]
     records = [
-        ('application-one.cnmt', cnmt(app1, 0x80, [content(program1, 1)], patch=patch1)),
+        ('application-one.cnmt', cnmt(app1, 0x80, [content(program1, 1)], patch=patch1, storage_id=5, committed=1)),
         ('application-two.cnmt', cnmt(app2, 0x80, [content(program2, 1)], patch=patch2)),
         ('patch-one.cnmt', cnmt(patch1, 0x81, [content(update1, 1)], parent=app1, version=5)),
         ('patch-two.cnmt', cnmt(patch2, 0x81, [content(update2, 1)], parent=app2, version=9)),

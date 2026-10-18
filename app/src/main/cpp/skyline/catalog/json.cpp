@@ -76,6 +76,15 @@ namespace skyline::catalog {
             Object out;
             out.String("id", group.id); out.Raw("title_id", Id(group.titleId)); out.Raw("version", Number(group.version)); out.Raw("type", Number(group.type));
             out.String("type_name", group.type ? MetaTypeName(*group.type) : "Unknown");
+            Object header;
+            header.Raw("raw_bytes", group.rawHeader.empty() ? "null" : Json(group.rawHeader));
+            header.Raw("platform", Number(group.platform)); header.Raw("attributes", Number(group.metaAttributes));
+            header.Raw("storage_id", Number(group.storageId)); header.Raw("install_type", Number(group.installType));
+            header.Raw("committed_raw", Number(group.committedRaw));
+            header.Raw("committed", !group.committedRaw || *group.committedRaw > 1 ? "null" : *group.committedRaw ? "true" : "false");
+            header.Raw("required_download_system_version", Number(group.requiredDownloadSystemVersion));
+            header.String("field_evidence", "atmosphere_6b0c077_packaged_content_meta_header");
+            out.Raw("packaged_header", header.End());
             out.String("source_member", MemberId(catalog.ncas.at(group.nca))); out.String("cnmt_entry", group.cnmtEntry);
             out.String("discovery", group.discovery); out.String("parsing", group.parsing);
             out.String("cnmt_trailer_digest_observation", group.digest);
@@ -94,6 +103,8 @@ namespace skyline::catalog {
             out.Raw("content_meta_references", Array(group.metaReferences, [&](const auto &ref) {
                 Object item; item.String("title_id", Hex64(ref.titleId)); item.Number("version", ref.version); item.Number("type", ref.type);
                 item.String("type_name", MetaTypeName(ref.type)); item.Number("attributes", ref.attributes); item.String("state", ref.state);
+                item.Number("resolution_install_type", 0);
+                item.String("resolution_install_type_evidence", "content_meta_info_to_key_default_full");
                 item.Raw("candidate_groups", GroupIds(ref.candidates, catalog)); return item.End();
             }));
             out.Raw("programs", Array(group.programs, [&](const auto &program) {

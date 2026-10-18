@@ -1,0 +1,20 @@
+{
+  "provenance": "Independent literal; Atmosphere fixed 6b0c077 PackagedContentMetaHeader. No production reader/writer imports.",
+  "header_hex": "0058341200000001443322118100180001000100040501010102030400000000",
+  "attributes": 4,
+  "storage_id": 5,
+  "install_type": 1,
+  "committed_raw": 1,
+  "committed": true,
+  "required_download_system_version": 67305985,
+  "content_count": 1,
+  "content_meta_count": 1,
+  "content_offset": 56,
+  "content_meta_offset": 112,
+  "content_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+  "content_meta_id": "8877665544332211",
+  "sha256": {
+    "header-fields-sentinel.cnmt": "3852a0f68ef82426946fed951dfc2a05c24de87a369eddfe01950371ea1e5391",
+    "header-fields-sentinel.nsp": "817957479f04f30cff7ffaec26718842a23697baf8d15dbfb15b27cbb4c0df3f"
+  }
+}

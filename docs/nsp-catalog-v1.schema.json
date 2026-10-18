@@ -85,11 +85,12 @@
     },
     "meta_reference": {
       "type": "object", "additionalProperties": false,
-      "required": ["title_id", "version", "type", "type_name", "attributes", "state", "candidate_groups"],
+      "required": ["title_id", "version", "type", "type_name", "attributes", "state", "resolution_install_type", "resolution_install_type_evidence", "candidate_groups"],
       "properties": {
         "title_id": {"$ref": "#/$defs/id"}, "version": {"$ref": "#/$defs/uint"}, "type": {"$ref": "#/$defs/byte"},
         "type_name": {"type": "string"}, "attributes": {"$ref": "#/$defs/byte"},
-        "state": {"enum": ["unresolved", "missing", "resolved", "ambiguous"]}, "candidate_groups": {"$ref": "#/$defs/strings"}
+        "state": {"enum": ["unresolved", "missing", "resolved", "ambiguous"]}, "candidate_groups": {"$ref": "#/$defs/strings"},
+        "resolution_install_type": {"const": 0}, "resolution_install_type_evidence": {"const": "content_meta_info_to_key_default_full"}
       }
     },
     "program": {
@@ -113,10 +114,22 @@
     },
     "group": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "title_id", "version", "type", "type_name", "source_member", "cnmt_entry", "discovery", "parsing", "cnmt_trailer_digest_observation", "digest_evidence", "explicit_application_id", "patch_id", "data_patch_id", "data_id", "parent_state", "application_candidates", "reference_consistency", "content_hash_verification", "content_support", "runnable", "aoc_registration", "layout", "contents", "content_meta_references", "programs", "issues"],
+      "required": ["id", "title_id", "version", "type", "type_name", "packaged_header", "source_member", "cnmt_entry", "discovery", "parsing", "cnmt_trailer_digest_observation", "digest_evidence", "explicit_application_id", "patch_id", "data_patch_id", "data_id", "parent_state", "application_candidates", "reference_consistency", "content_hash_verification", "content_support", "runnable", "aoc_registration", "layout", "contents", "content_meta_references", "programs", "issues"],
       "properties": {
         "id": {"type": "string"}, "title_id": {"$ref": "#/$defs/optional_id"}, "version": {"$ref": "#/$defs/optional_uint"},
         "type": {"$ref": "#/$defs/optional_byte"}, "type_name": {"type": "string"}, "source_member": {"type": "string"}, "cnmt_entry": {"type": "string"},
+        "packaged_header": {
+          "type": "object", "additionalProperties": false,
+          "required": ["raw_bytes", "platform", "attributes", "storage_id", "install_type", "committed_raw", "committed", "required_download_system_version", "field_evidence"],
+          "properties": {
+            "raw_bytes": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+            "platform": {"$ref": "#/$defs/optional_byte"}, "attributes": {"$ref": "#/$defs/optional_byte"},
+            "storage_id": {"$ref": "#/$defs/optional_byte"}, "install_type": {"$ref": "#/$defs/optional_byte"},
+            "committed_raw": {"$ref": "#/$defs/optional_byte"}, "committed": {"type": ["boolean", "null"]},
+            "required_download_system_version": {"$ref": "#/$defs/optional_uint"},
+            "field_evidence": {"const": "atmosphere_6b0c077_packaged_content_meta_header"}
+          }
+        },
         "discovery": {"const": "discovered"}, "parsing": {"enum": ["unknown", "parsed", "unsupported", "invalid", "not_inspected"]},
         "cnmt_trailer_digest_observation": {"enum": ["unverified", "verified", "mismatch"]},
         "digest_evidence": {"const": "untrusted_embedded_digest_not_signature_authentication"},

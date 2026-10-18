@@ -69,6 +69,9 @@ namespace skyline::catalog {
         std::optional<uint64_t> titleId, applicationId, patchId, dataPatchId, dataId;
         std::optional<uint32_t> version;
         std::optional<uint8_t> type;
+        std::string rawHeader;
+        std::optional<uint8_t> platform, metaAttributes, storageId, installType, committedRaw;
+        std::optional<uint32_t> requiredDownloadSystemVersion;
         std::string discovery{"discovered"}, parsing{"unknown"}, digest{"unverified"};
         std::string parentState{"not_applicable"}, referenceConsistency{"unknown"}, hashVerification{"unverified"};
         std::string contentSupport{"unknown"}, runnable{"unknown"};

@@ -80,14 +80,22 @@ def main():
         subprocess.run([compiler, *common, *objects, *libraries, "-o", str(executable)], cwd=root, check=True)
         evidence = args.evidence_dir.resolve() if args.evidence_dir else output / "json"
         subprocess.run([str(executable), str(evidence)], cwd=root, check=True)
-        expected = {"native-complete.json": (2, 2, True), "native-missing-keys.json": (2, 0, False),
-                    "native-partial.json": (2, 1, False), "native-independent-golden.json": (1, 1, True)}
-        for name, (ncas, groups, complete) in expected.items():
+        expected = {"native-complete.json": (2, 2, True, True), "native-missing-keys.json": (2, 0, False, True),
+                    "native-partial.json": (2, 1, False, True), "native-independent-golden.json": (1, 1, True, True),
+                    "native-pfs-budget.json": (2, 1, False, False), "native-header-budget.json": (1, 0, False, False),
+                    "native-nonzero-header.json": (1, 1, True, True)}
+        for name, (ncas, groups, complete, bounded_complete) in expected.items():
             data = json.loads((evidence / name).read_text())
             assert data["schema_version"] == 1 and data["inspector"] == "pine_existing_nca"
             assert len(data["ncas"]) == ncas and len(data["groups"]) == groups
             assert data["all_metadata_enumerated"] is complete
+            assert data["bounded_scan_complete"] is bounded_complete
             assert data["verification"]["signature_verification"] == "not_verified"
+            if name == "native-nonzero-header.json":
+                header = data["groups"][0]["packaged_header"]
+                assert header["storage_id"] == 5 and header["install_type"] == 1
+                assert header["committed_raw"] == 1 and header["committed"] is True
+                assert header["required_download_system_version"] == 0x04030201
             if args.schema_check:
                 import jsonschema
                 schema = json.loads((root / "docs/nsp-catalog-v1.schema.json").read_text())

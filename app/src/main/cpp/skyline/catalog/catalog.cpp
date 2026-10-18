@@ -151,13 +151,24 @@ namespace skyline::catalog {
             const auto identity = Sha256(bytes.data(), bytes.size());
             result.id = "cnmt-sha256:" + Hex(identity.data(), identity.size());
             Range(0, 0x20, bytes.size());
+            result.rawHeader = Hex(bytes.data(), 0x20);
             result.titleId = U64(bytes, 0); result.version = U32(bytes, 8); result.type = bytes[12];
+            result.platform = bytes[13]; result.metaAttributes = bytes[20];
+            result.storageId = bytes[21]; result.installType = bytes[22]; result.committedRaw = bytes[23];
+            result.requiredDownloadSystemVersion = U32(bytes, 24);
+            if (*result.installType != 0) {
+                result.contentSupport = "unsupported";
+                result.issues.push_back({"install_type_unsupported", "non-Full installation metadata is retained but is not a complete Program capability"});
+            }
             result.extendedHeaderSize = U16(bytes, 14);
             auto count = U16(bytes, 16), metaCount = U16(bytes, 18);
             // Platform 0 (Nx) is also the old reserved value; it does not select
             // pre/post-15.0 ContentInfo layout. No title-version heuristic exists.
             Expect(bytes[13] == 0, "unsupported_cnmt_platform", "only Nx CNMT platform is supported");
-            Expect(!Nonzero(bytes, 21, 3) && !Nonzero(bytes, 28, 4), "invalid_cnmt_reserved", "nonzero CNMT header reserved bytes");
+            // +0x15/+0x16/+0x17 are storage_id/install_type/committed,
+            // not reserved bytes. Preserve their raw values without imposing
+            // installation policy on this read-only structural catalog.
+            Expect(!Nonzero(bytes, 28, 4), "invalid_cnmt_reserved", "nonzero CNMT header reserved_1C bytes");
             result.contentTableOffset = Add(0x20, result.extendedHeaderSize);
             result.metaTableOffset = Add(result.contentTableOffset, Multiply(count, 0x38));
             result.extendedDataOffset = Add(result.metaTableOffset, Multiply(metaCount, 0x10));
@@ -274,7 +285,15 @@ namespace skyline::catalog {
                 result.ncas.push_back(std::move(skipped)); result.complete = false;
                 continue;
             }
-            try { result.ncas.push_back(inspector.Inspect(entry, options)); }
+            try {
+                result.ncas.push_back(inspector.Inspect(entry, options));
+                // Inspectors retain per-member failures instead of throwing.
+                // A consumed scan budget still means bounded work stopped,
+                // independently of whether other metadata remains readable.
+                const auto &issues = result.ncas.back().issues;
+                if (std::any_of(issues.begin(), issues.end(), [](const auto &issue) { return issue.code == "scan_budget"; }))
+                    result.complete = false;
+            }
             catch (const std::exception &error) {
                 NcaDescriptor failed; failed.entry = entry.name; failed.offset = entry.offset; failed.size = entry.size;
                 failed.source = entry.source; failed.contentIdHint = IdHint(entry.name); failed.readability = "unreadable";
@@ -370,15 +389,17 @@ namespace skyline::catalog {
             result.issues.push_back({"duplicate_content_id", "multiple NCA members claim or hash to Content ID " + id});
             for (auto index : candidates) result.ncas[index].issues.push_back({"duplicate_content_id", "Content ID has multiple members; no member is implicitly selected"});
         }
-        std::map<std::tuple<uint64_t, uint32_t, uint8_t>, std::vector<size_t>> metaCandidates;
+        // The source's ContentMetaKey includes install_type. ContentMetaInfo
+        // omits it on wire; its ToKey() uses Make's default Full (0) instead.
+        std::map<std::tuple<uint64_t, uint32_t, uint8_t, uint8_t>, std::vector<size_t>> metaCandidates;
         for (size_t i{}; i < result.groups.size(); ++i) {
             const auto &group = result.groups[i];
             if (group.parsing == "parsed" && group.titleId && group.version && group.type)
-                metaCandidates[{*group.titleId, *group.version, *group.type}].push_back(i);
+                metaCandidates[{*group.titleId, *group.version, *group.type, *group.installType}].push_back(i);
         }
         for (auto &[key, candidates] : metaCandidates) if (candidates.size() > 1) {
             (void)key;
-            for (auto index : candidates) result.groups[index].issues.push_back({"metadata_ambiguity", "more than one CNMT has this title, version and role"});
+            for (auto index : candidates) result.groups[index].issues.push_back({"metadata_ambiguity", "more than one CNMT has this title, version, role and install type"});
         }
         for (auto &group : result.groups) {
             if (group.parsing != "parsed") continue;
@@ -425,13 +446,13 @@ namespace skyline::catalog {
                     if (ref.nca) {
                         const auto &nca = result.ncas[*ref.nca]; program.programId = nca.programId;
                         program.requiresBase = std::any_of(nca.sections.begin(), nca.sections.end(), [](const auto &s) { return s.requiresBase; });
-                        program.capability = nca.support == "metadata_readable" ? "not_assessed" : "unsupported";
+                        program.capability = nca.support == "metadata_readable" && group.installType == 0 ? "not_assessed" : "unsupported";
                     }
                     group.programs.push_back(program);
                 }
             }
             for (auto &ref : group.metaReferences) {
-                const auto found = metaCandidates.find({ref.titleId, ref.version, ref.type});
+                const auto found = metaCandidates.find({ref.titleId, ref.version, ref.type, 0});
                 if (found != metaCandidates.end()) ref.candidates = found->second;
                 ref.state = ref.candidates.empty() ? "missing" : ref.candidates.size() == 1 ? "resolved" : "ambiguous";
                 if (ref.state != "resolved") { invalid = true; group.issues.push_back({"meta_reference_" + ref.state, "ContentMetaInfo does not resolve to exactly one parsed CNMT"}); }
@@ -439,7 +460,7 @@ namespace skyline::catalog {
             if (group.applicationId) {
                 for (size_t i{}; i < result.groups.size(); ++i) {
                     const auto &candidate = result.groups[i];
-                    if (candidate.parsing == "parsed" && candidate.type && *candidate.type == 0x80 && candidate.titleId == group.applicationId)
+                    if (candidate.parsing == "parsed" && candidate.type && *candidate.type == 0x80 && candidate.installType == 0 && candidate.titleId == group.applicationId)
                         group.applicationCandidates.push_back(i);
                 }
                 group.parentState = !*group.applicationId ? "invalid" : group.applicationCandidates.empty() ? "missing" : group.applicationCandidates.size() == 1 ? "consistent" : "ambiguous";
@@ -465,6 +486,7 @@ namespace skyline::catalog {
                     group.referenceConsistency = "invalid"; group.issues.push_back({"missing_aoc_data", "AOC has no Data content reference (Data or PublicData NCA)"});
                 }
             } else group.runnable = "unsupported";
+            if (group.installType != 0) group.runnable = "unsupported";
         }
         // The caller can retain this Source and must recheck before a future
         // launch/selection. A successful scan does not pin mutable file bytes.

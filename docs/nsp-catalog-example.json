@@ -6,7 +6,7 @@
     "identity_kind": "open_file_stat_snapshot",
     "identity_scope": "opened_source_stat_and_named_inode_checked_at_scan_and_serialization; not_a_content_hash",
     "size": 38472,
-    "snapshot_token": "posix-stat:33:3407:38472:1792334997:967017605:1792334997:967017605",
+    "snapshot_token": "posix-stat:33:9994:38472:1792336224:851481756:1792336224:851481756",
     "whole_container_sha256_verification": "not_performed"
   },
   "content_info_profile": "modern-40",
@@ -46,7 +46,7 @@
       "digest_evidence": "untrusted_embedded_digest_not_signature_authentication",
       "discovery": "discovered",
       "explicit_application_id": null,
-      "id": "cnmt-sha256:2563da21eb2d652bcd2e16a2f1c4da750f39a77284cfd3b0b8abeef46d98ee25",
+      "id": "cnmt-sha256:2d338fbca0468e1b550a838ea88093ea57660c3ae0cb4f853f9b7262bc791ed3",
       "issues": [],
       "layout": {
         "content_info_profile": "modern-40",
@@ -56,6 +56,17 @@
         "extended_data_size": 0,
         "extended_data_support": "none",
         "extended_header_size": 16
+      },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": true,
+        "committed_raw": 1,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0010000000000001010000008000100001000000000500010000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 5
       },
       "parent_state": "not_applicable",
       "parsing": "parsed",
@@ -73,7 +84,7 @@
       ],
       "reference_consistency": "consistent",
       "runnable": "not_assessed",
-      "source_member": "nca-sha256:a4030faa09f75035041973df52acbddf0efb31e07cb710d3a0c414eb50d40cd8",
+      "source_member": "nca-sha256:f6846b286480bf5dbf0c4dca0776922761f01762b974a46f7f9312d2e6e65e79",
       "title_id": "0100000000001000",
       "type": 128,
       "type_name": "Application",
@@ -82,7 +93,7 @@
     {
       "aoc_registration": "not_performed",
       "application_candidates": [
-        "cnmt-sha256:2563da21eb2d652bcd2e16a2f1c4da750f39a77284cfd3b0b8abeef46d98ee25"
+        "cnmt-sha256:2d338fbca0468e1b550a838ea88093ea57660c3ae0cb4f853f9b7262bc791ed3"
       ],
       "cnmt_entry": "patch-one.cnmt",
       "cnmt_trailer_digest_observation": "verified",
@@ -126,6 +137,17 @@
         "extended_data_support": "none",
         "extended_header_size": 24
       },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": false,
+        "committed_raw": 0,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0018000000000001050000008100180001000000000000000000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 0
+      },
       "parent_state": "consistent",
       "parsing": "parsed",
       "patch_id": null,
@@ -142,7 +164,7 @@
       ],
       "reference_consistency": "consistent",
       "runnable": "requires_base_or_runtime_validation",
-      "source_member": "nca-sha256:a4030faa09f75035041973df52acbddf0efb31e07cb710d3a0c414eb50d40cd8",
+      "source_member": "nca-sha256:f6846b286480bf5dbf0c4dca0776922761f01762b974a46f7f9312d2e6e65e79",
       "title_id": "0100000000001800",
       "type": 129,
       "type_name": "Patch",
@@ -151,7 +173,7 @@
     {
       "aoc_registration": "not_performed",
       "application_candidates": [
-        "cnmt-sha256:2563da21eb2d652bcd2e16a2f1c4da750f39a77284cfd3b0b8abeef46d98ee25"
+        "cnmt-sha256:2d338fbca0468e1b550a838ea88093ea57660c3ae0cb4f853f9b7262bc791ed3"
       ],
       "cnmt_entry": "aoc-one.cnmt",
       "cnmt_trailer_digest_observation": "verified",
@@ -195,6 +217,17 @@
         "extended_data_support": "none",
         "extended_header_size": 24
       },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": false,
+        "committed_raw": 0,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0120000000000001010000008200180001000000000000000000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 0
+      },
       "parent_state": "consistent",
       "parsing": "parsed",
       "patch_id": null,
@@ -210,7 +243,7 @@
     {
       "aoc_registration": "not_performed",
       "application_candidates": [
-        "cnmt-sha256:2563da21eb2d652bcd2e16a2f1c4da750f39a77284cfd3b0b8abeef46d98ee25"
+        "cnmt-sha256:2d338fbca0468e1b550a838ea88093ea57660c3ae0cb4f853f9b7262bc791ed3"
       ],
       "cnmt_entry": "aoc-two.cnmt",
       "cnmt_trailer_digest_observation": "verified",
@@ -253,6 +286,17 @@
         "extended_data_size": 0,
         "extended_data_support": "none",
         "extended_header_size": 24
+      },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": false,
+        "committed_raw": 0,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0220000000000001010000008200180001000000000000000000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 0
       },
       "parent_state": "consistent",
       "parsing": "parsed",
@@ -311,6 +355,17 @@
         "extended_data_support": "none",
         "extended_header_size": 16
       },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": false,
+        "committed_raw": 0,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0000010000000001010000008000100001000000000000000000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 0
+      },
       "parent_state": "not_applicable",
       "parsing": "parsed",
       "patch_id": "0100000000010800",
@@ -327,7 +382,7 @@
       ],
       "reference_consistency": "consistent",
       "runnable": "not_assessed",
-      "source_member": "nca-sha256:a4030faa09f75035041973df52acbddf0efb31e07cb710d3a0c414eb50d40cd8",
+      "source_member": "nca-sha256:f6846b286480bf5dbf0c4dca0776922761f01762b974a46f7f9312d2e6e65e79",
       "title_id": "0100000000010000",
       "type": 128,
       "type_name": "Application",
@@ -380,6 +435,17 @@
         "extended_data_support": "none",
         "extended_header_size": 24
       },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": false,
+        "committed_raw": 0,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0008010000000001090000008100180001000000000000000000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 0
+      },
       "parent_state": "consistent",
       "parsing": "parsed",
       "patch_id": null,
@@ -396,7 +462,7 @@
       ],
       "reference_consistency": "consistent",
       "runnable": "requires_base_or_runtime_validation",
-      "source_member": "nca-sha256:a4030faa09f75035041973df52acbddf0efb31e07cb710d3a0c414eb50d40cd8",
+      "source_member": "nca-sha256:f6846b286480bf5dbf0c4dca0776922761f01762b974a46f7f9312d2e6e65e79",
       "title_id": "0100000000010800",
       "type": 129,
       "type_name": "Patch",
@@ -448,6 +514,17 @@
         "extended_data_size": 0,
         "extended_data_support": "none",
         "extended_header_size": 24
+      },
+      "packaged_header": {
+        "attributes": 0,
+        "committed": false,
+        "committed_raw": 0,
+        "field_evidence": "atmosphere_6b0c077_packaged_content_meta_header",
+        "install_type": 0,
+        "platform": 0,
+        "raw_bytes": "0110010000000001010000008200180001000000000000000000000000000000",
+        "required_download_system_version": 0,
+        "storage_id": 0
       },
       "parent_state": "consistent",
       "parsing": "parsed",
@@ -666,46 +743,6 @@
       "support": "metadata_readable"
     },
     {
-      "actual_sha256": "a4030faa09f75035041973df52acbddf0efb31e07cb710d3a0c414eb50d40cd8",
-      "content_id_hint_evidence": "filename_only_unverified",
-      "content_type": 1,
-      "content_type_name": "Meta",
-      "discovery": "discovered",
-      "entry": "a4030faa09f75035041973df52acbddf.cnmt.nca",
-      "filename_content_id_hint": "a4030faa09f75035041973df52acbddf",
-      "id": "nca-sha256:a4030faa09f75035041973df52acbddf0efb31e07cb710d3a0c414eb50d40cd8",
-      "issues": [],
-      "offset": 29256,
-      "program_id": "0100000000001000",
-      "readability": "plaintext_header",
-      "sections": [
-        {
-          "compressed": false,
-          "encryption_type": 1,
-          "fs_header_hash_verification": "verified",
-          "fs_type": 1,
-          "hash_type": 2,
-          "index": 0,
-          "metadata_hash_type": 0,
-          "offset": 3072,
-          "patch_ctr_ex_offset": 0,
-          "patch_ctr_ex_size": 0,
-          "patch_indirect_offset": 0,
-          "patch_indirect_size": 0,
-          "readable_pfs": true,
-          "requires_base": false,
-          "section_data_hash_verification": "not_performed",
-          "size": 1536,
-          "sparse": false,
-          "support": "supported",
-          "version": 2
-        }
-      ],
-      "signature_verification": "not_verified",
-      "size": 4608,
-      "support": "metadata_readable"
-    },
-    {
       "actual_sha256": "df6f4f4afe31dfc4a14868e07756fd6879f865a2d970e91b011b24c5afb15aaa",
       "content_id_hint_evidence": "filename_only_unverified",
       "content_type": 5,
@@ -783,6 +820,46 @@
       ],
       "signature_verification": "not_verified",
       "size": 4096,
+      "support": "metadata_readable"
+    },
+    {
+      "actual_sha256": "f6846b286480bf5dbf0c4dca0776922761f01762b974a46f7f9312d2e6e65e79",
+      "content_id_hint_evidence": "filename_only_unverified",
+      "content_type": 1,
+      "content_type_name": "Meta",
+      "discovery": "discovered",
+      "entry": "f6846b286480bf5dbf0c4dca07769227.cnmt.nca",
+      "filename_content_id_hint": "f6846b286480bf5dbf0c4dca07769227",
+      "id": "nca-sha256:f6846b286480bf5dbf0c4dca0776922761f01762b974a46f7f9312d2e6e65e79",
+      "issues": [],
+      "offset": 29256,
+      "program_id": "0100000000001000",
+      "readability": "plaintext_header",
+      "sections": [
+        {
+          "compressed": false,
+          "encryption_type": 1,
+          "fs_header_hash_verification": "verified",
+          "fs_type": 1,
+          "hash_type": 2,
+          "index": 0,
+          "metadata_hash_type": 0,
+          "offset": 3072,
+          "patch_ctr_ex_offset": 0,
+          "patch_ctr_ex_size": 0,
+          "patch_indirect_offset": 0,
+          "patch_indirect_size": 0,
+          "readable_pfs": true,
+          "requires_base": false,
+          "section_data_hash_verification": "not_performed",
+          "size": 1536,
+          "sparse": false,
+          "support": "supported",
+          "version": 2
+        }
+      ],
+      "signature_verification": "not_verified",
+      "size": 4608,
       "support": "metadata_readable"
     },
     {

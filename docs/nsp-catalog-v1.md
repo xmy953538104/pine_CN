@@ -21,7 +21,7 @@ git submodule update --init --depth 1 app/libraries/mbedtls
 python3 tools/tests/test-nsp-catalog-native.py --real-aes --mbedtls-root app/libraries/mbedtls
 ```
 
-The CLI opens its input read-only, rejects a symlink as the final path component, uses exact `pread` byte counts, and never modifies the container. Exit 0 means a structured catalog was produced; inspect each member/group status for failures. Exit 2 produces structured `fatal` JSON for an invalid container or option. Exit 3 means no complete result was produced. Member failures are retained alongside valid groups.
+The CLI opens its input read-only and nonblocking before `fstat` rejects non-regular files, so a FIFO without a writer cannot hang the initial open. It rejects a symlink as the final path component, uses exact `pread` byte counts, and never modifies the container. Exit 0 means a structured catalog was produced; inspect each member/group status for failures. Exit 2 produces structured `fatal` JSON for an invalid container or option. Exit 3 means no complete result was produced. Member failures are retained alongside valid groups.
 
 The host inspector supports plaintext **NCA3** headers and unencrypted version-2 PartitionFs sections with exactly two hierarchical SHA256 layers. It enumerates every Meta NCA and tries every Meta-PFS member at least `0x20` bytes as a CNMT candidate, including arbitrarily renamed files; `.cnmt` members are tried even when truncated. It checks ranges, table counts, names, duplicate names, overlaps and filesystem-header hash linkage. It does not verify the section's master/table/data hash chain, NSO/NPDM contents, RomFS integrity, signatures or executable capability.
 
@@ -38,6 +38,8 @@ CNMT has no reliable self-describing field for the pre/post-15.0.0 `ContentInfo`
 | `modern-40` | Five little-endian size bytes followed by content attributes. |
 
 Title version and platform 0 do not choose a profile. An unknown profile can still expose common header fields, safe table extents and references; size consistency remains unknown. Nonzero modern content attributes are preserved and marked unsupported.
+
+`packaged_header` retains all 32 raw header bytes and the fixed-source interpretation of platform, meta attributes, storage ID (`+0x15`), install type (`+0x16`), committed (`+0x17`) and required download system version. These three nonzero bytes are not reserved. Unknown enum values are preserved without hiding references, and `committed` is a decoded boolean only for raw 0/1. Non-Full installation types remain parsed with unsupported Program capability. Metadata identity includes install type; metadata-reference resolution uses the primary accessor's explicit default Full selector, not a fabricated wire field. The independent `header-fields-sentinel.cnmt` and actual NSP golden contain nonzero storage/install/committed fields and both nonempty tables.
 
 Application's first extended-header ID is `patch_id`, not a parent. Patch and AOC retain their explicit `application_id`; DataPatch has distinct `data_id` and `application_id`. Delta and DataPatch identity can be enumerated while their execution/data-patching support remains unsupported. Patch/Delta/DataPatch extended-data lengths are checked exactly; nonempty extended data is opaque and unsupported. Unknown roles, platforms, layouts and extended-header sizes are never guessed.
 

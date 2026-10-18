@@ -1,0 +1,73 @@
+{
+  "profile_version": 2,
+  "primary_repository": "switchbrew/libnx",
+  "libnx_commit": "20cbcfd90567f7bf84df7725f27e345e2164fa6b",
+  "primary_source": {
+    "cmif.h": {
+      "url": "https://github.com/switchbrew/libnx/blob/20cbcfd90567f7bf84df7725f27e345e2164fa6b/nx/include/switch/sf/cmif.h",
+      "raw_url": "https://raw.githubusercontent.com/switchbrew/libnx/20cbcfd90567f7bf84df7725f27e345e2164fa6b/nx/include/switch/sf/cmif.h",
+      "full_file_sha256": "8d9d032c06ce4bbbb0052ab0952f95828bb5b032ba381c485e2a777a61a06b74",
+      "verified_functions": {
+        "cmifGetAlignedDataStart": {
+          "byte_offset": 2127,
+          "byte_size": 177,
+          "sha256": "36be88776a9b3b870a53bf016eb1a4b6bfea8ddea1e7358fde0f40c4c708ac17"
+        },
+        "cmifMakeRequest": {
+          "byte_offset": 2304,
+          "byte_size": 2508,
+          "sha256": "905bc3a25e4ec4ff6d5cba4b096e2b26731d1580de6ad0162e62f44b37b0d1a3"
+        }
+      }
+    },
+    "hipc.h": {
+      "url": "https://github.com/switchbrew/libnx/blob/20cbcfd90567f7bf84df7725f27e345e2164fa6b/nx/include/switch/sf/hipc.h",
+      "raw_url": "https://raw.githubusercontent.com/switchbrew/libnx/20cbcfd90567f7bf84df7725f27e345e2164fa6b/nx/include/switch/sf/hipc.h",
+      "full_file_sha256": "38bd18f76b120e75a07d6639761d23f21f289202982ca14dd0246be7974394a0",
+      "verified_functions": {
+        "hipcCalcRequestLayout": {
+          "byte_offset": 4277,
+          "byte_size": 1928,
+          "sha256": "607fdc747dc97a025573b2eacc71788ff7fada3c131456f5062efa74d49601ab"
+        },
+        "hipcMakeRequest": {
+          "byte_offset": 6205,
+          "byte_size": 1338,
+          "sha256": "bd9570540e5002a693df1114fb607bca3422d066c7bdcf6caa90b78fd61017d4"
+        }
+      }
+    }
+  },
+  "request_form": {
+    "domain": false,
+    "send_pid": false,
+    "input_descriptors": 0,
+    "input_handles": 0,
+    "out_pointer_size_table_entries": 0,
+    "fixed_output_pointers_when_present": 1,
+    "cmif_header_bytes": 16,
+    "combined_front_rear_padding_bytes": 16,
+    "hipc_header_bytes": 8
+  },
+  "expected_runtime_wire_layout": {
+    "libnx_commit": "20cbcfd90567f7bf84df7725f27e345e2164fa6b",
+    "count_request_bytes": 40,
+    "count_request_raw_words": 8,
+    "count_response_bytes": 44,
+    "count_response_raw_words": 9,
+    "fixed_type_c_mode": 3,
+    "type_c_args16_descriptor_offset": 56,
+    "type_c_args16_total_bytes": 64,
+    "actual_request_decode_checks": 60,
+    "actual_output_pointer_size_checks": 27,
+    "historical_short_frame_rejected_without_dispatch": true,
+    "count_request_hex": "04000000080000000000000000000000534643490000000002000000000000000000000000000000",
+    "count_response_hex": "000000000900000000000000000000005346434f010000000000000000000000020000000000000000000000",
+    "header_read_prefix_hex": "040000000c0c0000000000000000000053464349000000000000000000000000000000000000000050000000000000000000000000000000"
+  },
+  "earlier_evidence_scope": {
+    "019ed133": "implementation execution only; missing rear request padding and incomplete response golden",
+    "e9ae0541": "implementation execution only; exact LSan guard valid but same request-padding defect"
+  },
+  "literal_provenance": "Hand-derived from the pinned primary builders and cross-checked with a separately authored literal review; no executed upstream producer claim"
+}

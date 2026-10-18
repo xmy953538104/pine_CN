@@ -415,6 +415,12 @@ add_library(skyline SHARED
         ${source_DIR}/skyline/services/ntc/IEnsureNetworkClockAvailabilityService.cpp
         )
 target_include_directories(skyline PRIVATE ${source_DIR}/skyline)
+option(PINE_ENABLE_VIRTUAL_ROMFS_PROTOTYPE "Compile the explicit read-only virtual RomFS prototype API" OFF)
+if(PINE_ENABLE_VIRTUAL_ROMFS_PROTOTYPE)
+    target_sources(skyline PRIVATE
+            ${source_DIR}/skyline/vfs/prototype/romfs_detail.cpp
+            ${source_DIR}/skyline/vfs/prototype/virtual_romfs.cpp)
+endif()
 # target_precompile_headers(skyline PRIVATE ${source_DIR}/skyline/common.h) # PCH will currently break Intellisense
 target_compile_options(skyline PRIVATE -Wall -Wno-unknown-attributes -Wno-c++20-extensions -Wno-c++17-extensions -Wno-c99-designator -Wno-reorder -Wno-missing-braces -Wno-unused-variable -Wno-unused-private-field -Wno-dangling-else -Wconversion -fsigned-bitfields)
 

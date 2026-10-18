@@ -146,6 +146,13 @@ int main(int argc,char**argv) {
         std::vector<std::thread> readers;for(size_t i{};i<4;++i)readers.emplace_back([&]{for(size_t j{};j<100;++j){std::array<uint8_t,23>out{};assert(result.view->ReadUnchecked(out,j)==out.size());assert(std::equal(out.begin(),out.end(),all.begin()+j));}});for(auto&thread:readers)thread.join();
         DeviceState state;service::ServiceManager manager;kernel::type::KSession session;kernel::ipc::IpcResponse response;service::fssrv::IStorage storage(result.view,state,manager);
         kernel::ipc::IpcRequest empty{{0,0},{}};storage.GetSize(session,empty,response);assert(response.value==result.view->size);
+        // Keep the independent review's mixed-segment allocation check in CI.
+        std::vector<uint8_t> wholeRead(all.size());
+        before=allocationCount.load();assert(result.view->ReadUnchecked(wholeRead,0)==wholeRead.size());assert(allocationCount==before&&wholeRead==all);
+        kernel::ipc::IpcRequest wholeRequest{{0,wholeRead.size()},{wholeRead}};
+        before=allocationCount.load();assert(storage.Read(session,wholeRequest,response)==skyline::Result{});assert(allocationCount==before&&wholeRead==all);
+        vfs::ReadObservation legacyObservation;
+        assert(result.view->Read(byte,0,&legacyObservation)==result.view->size&&legacyObservation.bytes&&*legacyObservation.bytes==1);
         auto entry=fs.fileMap.at("new/deep/added.txt");std::array<uint8_t,16> data{};kernel::ipc::IpcRequest request{{fs.header.dataOffset+entry.offset,999},{data}};assert(storage.Read(session,request,response)==skyline::Result{});assert(std::string(data.begin(),data.end())=="new nested bytes");
         s.base->shortRead=true;auto keep=fs.OpenFile("keep.txt");Throws([&]{Text(keep);});s.base->shortRead=false;s.base->fail=true;bool caught{};try{Text(keep);}catch(const IoFailure&){caught=true;}assert(caught);s.base->fail=false;
         s.base->Change(0x200);Throws([&]{result.view->ReadUnchecked(byte,0);});s.base->bytes=original;--s.base->generation;

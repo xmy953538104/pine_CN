@@ -127,9 +127,10 @@ namespace skyline::catalog {
         out.String("runtime_integration", catalog.runtimeIntegration);
         Object container;
         container.Number("size", catalog.containerSize);
-        container.String("identity_kind", catalog.containerSnapshot.empty() ? "unknown" : "open_file_stat_snapshot");
+        const bool sourceIdentity = catalog.source && !catalog.containerSnapshot.empty();
+        container.String("identity_kind", sourceIdentity ? catalog.source->IdentityKind() : "unknown");
         container.Raw("snapshot_token", catalog.containerSnapshot.empty() ? "null" : Json(catalog.containerSnapshot));
-        container.String("identity_scope", "opened_source_stat_and_named_inode_checked_at_scan_and_serialization; not_a_content_hash");
+        container.String("identity_scope", sourceIdentity ? catalog.source->IdentityScope() : "identity_unavailable; not_a_content_hash");
         container.String("whole_container_sha256_verification", "not_performed");
         out.Raw("container", container.End());
         Object verification;

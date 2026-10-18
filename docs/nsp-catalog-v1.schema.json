@@ -158,7 +158,7 @@
           "type": "object", "additionalProperties": false,
           "required": ["size", "identity_kind", "snapshot_token", "identity_scope", "whole_container_sha256_verification"],
           "properties": {
-            "size": {"$ref": "#/$defs/uint"}, "identity_kind": {"enum": ["unknown", "open_file_stat_snapshot"]},
+            "size": {"$ref": "#/$defs/uint"}, "identity_kind": {"enum": ["unknown", "open_file_stat_snapshot", "duplicated_fd_stat_snapshot"]},
             "snapshot_token": {"type": ["string", "null"]}, "identity_scope": {"type": "string"},
             "whole_container_sha256_verification": {"const": "not_performed"}
           }

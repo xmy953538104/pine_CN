@@ -28,6 +28,8 @@ namespace skyline::catalog {
         virtual size_t Read(uint64_t offset, uint8_t *out, size_t size) const = 0;
         virtual void CheckUnchanged() const {}
         virtual std::string SnapshotToken() const { return {}; }
+        virtual std::string IdentityKind() const { return "unknown"; }
+        virtual std::string IdentityScope() const { return "identity_unavailable; not_a_content_hash"; }
         void Exact(uint64_t offset, uint8_t *out, size_t size) const;
         std::vector<uint8_t> Bytes(uint64_t offset, size_t size) const;
     };
@@ -35,6 +37,10 @@ namespace skyline::catalog {
 
     Source Region(Source parent, uint64_t offset, uint64_t size);
     Source OpenFile(const std::string &path);
+    // Own a CLOEXEC duplicate of a borrowed readable regular-file descriptor.
+    // Uses pread without changing its shared file offset. Stat checks bind only
+    // the owned descriptor, not a named path/inode or immutable content hash.
+    Source DuplicateFd(int borrowedFd);
 
     struct Limits {
         uint32_t maxPfsEntries{65536};

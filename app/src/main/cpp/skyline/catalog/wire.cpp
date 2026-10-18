@@ -50,6 +50,8 @@ namespace skyline::catalog {
             }
             void CheckUnchanged() const override { parent->CheckUnchanged(); }
             std::string SnapshotToken() const override { return parent->SnapshotToken(); }
+            std::string IdentityKind() const override { return parent->IdentityKind(); }
+            std::string IdentityScope() const override { return parent->IdentityScope(); }
         };
 
         class FileReader final : public Reader {
@@ -95,6 +97,76 @@ namespace skyline::catalog {
                     std::to_string(initial.st_size) + ":" + std::to_string(initial.st_mtim.tv_sec) + ":" + std::to_string(initial.st_mtim.tv_nsec) + ":" +
                     std::to_string(initial.st_ctim.tv_sec) + ":" + std::to_string(initial.st_ctim.tv_nsec);
             }
+            std::string IdentityKind() const override { return "open_file_stat_snapshot"; }
+            std::string IdentityScope() const override { return "opened_source_stat_and_named_inode_checked_at_scan_and_serialization; not_a_content_hash"; }
+        };
+
+        struct OwnedFd {
+            int value;
+            explicit OwnedFd(int value) : value(value) {}
+            OwnedFd(const OwnedFd &) = delete;
+            OwnedFd &operator=(const OwnedFd &) = delete;
+            ~OwnedFd() { if (value >= 0) close(value); }
+        };
+        int Duplicate(int borrowed) {
+            if (borrowed < 0) throw Error("input_fd_invalid", "invalid input descriptor");
+            int result;
+            do { result = fcntl(borrowed, F_DUPFD_CLOEXEC, 0); } while (result < 0 && errno == EINTR);
+            if (result < 0) throw Error("input_fd_duplicate_failed", "cannot duplicate input descriptor");
+            return result;
+        }
+        int FdFlags(int fd) {
+            int result;
+            do { result = fcntl(fd, F_GETFL); } while (result < 0 && errno == EINTR);
+            return result;
+        }
+        bool FdStat(int fd, struct stat &value) {
+            int result;
+            do { result = fstat(fd, &value); } while (result < 0 && errno == EINTR);
+            return result == 0;
+        }
+        class DescriptorReader final : public Reader {
+            OwnedFd fd;
+            struct stat initial{};
+          public:
+            explicit DescriptorReader(int borrowed) : fd(Duplicate(borrowed)) {
+                const int flags = FdFlags(fd.value);
+                if (flags < 0 || ((flags & O_ACCMODE) != O_RDONLY && (flags & O_ACCMODE) != O_RDWR)
+#ifdef O_PATH
+                    || (flags & O_PATH)
+#endif
+                ) throw Error("input_fd_not_readable", "input descriptor must allow reads");
+                if (!FdStat(fd.value, initial) || !S_ISREG(initial.st_mode) || initial.st_size < 0)
+                    throw Error("input_not_regular", "input descriptor must be a regular file");
+            }
+            uint64_t Size() const override { return static_cast<uint64_t>(initial.st_size); }
+            size_t Read(uint64_t offset, uint8_t *out, size_t count) const override {
+                Range(offset, count, Size());
+                Range(offset, count, static_cast<uint64_t>(std::numeric_limits<off_t>::max()));
+                size_t done{};
+                while (done < count) {
+                    auto amount = pread(fd.value, out + done, std::min(count - done, size_t{1024 * 1024}), static_cast<off_t>(offset + done));
+                    if (amount < 0 && errno == EINTR) continue;
+                    if (amount < 0) throw Error("input_read_failed", "input descriptor read failed");
+                    if (!amount) break;
+                    done += static_cast<size_t>(amount);
+                }
+                return done;
+            }
+            void CheckUnchanged() const override {
+                struct stat now{};
+                if (!FdStat(fd.value, now) || now.st_dev != initial.st_dev || now.st_ino != initial.st_ino || now.st_size != initial.st_size ||
+                    now.st_mtim.tv_sec != initial.st_mtim.tv_sec || now.st_mtim.tv_nsec != initial.st_mtim.tv_nsec ||
+                    now.st_ctim.tv_sec != initial.st_ctim.tv_sec || now.st_ctim.tv_nsec != initial.st_ctim.tv_nsec)
+                    throw Error("input_changed", "descriptor source changed during catalog scan");
+            }
+            std::string SnapshotToken() const override {
+                return "posix-fd-stat:" + std::to_string(initial.st_dev) + ":" + std::to_string(initial.st_ino) + ":" +
+                    std::to_string(initial.st_size) + ":" + std::to_string(initial.st_mtim.tv_sec) + ":" + std::to_string(initial.st_mtim.tv_nsec) + ":" +
+                    std::to_string(initial.st_ctim.tv_sec) + ":" + std::to_string(initial.st_ctim.tv_nsec);
+            }
+            std::string IdentityKind() const override { return "duplicated_fd_stat_snapshot"; }
+            std::string IdentityScope() const override { return "owned_descriptor_stat_checked_at_scan_and_serialization; no_named_path_check; not_a_content_hash"; }
         };
 
         class Hash {
@@ -156,6 +228,7 @@ namespace skyline::catalog {
 
     Source Region(Source parent, uint64_t offset, uint64_t size) { return std::make_shared<RegionReader>(std::move(parent), offset, size); }
     Source OpenFile(const std::string &path) { return std::make_shared<FileReader>(path); }
+    Source DuplicateFd(int borrowedFd) { return std::make_shared<DescriptorReader>(borrowedFd); }
 
     uint64_t Little(const std::vector<uint8_t> &bytes, size_t at, size_t count) {
         if (count > 8) throw Error("invalid_integer_width", "wire integer is wider than 64 bits");

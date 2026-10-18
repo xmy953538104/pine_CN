@@ -65,6 +65,7 @@ class ExistingApkTest(unittest.TestCase):
         self.assertNotIn('submodule update', workflow)
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.run_runtime", workflow)
         self.assertIn('PINE_CI_REQUIRE_ACCELERATION', workflow)
+        self.assertIn('artifact-ids: ${{ steps.input.outputs.artifact_id }}', workflow)
 
 
 if __name__ == '__main__': unittest.main()

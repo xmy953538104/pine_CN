@@ -89,6 +89,7 @@ def main():
         args.output.parent.mkdir(parents=True, exist_ok=True); args.output.write_text(json.dumps(result, indent=2) + '\n')
         with args.github_output.open('a') as stream:
             print('artifact_name=' + result['artifact_name'], file=stream)
+            print('artifact_id=' + str(result['artifact_id']), file=stream)
             print('run_id=' + str(result['producer_run_id']), file=stream)
             print('apk_source_commit=' + result['apk_source_commit'], file=stream)
     else:

@@ -1,12 +1,14 @@
 name: Selected content Android integration
 on:
   push:
-    branches: [feat/selected-content-integration-v1]
+    branches: [feat/selected-content-integration-v1, feat/selected-p1-candidate-v1]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:
       - 'app/**'
       - 'tests/selected/**'
+      - 'tests/selected-services/**'
+      - 'tools/run-selected-service-boundary.py'
       - 'tools/tests/test-selected*'
       - 'tools/verify-selected-content-apk.py'
       - '.github/workflows/selected-content-integration.yml'
@@ -84,8 +86,43 @@ jobs:
             app/build/test-results/testFullDebugUnitTest/
             app/build/reports/tests/
             unit-task-graph.txt
+  native-services:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || (github.event.action == 'labeled' && github.event.label.name == 'selected-apk')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pinned dependencies for the same-source native and service gates
+        run: |
+          python3 -m pip install --disable-pip-version-check 'jsonschema==4.25.1'
+          git submodule update --init --depth 1 app/libraries/boost app/libraries/fmt app/libraries/frozen app/libraries/xxhash app/libraries/mbedtls app/libraries/lz4
+          git -C app/libraries/boost submodule update --init --depth 1 libs/assert libs/config libs/container libs/intrusive libs/move libs/static_assert
+          mkdir -p "$RUNNER_TEMP/p1-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/p1-evidence/source-commit.txt"
+          git status --porcelain > "$RUNNER_TEMP/p1-evidence/source-status.txt"
+          sha256sum .github/workflows/selected-content-integration.yml > "$RUNNER_TEMP/p1-evidence/workflow-sha256.txt"
+      - name: Same-source real AES selected core and corrected actual IPC consumers
+        env:
+          CXX: clang++
+          CC: clang
+        run: |
+          set -o pipefail
+          python3 tools/tests/test-selected-content.py --real-aes --sanitize --schema-check --evidence-dir "$RUNNER_TEMP/p1-evidence/native" 2>&1 | tee "$RUNNER_TEMP/p1-evidence/native.txt"
+          python3 tools/run-selected-service-boundary.py --sanitize --evidence-dir "$RUNNER_TEMP/p1-evidence/services" 2>&1 | tee "$RUNNER_TEMP/p1-evidence/services.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-p1-native-services-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.event_name }}
+          path: ${{ runner.temp }}/p1-evidence/
+          if-no-files-found: error
   debug-apk:
-    needs: [transfer, jvm]
+    needs: [transfer, jvm, native-services]
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.build_apk) ||
       (github.event_name == 'pull_request' && github.event.action == 'labeled' &&

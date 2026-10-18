@@ -125,6 +125,10 @@ Diagnostics describe the actual installed primary/update/AOC objects and their
 real CNMT roles. `DLC_REGISTERED` occurs after successful installation;
 standalone Patch identity uses its typed Patch parent. Diagnostic enablement
 does not affect selection or exceptions.
+The shared `PATCH_SELECTED` event is emitted after installing an actual selected
+Patch, with source `update` or `standalone_patch`, its true CNMT/parent/Program
+identities and `status: selected_not_executed`. It does not claim guest execution
+or that RomFS has been opened.
 
 ## Evidence and limits
 

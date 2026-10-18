@@ -187,6 +187,15 @@ def main():
             runtime = json.loads((evidence / "selected-runtime.json").read_text())
             assert runtime["primary_cnmt_role"] == "application" and runtime["update_cnmt_role"] == "patch" and runtime["aoc_count"] == 2
             assert runtime["bktr_supported"] is False and runtime["guest_execution"] == "not_performed"
+            events = [json.loads(line) for path in sorted((evidence / "diagnostics").glob("diagnostics-*.jsonl"))
+                      for line in path.read_text().splitlines()]
+            patches = [event["fields"] for event in events if event.get("event") == "PATCH_SELECTED"]
+            assert len(patches) == 2 and {event["source"] for event in patches} == {"update", "standalone_patch"}
+            for event in patches:
+                assert event["cnmt_type"] == "patch" and event["status"] == "selected_not_executed"
+                assert event["parent_title_id"] == runtime["application_id"]
+                assert len(event["program_id"]) == 16 and len(event["program_content_id"]) == 32
+            manifest["patch_selection_contract_checked"] = True
             manifest["scenario_count"] = result.stdout.count("PASS ")
             manifest["schema_checked"] = bool(args.schema_check)
             if args.schema_check:

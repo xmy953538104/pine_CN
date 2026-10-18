@@ -19,6 +19,12 @@ namespace skyline::kernel {
                               content->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch ? "patch" : "add_on_content"},
                 {"cnmt_id", content->cnmt->GetTitleId()}, {"program_id", content->programNca ? diagnostics::ContentTitleId(content->programNca->header.titleId) : ""},
                 {"program_content_id", content->diagnosticProgramContentId}, {"validation", "selected_bounded_structural_v1"});
+            if (content->cnmt->GetContentMetaType() == vfs::ContentMetaType::Patch)
+                PINE_DIAG_CONTENT("PATCH_SELECTED", {"source", slot}, {"cnmt_type", "patch"},
+                    {"cnmt_title_id", content->cnmt->GetTitleId()}, {"parent_title_id", content->cnmt->GetParentTitleId()},
+                    {"program_id", diagnostics::ContentTitleId(content->programNca->header.titleId)},
+                    {"program_content_id", content->diagnosticProgramContentId},
+                    {"cnmt_version", std::to_string(content->cnmt->header.version)}, {"status", "selected_not_executed"});
         };
         describe(state.loader, request.mode == loader::SelectedMode::StandaloneRebuiltPatch ? "standalone_patch" : "primary_application");
         if (state.updateLoader) { describe(state.updateLoader, "update"); diagnostics::Stage("selected_update_loader_ready"); }

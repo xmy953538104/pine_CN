@@ -3,6 +3,7 @@
 #include "admission.h"
 #include "bounded_queue.h"
 #include "read_snapshot.h"
+#include "test_hooks.h"
 #include "legacy_error.h"
 #include <cerrno>
 #include <fcntl.h>
@@ -31,6 +32,8 @@ namespace skyline::diagnostics {
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr uint64_t ProducersClosed = uint64_t{1} << 63;
+constexpr uint64_t ProducerCountMask = (uint64_t{1} << 32) - 1;
+constexpr uint64_t ProducerGenerationMask = ~(ProducerCountMask | ProducersClosed);
 struct Record {
     uint64_t sequence{}, wall{}, mono{}, dropped{}, contention{}, full{}, allocation{}, disk{}, criticalDropped{};
     bool critical{};
@@ -47,6 +50,8 @@ struct Sink {
     std::atomic<uint64_t> producers{ProducersClosed};
     std::atomic<bool> verbose{};
     std::atomic<uint64_t> accepted{}, dropped{}, written{}, diskErrors{};
+    std::atomic<uint64_t> completedTicket{};
+    uint32_t producerGeneration{}; // lifecycle mutex; prevents Start/Stop ABA for late registration
     LegacyErrorBudget audioErrors, shaderErrors, guestProtocol;
     std::atomic<uint64_t> guestProtocolSuppressed{};
     std::atomic<uint64_t> legacySuppressed{};
@@ -86,28 +91,33 @@ void CopyContext(Record &r, Context &&c) {
 bool IsEnabled(const Sink &s) { return !(s.producers.load(std::memory_order_relaxed) & ProducersClosed); }
 class Producer {
     Sink *sink{};
-    bool contended{};
 public:
     explicit Producer(Sink &s) {
         auto state = s.producers.load(std::memory_order_relaxed);
-        for (unsigned attempt{}; attempt < 64 && !(state & ProducersClosed); ++attempt) {
+        const auto generation = state & ProducerGenerationMask;
+#ifdef PINE_DIAG_TEST_HOOKS
+        testing::Notify(testing::Point::ProducerStateRead);
+#endif
+        // Lock-free registration owns every counted admission/drop. Unlike the
+        // bounded queue retry, failed registration never mutates session stats.
+        while (!(state & ProducersClosed) && (state & ProducerGenerationMask) == generation && (state & ProducerCountMask) != ProducerCountMask) {
             if (s.producers.compare_exchange_weak(state, state + 1, std::memory_order_acquire, std::memory_order_relaxed)) {
                 sink = &s;
                 break;
             }
         }
-        contended = !sink && !(state & ProducersClosed);
     }
     ~Producer() {
-        if (sink && sink->producers.fetch_sub(1, std::memory_order_release) == ProducersClosed + 1)
-            sink->producers.notify_all();
+        if (sink) {
+            const auto previous = sink->producers.fetch_sub(1, std::memory_order_release);
+            if ((previous & ProducersClosed) && (previous & ProducerCountMask) == 1) sink->producers.notify_all();
+        }
     }
     explicit operator bool() const { return sink != nullptr; }
-    bool Contended() const { return contended; }
 };
 void CloseProducers(Sink &s) {
     auto state = s.producers.fetch_or(ProducersClosed, std::memory_order_acq_rel) | ProducersClosed;
-    while (state != ProducersClosed) {
+    while (state & ProducerCountMask) {
         s.producers.wait(state, std::memory_order_acquire);
         state = s.producers.load(std::memory_order_acquire);
     }
@@ -352,11 +362,14 @@ void Run(Sink &s) noexcept {
             }
 #endif
             if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
+#ifdef PINE_DIAG_TEST_HOOKS
+            testing::Notify(testing::Point::BeforeRecordWrite, record.event);
+#endif
             file.write(line.data(), line.size()); file.flush();
             if (!file) throw std::runtime_error("diagnostic write failed");
             bytes += line.size();
             snapshot.Persist();
-            { std::lock_guard lock(s.progressMutex); ++s.written; }
+            { std::lock_guard lock(s.progressMutex); ++s.written; s.completedTicket = record.sequence; }
             s.progress.notify_all(); pendingRecord = false;
         }
         Record summary;
@@ -418,7 +431,7 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
     const bool critical = CriticalEvent(category, event, level);
     auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
     Producer producer(s);
-    if (!producer) { if (producer.Contended()) drop(s.droppedContention); return false; }
+    if (!producer) return false;
     try {
         // Field sanitation and host thread formatting do not hold the admission lock.
         Record r; r.critical = critical;
@@ -440,6 +453,9 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         const auto result = s.queue.Push(std::move(r), AdmissionLimit(s.config.queueCapacity, critical));
         if (result == Admission::Full) { drop(s.droppedFull); return false; }
         if (result == Admission::Contended) { drop(s.droppedContention); return false; }
+#ifdef PINE_DIAG_TEST_HOOKS
+        testing::Notify(testing::Point::PublishedBeforeCount, event);
+#endif
         ++s.accepted; s.wake.notify_one(); return true;
     } catch (...) { drop(s.droppedAllocation); return false; }
 }
@@ -556,11 +572,12 @@ bool Start(const Config &config) noexcept {
         if (config.directory.empty() || config.sessionId.empty() || !config.queueCapacity || config.queueCapacity > 65536 || config.maxFiles < 1 || config.maxFiles > 16 || config.maxFileBytes < 65536) return false;
         try {
             { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.Reset(config.queueCapacity); s.stage.clear(); s.stopping = false; PublishContext(s); }
-            s.accepted = 0; s.dropped = 0; s.written = 0; s.diskErrors = 0;
+            s.accepted = 0; s.dropped = 0; s.written = 0; s.completedTicket = 0; s.diskErrors = 0;
             s.droppedContention = 0; s.droppedFull = 0; s.droppedAllocation = 0; s.droppedDisk = 0;
             s.criticalDropped = 0; s.snapshotErrors = 0; s.snapshotEvictions = 0;
             s.audioErrors.Reset(); s.shaderErrors.Reset(); s.guestProtocol.Reset(); s.guestProtocolSuppressed = 0; s.legacySuppressed = 0; s.verbose = config.verbose;
-            s.producers.store(0, std::memory_order_release);
+            if (s.producerGeneration == 0x7fffffff) return false;
+            s.producers.store(uint64_t{++s.producerGeneration} << 32, std::memory_order_release);
             s.worker = std::thread([&s] { Run(s); });
             return true;
         } catch (...) {
@@ -579,11 +596,13 @@ bool Flush(uint32_t timeoutMilliseconds) noexcept {
         auto &s = Get();
         std::unique_lock life(s.lifecycle, std::try_to_lock);
         if (!life.owns_lock()) return false;
-        const auto target = s.accepted.load();
+        // A count can lag publication on one producer while another has already
+        // returned. Reservation tickets follow actual ring/flush order instead.
+        const auto target = s.queue.ReservedTicket();
         const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
         std::unique_lock lock(s.progressMutex);
-        s.progress.wait_until(lock, deadline, [&] { return s.written >= target || s.diskErrors; });
-        return !s.diskErrors && s.written >= target;
+        s.progress.wait_until(lock, deadline, [&] { return s.completedTicket >= target || s.diskErrors; });
+        return !s.diskErrors && s.completedTicket >= target;
     } catch (...) { return false; }
 }
 void Emit(std::string_view category, std::string_view event, std::initializer_list<std::pair<std::string_view, std::string_view>> fields, std::string_view level) noexcept {

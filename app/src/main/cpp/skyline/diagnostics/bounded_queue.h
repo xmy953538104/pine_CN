@@ -21,11 +21,15 @@ template<class T> class BoundedQueue {
     alignas(64) std::atomic<uint64_t> tail{}, head{};
 public:
     void Reset(size_t count) {
-        slots = std::make_unique<Slot[]>(count); capacity = count;
+        // Keep the old drained ring intact when allocating its replacement
+        // fails. A fresh never-initialized ring must also be safe to inspect.
+        auto replacement = std::make_unique<Slot[]>(count);
+        for (size_t i{}; i < count; ++i) replacement[i].sequence = i;
+        slots = std::move(replacement); capacity = count;
         tail = 0; head = 0;
-        for (size_t i{}; i < count; ++i) slots[i].sequence = i;
     }
     Admission Push(T &&value, size_t limit) noexcept {
+        if (!capacity) return Admission::Full;
         auto position = tail.load(std::memory_order_relaxed);
         for (unsigned attempt{}; attempt < 64; ++attempt) {
             if (position - head.load(std::memory_order_acquire) >= limit) return Admission::Full;
@@ -41,6 +45,7 @@ public:
         return Admission::Contended;
     }
     bool Pop(T &value, uint64_t &sequence) noexcept {
+        if (!capacity) return false;
         auto position = head.load(std::memory_order_relaxed);
         auto &slot = slots[position % capacity];
         if (slot.sequence.load(std::memory_order_acquire) != position + 1) return false;
@@ -49,6 +54,7 @@ public:
         head.store(position + 1, std::memory_order_release);
         return true;
     }
-    bool Empty() const noexcept { return head.load(std::memory_order_relaxed) == tail.load(std::memory_order_acquire); }
+    bool Empty() const noexcept { return !capacity || head.load(std::memory_order_relaxed) == tail.load(std::memory_order_acquire); }
+    uint64_t ReservedTicket() const noexcept { return tail.load(std::memory_order_acquire); }
 };
 }

@@ -10,6 +10,8 @@ using namespace skyline::diagnostics;
 struct Value { uint64_t id{}; std::string text; };
 int main() {
     BoundedQueue<Value> queue;
+    Value value; uint64_t sequence{};
+    assert(queue.Empty() && !queue.Pop(value, sequence));
     queue.Reset(64);
     for (uint64_t i{}; i < 56; ++i) assert(queue.Push({i, std::to_string(i)}, 56) == Admission::Accepted);
     assert(queue.Push({56, "ordinary"}, 56) == Admission::Full);
@@ -17,7 +19,6 @@ int main() {
     auto start = std::chrono::steady_clock::now();
     for (int i{}; i < 100000; ++i) assert(queue.Push({999, "full"}, 64) == Admission::Full);
     assert(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
-    Value value; uint64_t sequence{};
     for (uint64_t i{}; i < 64; ++i) {
         assert(queue.Pop(value, sequence)); assert(sequence == i + 1 && value.id == i && value.text == std::to_string(i));
     }

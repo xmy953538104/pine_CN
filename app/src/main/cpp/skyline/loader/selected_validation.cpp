@@ -110,6 +110,20 @@ namespace skyline::loader::selected {
                 }
                 for (size_t relative = 0x88; relative < 0xa0; relative += 8)
                     Range(U32(header, relative), U32(header, relative + 4), size);
+                const auto strings = U32(header, 0x90), stringBytes = U32(header, 0x94);
+                const auto symbols = U32(header, 0x98), symbolBytes = U32(header, 0x9c);
+                // The inherited 64-bit Loader casts the table to Elf64_Sym
+                // and may return/consume C strings from .dynstr. Reject those
+                // failures before installation rather than relying on hooks
+                // or symbol lookup being disabled for a particular launch.
+                Need(!symbolBytes || (symbols % 8 == 0 && symbolBytes % 24 == 0), "selected_nso_symbol_table_layout");
+                for (uint64_t at{}; at < symbolBytes; at += 24) {
+                    const auto name = U32(data, static_cast<size_t>(Add(symbols, at)));
+                    if (!name) continue;
+                    Need(name < stringBytes, "selected_nso_symbol_name_range");
+                    const auto start = data.begin() + strings + name, end = data.begin() + strings + stringBytes;
+                    Need(std::find(start, end, 0) != end, "selected_nso_unterminated_symbol_name");
+                }
             }
         }
         Disjoint(std::move(files)); Disjoint(std::move(memory));

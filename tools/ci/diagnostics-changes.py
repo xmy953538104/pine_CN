@@ -30,12 +30,18 @@ def classify(paths):
     return result
 
 
+def diff_paths(base, head, cwd=None):
+    # A rename removes an old consumer input as well as adding its destination.
+    # Observe both paths rather than Git's default destination-only name list.
+    return subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', base, head], cwd=cwd).decode().strip('\0').split('\0')
+
+
 def changed(base):
     try:
         if not base or set(base) == {'0'}:
             raise ValueError('No prior source')
         subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', base], check=True)
-        return subprocess.check_output(['git', 'diff', '--name-only', '-z', base, 'HEAD']).decode().strip('\0').split('\0')
+        return diff_paths(base, 'HEAD')
     except (ValueError, subprocess.CalledProcessError):
         return ['.github/workflows/unknown-comparison']
 

@@ -62,7 +62,7 @@ if __name__ == '__main__':
     def differences(previous, current):
         if previous == current: return []
         subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', previous], check=True)
-        return subprocess.check_output(['git', 'diff', '--name-only', '-z', previous, current]).decode().strip('\0').split('\0')
+        return scopes.diff_paths(previous, current)
     result = {'source_commit': commit, 'exact_source_fast_run': exact,
               'suite_evidence': qualify(runs, commit, lambda run: get(f'actions/runs/{run}/jobs?per_page=100')['jobs'], differences)}
     Path('fast-qualification.json').write_text(json.dumps(result, indent=2) + '\n')

@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -14,6 +16,24 @@ def load(name):
 
 
 class PlanningTest(unittest.TestCase):
+    def test_real_rename_keeps_the_removed_native_consumer_input(self):
+        scopes = load('diagnostics-changes')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def git(*args):
+                return subprocess.check_output(['git', '-C', temporary, *args], stderr=subprocess.DEVNULL).decode().strip()
+            git('init'); git('config', 'user.email', 'fixture@example.invalid'); git('config', 'user.name', 'Fixture')
+            old = root / 'tests/diagnostics/core_test.cpp'; old.parent.mkdir(parents=True); old.write_text('controlled fixture\n')
+            git('add', '.'); git('commit', '-m', 'base'); base = git('rev-parse', 'HEAD')
+            new = root / 'tools/android-diagnostics-smoke.py'; new.parent.mkdir(); old.rename(new)
+            git('add', '-A'); git('commit', '-m', 'rename')
+            legacy = git('diff', '--find-renames', '--name-only', base, 'HEAD').splitlines()
+            self.assertEqual(legacy, ['tools/android-diagnostics-smoke.py'])
+            actual = scopes.diff_paths(base, 'HEAD', temporary)
+            self.assertIn('tests/diagnostics/core_test.cpp', actual)
+            self.assertTrue(scopes.classify(actual)['native'])
+            self.assertFalse(scopes.classify(legacy)['native'])
+
     def test_documentation_needs_no_apk_or_host_rebuild(self):
         self.assertFalse(any(load('diagnostics-changes').classify(['docs/protocol.md']).values()))
 

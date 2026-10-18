@@ -1,0 +1,9 @@
+{
+  "baseline_commit": "a901a470feddb55f6ff2e847931707b7aaa46c81",
+  "source": "app/src/main/cpp/skyline/vfs/os_filesystem.cpp",
+  "source_sha256": "48adee0a8b2eef9ed0cb3e5f274a157d120e9f66aecaa84d1f6123edc3fb03c8",
+  "method_sha256": "ced8f034881640dbf16e48149eb70596db112fb182c5d35917ca7f21d84ddf25",
+  "method_byte_offset": 3413,
+  "method_byte_size": 369,
+  "suppressed_function": "skyline::vfs::OsFileSystem::OpenDirectoryImpl("
+}

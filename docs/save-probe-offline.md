@@ -88,13 +88,22 @@ include unrelated names; they are not printed.
 
 Limits are 64 KiB manifest, 1 KiB payload/output, 32 MiB physical ZIP, 1 MiB central
 directory, 2,048 entries, 4 KiB selected compressed bytes, and 100:1 selected ratio.
-Declared size, actual decompressor output, stream termination, local/central
-headers, descriptors, length and CRC are checked independently. ZIP64, multidisk,
-unsupported target compression, encrypted/symlink/special entries, duplicate or
+Each local header's name/extra fields are bounded to 2 KiB/4 KiB. All central and
+local records must use supported version 1.0 (Store without descriptor) or 2.0
+(Store/Deflate), with disk zero in each central record as well as the end record.
+Every local header, declared compressed-body range and optional descriptor must
+fit before the next local header or central directory. This metadata validation
+seeks over unrelated bodies without reading, decoding or checking their CRC.
+Declared size, actual selected decompressor output, stream termination,
+local/central headers, descriptors, selected length and CRC are checked separately.
+ZIP64, multidisk, unsupported version/compression profiles,
+encrypted/symlink/special entries, duplicate or
 Unicode-normalized/case aliases, absolute/traversal/backslash/control names,
-truncation and overlapping selected ranges are rejected. Only ZIP Store/Deflate
-are supported, including Android-style streaming data descriptors. Large ordinary
-save archives may exceed these deliberate limits; the CLI never broadens its scope
+truncation and overlapping local-entry extents are rejected. Only ZIP Store/Deflate
+are supported, including Android-style version 2.0 streaming data descriptors. A
+metadata mismatch rejects the export even if selected bytes could otherwise match;
+unread body integrity remains unknown. Large ordinary save archives may exceed
+these deliberate limits; the CLI never broadens its scope
 automatically. It does not read the whole ZIP to hash private entries.
 
 For `export.source: save_management_utils_v79a`, the declared original path is

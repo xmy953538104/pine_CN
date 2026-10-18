@@ -260,6 +260,10 @@ def zip_directory_bounds(stream, size):
     while cursor < len(directory):
         if len(directory) - cursor < 46 or directory[cursor:cursor + 4] != b"PK\x01\x02":
             fail("zip_directory_record_invalid")
+        if struct.unpack_from("<H", directory, cursor + 6)[0] not in (10, 20):
+            fail("zip_version_unsupported")
+        if struct.unpack_from("<H", directory, cursor + 34)[0] != 0:
+            fail("zip_multidisk_unsupported")
         name_size, extra_size, comment_size = struct.unpack_from("<3H", directory, cursor + 28)
         cursor += 46 + name_size + extra_size + comment_size
         actual_count += 1
@@ -284,12 +288,68 @@ def no_zip64_extra(extra):
         extra = extra[size + 4:]
 
 
+def zip_local_metadata(stream, info, boundary):
+    """Validate an entry's complete envelope, seeking over its compressed body."""
+    if info.header_offset + 30 > boundary:
+        fail("zip_member_overlap_or_truncation")
+    stream.seek(info.header_offset)
+    signature, version, flags, method, _, _, crc, compressed_size, file_size, name_size, extra_size = struct.unpack("<4s5H3I2H", read_exact(stream, 30))
+    if version not in (10, 20):
+        fail("zip_version_unsupported")
+    if (signature != b"PK\x03\x04" or version != info.extract_version or flags != info.flag_bits
+            or method != info.compress_type):
+        fail("zip_local_header_mismatch")
+    if method not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+        fail("zip_compression_unsupported")
+    if flags & ~(8 | 0x800 | 2 | 4) or (method == zipfile.ZIP_STORED and flags & (2 | 4)):
+        fail("zip_flags_unsupported")
+    if version == 10 and (method != zipfile.ZIP_STORED or flags & 8):
+        fail("zip_version_profile_unsupported")
+    if name_size > 2048 or extra_size > 4096:
+        fail("zip_local_metadata_limit_exceeded")
+    body_offset = stream.tell() + name_size + extra_size
+    body_end = body_offset + info.compress_size
+    if body_end + (12 if flags & 8 else 0) > boundary:
+        fail("zip_member_overlap_or_truncation")
+    local_name = read_exact(stream, name_size).decode("utf-8" if flags & 0x800 else "cp437", errors="strict")
+    if local_name != info.orig_filename:
+        fail("zip_local_member_name_mismatch")
+    no_zip64_extra(read_exact(stream, extra_size))
+    if flags & 8:
+        if (crc not in (0, info.CRC) or compressed_size not in (0, info.compress_size)
+                or file_size not in (0, info.file_size)):
+            fail("zip_local_size_or_crc_mismatch")
+        # Descriptor bytes are metadata. Do not read, decompress, or CRC an
+        # unrelated body to locate them; only the bounded central size is used.
+        stream.seek(body_end)
+        first = read_exact(stream, 4)
+        if first == b"PK\x07\x08":
+            if stream.tell() + 12 > boundary:
+                fail("zip_descriptor_overlap")
+            descriptor = read_exact(stream, 12)
+        else:
+            descriptor = first + read_exact(stream, 8)
+        if struct.unpack("<3I", descriptor) != (info.CRC, info.compress_size, info.file_size):
+            fail("zip_descriptor_mismatch")
+    elif (crc, compressed_size, file_size) != (info.CRC, info.compress_size, info.file_size):
+        fail("zip_local_size_or_crc_mismatch")
+    if method == zipfile.ZIP_STORED and info.compress_size != info.file_size:
+        fail("zip_stored_size_mismatch")
+    return body_offset
+
+
 def read_zip_member(path, member):
     """Read metadata and exactly one declared member; never extract or read other bodies."""
     stream, before = open_regular(path, MAX_ZIP)
     with stream:
         count, directory_offset = zip_directory_bounds(stream, before.st_size)
-        with zipfile.ZipFile(stream) as archive:
+        try:
+            archive = zipfile.ZipFile(stream)
+        except NotImplementedError:
+            # The stdlib constructor can reject an unsupported ZIP feature before
+            # returning any entries. Keep that known format failure stage-local.
+            fail("zip_feature_unsupported")
+        with archive:
             infos = archive.infolist()
             if len(infos) != count:
                 fail("zip_directory_count_mismatch")
@@ -325,31 +385,18 @@ def read_zip_member(path, member):
                 fail("zip_member_ratio_limit_exceeded")
             if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                 fail("zip_compression_unsupported")
-            if info.flag_bits & ~(8 | 0x800 | 2 | 4):
-                fail("zip_flags_unsupported")
-            boundary = min((offset for offset in offsets if offset > info.header_offset), default=directory_offset)
-            stream.seek(info.header_offset)
-            signature, version, flags, method, _, _, crc, compressed_size, file_size, name_size, extra_size = struct.unpack("<4s5H3I2H", read_exact(stream, 30))
-            if signature != b"PK\x03\x04" or version > 20 or flags != info.flag_bits or method != info.compress_type:
-                fail("zip_local_header_mismatch")
-            if name_size > 2048 or extra_size > 4096:
-                fail("zip_local_metadata_limit_exceeded")
-            if stream.tell() + name_size + extra_size + info.compress_size + (12 if flags & 8 else 0) > boundary:
-                fail("zip_member_overlap_or_truncation")
-            local_name = read_exact(stream, name_size).decode("utf-8" if flags & 0x800 else "cp437", errors="strict")
-            if local_name != member:
-                fail("zip_local_member_name_mismatch")
-            no_zip64_extra(read_exact(stream, extra_size))
-            if flags & 8:
-                if (crc not in (0, info.CRC) or compressed_size not in (0, info.compress_size)
-                        or file_size not in (0, info.file_size)):
-                    fail("zip_local_size_or_crc_mismatch")
-            elif (crc, compressed_size, file_size) != (info.CRC, info.compress_size, info.file_size):
-                fail("zip_local_size_or_crc_mismatch")
-            if stream.tell() + info.compress_size + (12 if flags & 8 else 0) > boundary:
-                fail("zip_member_overlap_or_truncation")
+            # Sort all local records, so an earlier unrelated body or descriptor
+            # cannot hide the selected header/body inside its claimed extent.
+            ordered = sorted(infos, key=lambda candidate: candidate.header_offset)
+            selected_offset = None
+            for index, candidate in enumerate(ordered):
+                boundary = ordered[index + 1].header_offset if index + 1 < len(ordered) else directory_offset
+                body_offset = zip_local_metadata(stream, candidate, boundary)
+                if candidate is selected:
+                    selected_offset = body_offset
+            stream.seek(selected_offset)
             compressed = read_exact(stream, info.compress_size)
-            if method == zipfile.ZIP_STORED:
+            if info.compress_type == zipfile.ZIP_STORED:
                 data = compressed
             else:
                 decoder = zlib.decompressobj(-zlib.MAX_WBITS)
@@ -362,16 +409,6 @@ def read_zip_member(path, member):
                 fail("zip_actual_output_limit_exceeded")
             if len(data) != info.file_size or binascii.crc32(data) & 0xffffffff != info.CRC:
                 fail("zip_actual_length_or_crc_mismatch")
-            if flags & 8:
-                first = read_exact(stream, 4)
-                if first == b"PK\x07\x08":
-                    if stream.tell() + 12 > boundary:
-                        fail("zip_descriptor_overlap")
-                    descriptor = read_exact(stream, 12)
-                else:
-                    descriptor = first + read_exact(stream, 8)
-                if struct.unpack("<3I", descriptor) != (info.CRC, info.compress_size, info.file_size):
-                    fail("zip_descriptor_mismatch")
         unchanged(stream, before)
     return data, {"archive_bytes": before.st_size, "metadata_entries": count,
                   "member_bytes": len(data), "member_sha256": sha256(data), "other_member_bodies_read": 0}

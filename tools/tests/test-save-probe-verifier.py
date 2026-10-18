@@ -2,6 +2,7 @@
 """Synthetic byte-level, CLI, and hostile archive tests; no saves, ROMs or keys."""
 
 from copy import deepcopy
+import binascii
 import hashlib
 import importlib.util
 import io
@@ -285,7 +286,160 @@ class SaveProbeTest(unittest.TestCase):
         self.archive.write_bytes(raw)
         self.rejected(self.verify(), "export", "zip_encrypted_entry")
         self.zip(compression=zipfile.ZIP_BZIP2)
-        self.rejected(self.verify(), "export", "zip_compression_unsupported")
+        self.rejected(self.verify(), "export", "zip_version_unsupported")
+
+    def test_unsupported_central_local_versions_and_profiles_keep_other_stage_evidence(self):
+        self.zip([(self.manifest["zip_member"], self.payload), ("unrelated.bin", b"SYNTHETIC")])
+        original = self.archive.read_bytes()
+        first_central = original.index(b"PK\x01\x02")
+        second_central = original.index(b"PK\x01\x02", first_central + 4)
+        for offset, version, reason in ((first_central + 6, 99, "zip_version_unsupported"),
+                                        (second_central + 6, 99, "zip_version_unsupported"),
+                                        (first_central + 6, 21, "zip_version_unsupported"),
+                                        (4, 99, "zip_version_unsupported")):
+            with self.subTest(offset=offset, version=version):
+                raw = bytearray(original)
+                struct.pack_into("<H", raw, offset, version)
+                self.archive.write_bytes(raw)
+                result = self.verify()
+                self.rejected(result, "export", reason)
+                for stage in ("initial", "restart"):
+                    self.assertEqual(result["evidence"][stage]["payload"]["hash"]["state"], "observed_match")
+        # Version 1.0 is an implemented Store-only profile, not Deflate.
+        raw = bytearray(original)
+        struct.pack_into("<H", raw, first_central + 6, 10)
+        struct.pack_into("<H", raw, 4, 10)
+        self.archive.write_bytes(raw)
+        self.rejected(self.verify(), "export", "zip_version_profile_unsupported")
+        # Reproduce the previously crashing constructor path through the actual CLI.
+        raw = bytearray(original)
+        struct.pack_into("<H", raw, first_central + 6, 99)
+        self.archive.write_bytes(raw)
+        command = [sys.executable, str(ROOT / "tools/pine-save-probe-verify.py"), "--manifest", str(self.manifest_path),
+                   "--initial-file", str(self.initial), "--restart-file", str(self.restart), "--export-zip", str(self.archive)]
+        run = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(run.returncode, 1)
+        self.assertEqual(run.stderr, "")
+        self.rejected(json.loads(run.stdout), "export", "zip_version_unsupported")
+        self.zip(compression=zipfile.ZIP_STORED)
+        raw = bytearray(self.archive.read_bytes())
+        struct.pack_into("<H", raw, 4, 10)
+        struct.pack_into("<H", raw, raw.index(b"PK\x01\x02") + 6, 10)
+        self.archive.write_bytes(raw)
+        self.assertEqual(probe.exit_code(self.verify()), 0)
+
+    def test_known_stdlib_unsupported_feature_is_stage_local_without_swallowing_other_errors(self):
+        with patch.object(zipfile, "ZipFile", side_effect=NotImplementedError("PRIVATE input must not be echoed")):
+            result = self.verify()
+        self.rejected(result, "export", "zip_feature_unsupported")
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        for stage in ("initial", "restart"):
+            self.assertEqual(result["evidence"][stage]["payload"]["hash"]["state"], "observed_match")
+        with patch.object(zipfile, "ZipFile", side_effect=RuntimeError("unexpected programmer error")):
+            with self.assertRaises(RuntimeError):
+                self.verify()
+
+    def test_every_central_entry_disk_number_must_be_zero(self):
+        self.zip([(self.manifest["zip_member"], self.payload), ("unrelated.bin", b"SYNTHETIC")])
+        original = self.archive.read_bytes()
+        first = original.index(b"PK\x01\x02")
+        second = original.index(b"PK\x01\x02", first + 4)
+        for central in (first, second):
+            raw = bytearray(original)
+            struct.pack_into("<H", raw, central + 34, 1)
+            self.archive.write_bytes(raw)
+            result = self.verify()
+            self.rejected(result, "export", "zip_multidisk_unsupported")
+            self.assertEqual(result["evidence"]["initial"]["payload"]["hash"]["state"], "observed_match")
+
+    def test_consistent_stored_sizes_and_crc_cannot_overlap_prior_or_following_entry(self):
+        member = self.manifest["zip_member"]
+        for selected_first in (False, True):
+            with self.subTest(selected_first=selected_first):
+                entries = [("unrelated-first.bin", b"SYNTHETIC-FIRST"), (member, self.payload)]
+                if selected_first:
+                    entries.reverse()
+                self.zip(entries, zipfile.ZIP_STORED)
+                raw = bytearray(self.archive.read_bytes())
+                first_central = raw.index(b"PK\x01\x02")
+                body_start = 30 + struct.unpack_from("<H", raw, 26)[0] + struct.unpack_from("<H", raw, 28)[0]
+                # Exact independent-review reproducer: both metadata records and
+                # even CRC agree while the first body spans the next local entry.
+                body = raw[body_start:first_central]
+                crc, size = binascii.crc32(body) & 0xffffffff, len(body)
+                struct.pack_into("<3I", raw, 14, crc, size, size)
+                struct.pack_into("<3I", raw, first_central + 16, crc, size, size)
+                self.archive.write_bytes(raw)
+                result = self.verify()
+                self.rejected(result, "export", "zip_member_overlap_or_truncation")
+                self.assertEqual(result["evidence"]["restart"]["payload"]["hash"]["state"], "observed_match")
+
+    def test_all_local_headers_and_signed_descriptors_must_fit_before_next_entry(self):
+        self.zip([("unrelated-first.bin", b"SYNTHETIC-FIRST"), (self.manifest["zip_member"], self.payload)], zipfile.ZIP_STORED)
+        original = self.archive.read_bytes()
+        raw = bytearray(original)
+        struct.pack_into("<H", raw, 26, 512)
+        self.archive.write_bytes(raw)
+        self.rejected(self.verify(), "export", "zip_member_overlap_or_truncation")
+        # Even the fixed 30-byte header must fit before another claimed header.
+        raw = bytearray(original)
+        central = raw.index(b"PK\x01\x02")
+        second_central = raw.index(b"PK\x01\x02", central + 4)
+        struct.pack_into("<I", raw, second_central + 42, 10)
+        self.archive.write_bytes(raw)
+        self.rejected(self.verify(), "export", "zip_member_overlap_or_truncation")
+
+        class Unseekable(io.BytesIO):
+            def seek(self, *args):
+                raise io.UnsupportedOperation("seek")
+
+        buffer = Unseekable()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("unrelated-first.bin", b"SYNTHETIC-FIRST")
+            archive.writestr(self.manifest["zip_member"], self.payload)
+        raw = bytearray(buffer.getvalue())
+        central = raw.index(b"PK\x01\x02")
+        second_central = raw.index(b"PK\x01\x02", central + 4)
+        selected_header = struct.unpack_from("<I", raw, second_central + 42)[0]
+        # Leave room for a 12-byte descriptor, but not its actual 16-byte signed form.
+        struct.pack_into("<I", raw, second_central + 42, selected_header - 4)
+        self.archive.write_bytes(raw)
+        self.rejected(self.verify(), "export", "zip_descriptor_overlap")
+
+    def test_all_local_metadata_validation_seeks_over_every_body_without_reading_it(self):
+        class Unseekable(io.BytesIO):
+            def seek(self, *args):
+                raise io.UnsupportedOperation("seek")
+
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming):
+                output = Unseekable() if streaming else io.BytesIO()
+                with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr("unrelated-first.bin", b"SYNTHETIC-PRIVATE" * 64)
+                    archive.writestr(self.manifest["zip_member"], self.payload)
+                    archive.writestr("unrelated-last.bin", b"SYNTHETIC-OTHER" * 64)
+                raw = output.getvalue()
+                with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                    infos = sorted(archive.infolist(), key=lambda info: info.header_offset)
+                    directory_offset = archive.start_dir
+                bodies = []
+                for info in infos:
+                    name_size, extra_size = struct.unpack_from("<2H", raw, info.header_offset + 26)
+                    start = info.header_offset + 30 + name_size + extra_size
+                    bodies.append((start, start + info.compress_size))
+
+                class MetadataOnly(io.BytesIO):
+                    def read(self, size=-1):
+                        if size < 0:
+                            raise AssertionError("unbounded metadata read")
+                        if size and any(self.tell() < end and self.tell() + size > start for start, end in bodies):
+                            raise AssertionError("body read during local metadata validation")
+                        return super().read(size)
+
+                guarded = MetadataOnly(raw)
+                for index, info in enumerate(infos):
+                    boundary = infos[index + 1].header_offset if index + 1 < len(infos) else directory_offset
+                    self.assertEqual(probe.zip_local_metadata(guarded, info, boundary), bodies[index][0])
 
     def test_zip_metadata_and_physical_archive_limits_precede_payload_read(self):
         self.zip()

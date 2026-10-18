@@ -108,13 +108,10 @@ jobs:
           git status --porcelain > "$RUNNER_TEMP/p1-evidence/source-status.txt"
           sha256sum .github/workflows/selected-content-integration.yml > "$RUNNER_TEMP/p1-evidence/workflow-sha256.txt"
       - name: Same-source real AES selected core and corrected actual IPC consumers
-        env:
-          CXX: clang++
-          CC: clang
         run: |
           set -o pipefail
           python3 tools/tests/test-selected-content.py --real-aes --sanitize --schema-check --evidence-dir "$RUNNER_TEMP/p1-evidence/native" 2>&1 | tee "$RUNNER_TEMP/p1-evidence/native.txt"
-          python3 tools/run-selected-service-boundary.py --sanitize --evidence-dir "$RUNNER_TEMP/p1-evidence/services" 2>&1 | tee "$RUNNER_TEMP/p1-evidence/services.txt"
+          CXX=clang++ CC=clang python3 tools/run-selected-service-boundary.py --sanitize --evidence-dir "$RUNNER_TEMP/p1-evidence/services" 2>&1 | tee "$RUNNER_TEMP/p1-evidence/services.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

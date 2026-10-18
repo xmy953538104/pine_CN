@@ -177,3 +177,44 @@ jobs:
         with:
           name: selected-apk-jvm-${{ github.event.pull_request.head.sha || github.sha }}
           path: app/build/reports/tests/
+  apk-runtime-attempt:
+    needs: debug-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PINE_CI_REQUIRE_ACCELERATION: '1'
+      PINE_DIAGNOSTICS_OWNED_AVD_PROFILE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools emulator
+      - name: Official image for the bounded ARM64 APK attempt
+        run: sdkmanager 'system-images;android-35;google_apis;x86_64'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pine-selected-debug-${{ github.event.pull_request.head.sha || github.sha }}
+          path: runtime-apk
+      - name: Qualify host then attempt actual Settings, diagnostics and export
+        run: bash tools/tests/attempt-android-runtime.sh runtime-apk/app-full-debug.apk '${{ github.event.pull_request.head.sha || github.sha }}' selected-runtime-evidence
+      - name: Show the actual runtime outcome
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('selected-runtime-evidence/runtime-report.json')
+          print(p.read_text() if p.is_file() else 'Runtime report absent; no APK execution success claimed.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pine-selected-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: selected-runtime-evidence/
+          if-no-files-found: error

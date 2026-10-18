@@ -40,6 +40,10 @@ object DiagnosticExport {
      * contain spaces or quotes, so preserve preceding context and conservatively omit the line tail.
      */
     fun redact(text: String): String = text.lineSequence().joinToString("\n") { line ->
+        if (line.startsWith("DFX1|")) redactDfx1Wire(line) else redactPlainLine(line)
+    }
+
+    private fun redactPlainLine(line: String): String =
         if (credentialLine.containsMatchIn(line)) "[REDACTED_CREDENTIAL_LINE]"
         else {
             val uri = findUriStart(line)
@@ -50,6 +54,40 @@ object DiagnosticExport {
             else if (location == null) line
             else line.take(location.range.first) + if (location.groups["uri"] != null) "[REDACTED_URI]" else "[REDACTED_PATH]"
         }
+
+    /** Percent escapes in the known guest protocol must not hide private locations. */
+    private fun redactDfx1Wire(line: String): String {
+        if (line.toByteArray(Charsets.UTF_8).size > 2048) return "DFX1|[REDACTED_WIRE_LIMIT]"
+        val fields = line.removePrefix("DFX1|").split('|')
+        if (fields.size > 8) return "DFX1|[REDACTED_FIELD_LIMIT]"
+        var changed = false
+        var decodedBytes = 0
+        val safe = fields.map { field ->
+            val equals = field.indexOf('=')
+            if (equals < 0) return "DFX1|[REDACTED_MALFORMED_PROTOCOL]"
+            val key = field.take(equals)
+            val bytes = field.substring(equals + 1).toByteArray(Charsets.UTF_8)
+            val decoded = ByteArrayOutputStream()
+            var index = 0
+            while (index < bytes.size) {
+                val byte = bytes[index].toInt() and 255
+                if (byte == '%'.code) {
+                    if (index + 2 >= bytes.size) return "DFX1|[REDACTED_MALFORMED_PROTOCOL]"
+                    val high = bytes[index + 1].toInt().toChar().digitToIntOrNull(16)
+                    val low = bytes[index + 2].toInt().toChar().digitToIntOrNull(16)
+                    if (high == null || low == null) return "DFX1|[REDACTED_MALFORMED_PROTOCOL]"
+                    decoded.write(high * 16 + low); index += 3
+                } else { decoded.write(byte); index++ }
+                if (++decodedBytes > 1024) return "DFX1|[REDACTED_DECODED_LIMIT]"
+            }
+            val value = decoded.toString("UTF-8")
+            val redacted = if (sensitiveName.containsMatchIn(key)) "[REDACTED_SECRET]"
+                else value.lineSequence().joinToString("\n", transform = ::redactPlainLine)
+            if (redacted != value) changed = true
+            redactPlainLine(key) + "=" + redacted.replace("%", "%25").replace("|", "%7C")
+                .replace("\r", "%0D").replace("\n", "%0A").replace("\t", "%09")
+        }
+        return if (changed) "DFX1|" + safe.joinToString("|") else line
     }
 
     private fun isAsciiLetter(char: Char) = char in 'a'..'z' || char in 'A'..'Z'

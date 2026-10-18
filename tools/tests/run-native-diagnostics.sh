@@ -29,6 +29,8 @@ fi
 "$build/queue_test"
 "${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/launch_progress_test.cpp -o "$build/launch_progress_test"
 "$build/launch_progress_test" "$build/launch-progress-logs"
+"${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/dfx_protocol_test.cpp -o "$build/dfx_protocol_test"
+"$build/dfx_protocol_test" "$build/dfx-protocol-logs"
 "${CXX:-c++}" "${flags[@]}" -I"$core" "$build/diagnostics.o" tests/diagnostics/legacy_error_test.cpp -o "$build/legacy_error_test"
 "$build/legacy_error_test" "$build/legacy-logs"
 for test in pending_signal utf16; do

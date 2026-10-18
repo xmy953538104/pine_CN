@@ -1,5 +1,9 @@
 # Pine Diagnostics event contract (schema 1)
 
+The additive [DFX1 wire contract](diagnostics-dfx1-protocol.md) documents the
+versioned guest parser, legacy compatibility, budgets and calibration procedure.
+DFX1 does not independently establish a game-side Lua/native logging bridge.
+
 Diagnostics is opt-in. Events describe observations at the named call site, not a
 claim that a title or DLC is playable. JSONL records and the `PineDiag` logcat tag
 share the session. The native sink owns copied field values, bounds text, escapes

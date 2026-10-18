@@ -15,6 +15,33 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 
 class DiagnosticExportTest {
+    @Test fun productionGuestDfx1RawTextAndDecodedPayloadSurviveRealZipExport() = sandbox { logs, textLog, cache, _ ->
+        val source = File("../tools/tests/fixtures/native-sink.jsonl").readText()
+        val original = source.lineSequence().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.toList()
+        val probe = original.first { it["event"]?.jsonPrimitive?.content == "DFX_PROBE" }
+        val wire = probe["fields"]!!.jsonObject["message"]!!.jsonPrimitive.content
+        log(logs, "main/diagnostics-0.jsonl", source)
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val text = archive(snapshot).getValue("main/diagnostics-0.jsonl")
+            val rows = text.lineSequence().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.toList()
+            val exported = rows.first { it["event"]?.jsonPrimitive?.content == "DFX_PROBE" }["fields"]!!.jsonObject
+            assertEquals(wire, exported["message"]!!.jsonPrimitive.content)
+            assertEquals("中文 | %", exported["game_message"]!!.jsonPrimitive.content)
+            assertEquals("DFX1", exported["bridge_protocol"]!!.jsonPrimitive.content)
+            assertTrue(rows.any { it["event"]?.jsonPrimitive?.content == "GUEST_DEBUG_MESSAGE" && it["fields"]?.jsonObject?.get("message")?.jsonPrimitive?.content == wire })
+        }
+    }
+
+    @Test fun dfxPercentEscapesCannotBypassDefaultPrivatePathAndCredentialRedaction() {
+        val path = "DFX1|event=DFX_LUA_ERROR|probe_id=privacy-test|file=%2Fdata%2Fuser%2F0%2FAlice%20Smith%2Fprivate.lua|message=error"
+        val secret = "DFX1|event=DFX_PROBE|probe_id=privacy-test|message=password%3Dprivate-value"
+        for (wire in listOf(path, secret)) {
+            val result = DiagnosticExport.redact(wire)
+            assertFalse(result.contains("Alice")); assertFalse(result.contains("private-value"))
+            assertFalse(result.contains("%2Fdata")); assertTrue(result.contains("REDACTED"))
+        }
+        assertEquals("DFX1|[REDACTED_MALFORMED_PROTOCOL]", DiagnosticExport.redact("DFX1|event=DFX_PROBE|message=%GG"))
+    }
     @Test fun criticalStateSharesSequenceWithoutReplayingAnErrorAndRemainsAllowlisted() = sandbox { logs, textLog, cache, _ ->
         val original = Json.parseToJsonElement(record("same", 7, "exception", "NATIVE_EXCEPTION", "ERROR")).jsonObject
         val state = JsonObject(original + mapOf("record_kind" to JsonPrimitive("critical_snapshot"),
@@ -428,7 +455,7 @@ class DiagnosticExportTest {
             putJsonObject("fields") { put("end_reason", "execute_returned"); put("host_stop_requested", "true") }
         }.toString() + "\n"
         log(logs, "main/critical-state-1.jsonl", state)
-        log(logs, "emulation/critical-state-7.jsonl", state)
+        log(logs, "emulation/critical-state-7.jsonl", state.replace("prior-session", "another-prior-session"))
         log(logs, "main/critical-state-8.jsonl", state)
         DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
             val entries = archive(snapshot)

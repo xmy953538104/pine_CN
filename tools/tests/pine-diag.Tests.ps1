@@ -342,7 +342,15 @@ try {
 
     $env:PINE_FAKE_ADB_MODE = 'sessions'
     $grouped = Join-Path $temp 'grouped'
-    & $collector -AdbPath $fake -NonInteractive -OutputDirectory $grouped -DurationSeconds 3 | Out-Null
+    # Consume the complete finite fixture through EOF. A three-second wall-clock
+    # cutoff truncated larger production-schema records on Windows PowerShell.
+    $completedSessionStream = $false
+    try { & $collector -AdbPath $fake -NonInteractive -OutputDirectory $grouped -DurationSeconds 15 | Out-Null }
+    catch {
+        if (-not $_.ToString().Contains('stream ended')) { throw }
+        $completedSessionStream = $true
+    }
+    Assert $completedSessionStream 'Session grouping fixture must reach actual EOF inside its bound'
     $files = @(Get-ChildItem $grouped -Filter '*.jsonl')
     Assert ($files.Count -eq 33) 'Expected 32 session files and one bounded overflow file'
     $events = 0

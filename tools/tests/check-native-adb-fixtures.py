@@ -39,7 +39,7 @@ def normalized(rows):
     return [dict(row, wall_clock_ms=1, monotonic_us=1, thread='runtime', dropped_count=0) for row in rows]
 
 
-for name, count in [('native-sink.jsonl', 12), ('native-sessions.jsonl', 81)]:
+for name, count in [('native-sink.jsonl', 14), ('native-sessions.jsonl', 81)]:
     generated = generated_root / name
     actual = read(generated)
     assert len(actual) == count, (name, len(actual))
@@ -57,4 +57,7 @@ dlc = next(row for row in capture if row['event'] == 'DLC_DATA_READ')
 assert dlc['title_id'] == '0100751007ADA000' and dlc['fields']['title_id'] == '0100751007ADB001'
 assert any(row['event'] == 'GUEST_DEBUG_MESSAGE' and row['title_id'] and 'title_id' not in row['fields'] for row in capture)
 assert any(row['event'] == 'BASE_SELECTED' and row['fields']['message'] == '\u4e2d\u6587 \u65e5\u5fd7' for row in capture)
+probe = next(row for row in capture if row['event'] == 'DFX_PROBE')
+assert probe['fields']['bridge_protocol'] == 'DFX1' and probe['fields']['game_message'] == '中文 | %'
+assert any(row['event'] == 'GUEST_DEBUG_MESSAGE' and row['fields'].get('message') == probe['fields']['message'] for row in capture)
 print('PASS: ADB fixtures replay the current production sink schema, title context and UTF8 output')

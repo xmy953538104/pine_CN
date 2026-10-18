@@ -33,6 +33,8 @@ else:
     fixture = os.environ['PINE_FAKE_ADB_SESSIONS_FIXTURE' if mode == 'sessions' else 'PINE_FAKE_ADB_FIXTURE']
     for line in Path(fixture).read_text(encoding='utf-8').splitlines():
         print(line, flush=True)
+    if mode == 'sessions':
+        sys.exit(0)
     if mode == 'disconnect':
         print('device disconnected', file=sys.stderr)
         sys.exit(1)

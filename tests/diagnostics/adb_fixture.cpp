@@ -1,6 +1,7 @@
 // Host transport fixture generator. These are controlled API inputs, not device
 // or game observations; every output byte comes from the production JSONL sink.
 #include "diagnostics.h"
+#include "guest.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -15,12 +16,12 @@ constexpr auto BaseTitle = "0100751007ADA000";
 constexpr auto DlcTitle = "0100751007ADB001";
 constexpr auto OtherTitle = "0200751007ADA000";
 
-template<typename F> void Record(F emit) {
+template<typename F> void Record(F emit, size_t count = 1) {
     const auto before = diag::Stats().accepted;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     do {
         emit();
-        if (diag::Stats().accepted == before + 1) {
+        if (diag::Stats().accepted == before + count) {
             if (!diag::Flush(2000)) throw std::runtime_error("fixture flush failed");
             return;
         }
@@ -60,6 +61,7 @@ int main(int argc, char **argv) {
                 Record([] { diag::Emit("content", "BASE_SELECTED", {{"title_id", BaseTitle}, {"message", "\xe4\xb8\xad\xe6\x96\x87 \xe6\x97\xa5\xe5\xbf\x97"}}); });
                 Record([] { diag::Emit("storage", "DLC_DATA_READ", {{"title_id", DlcTitle}, {"parent_title_id", BaseTitle}, {"actual_bytes", "8"}}); });
                 Record([] { diag::Emit("guest", "GUEST_DEBUG_MESSAGE", {{"source", "OutputDebugString"}, {"message", "controlled host fixture"}}); });
+                Record([] { diag::GuestMessage("DFX1|event=DFX_PROBE|probe_id=controlled-host-001|message=%E4%B8%AD%E6%96%87%20%7C%20%25", "OutputDebugString"); }, 2);
                 Record([] { diag::Stage("content_ready"); });
             });
             Session(root, 1, "native-adb-b", [] {

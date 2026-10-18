@@ -65,6 +65,7 @@ public class FakeAdb {
         }
         var fixture = Environment.GetEnvironmentVariable(mode == "sessions" ? "PINE_FAKE_ADB_SESSIONS_FIXTURE" : "PINE_FAKE_ADB_FIXTURE");
         foreach (var line in File.ReadAllLines(fixture, new UTF8Encoding(false, true))) WriteLine(-11, line);
+        if (mode == "sessions") return 0;
         if (mode == "disconnect") { WriteLine(-12, "device disconnected"); return 1; }
         if (mode == "closed-output") CloseOutput();
         Thread.Sleep(60000);

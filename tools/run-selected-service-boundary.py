@@ -129,9 +129,11 @@ def main():
                                           "tools/run-selected-service-boundary.py", ".github/workflows/selected-service-boundary.yml",
                                           "docs/selected-service-boundary-v1.md"])
     input_hashes = {str(path.relative_to(root)): sha(path.read_bytes()) for path in sorted(inputs)}
+    wire_profile = json.loads((root / "tests/selected-services/wire-profile.expected.json").read_text())
     manifest = {"manifest_version": 1, "source_commit": git("rev-parse", "HEAD"),
                 "source_status": git("status", "--porcelain", "--untracked-files=all"),
                 "input_sha256": input_hashes, "dependency_pins": dependencies, "compiler_version": version,
+                "wire_profile": wire_profile,
                 "linker_version": subprocess.check_output([linker, "--version"], text=True).splitlines()[0],
                 "sanitizer_link_driver": linker if args.sanitize else "not_requested",
                 "cipher_lane": "production_pinned_mbedtls_independent_openssl_fixture",
@@ -320,6 +322,9 @@ ServiceManager::ServiceManager(const DeviceState &state) : state(state) {}
                 print(result.stdout, end="", flush=True)
                 print(result.stderr, end="", flush=True)
                 assert result.stdout.count("PASS ") == 30
+                wire = json.loads((dest / "wire-layout.json").read_text())
+                assert wire == wire_profile["expected_runtime_wire_layout"], "literal CMIF frame and actual output span contract differs"
+                manifest.setdefault("verified_wire_layout", {})[mode] = wire
                 if args.sanitize and not args.unsuppressed_leaks:
                     item = parse_lsan_summary(result.stderr, guard)
                     if mode == "on":

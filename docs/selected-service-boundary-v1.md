@@ -56,9 +56,47 @@ both compilation and linking. Android sanitizer runtimes are never used for
 the host executable. Sanitizer runs require llvm-symbolizer; an explicit
 `ASAN_SYMBOLIZER_PATH` may select its existing local binary.
 
-The client writes bounded HIPC/CMIF bytes independently, including a literal
-Count request and response golden. It uses Type-C output descriptors carrying
-48-bit host pointers and ordinary non-domain sessions. Actual `kernel/ipc.cpp`
+The client writes bounded HIPC/CMIF bytes independently, including full literal
+Count request/response goldens and a fixed Type-C request template with only the
+six dynamic address bytes patched from a real allocated output buffer. These
+are hand-derived layout fixtures checked against the primary builders, not
+claimed output from executing a libnx producer. The
+request layout follows the independently checked full builders in pinned libnx
+[`cmif.h`](https://github.com/switchbrew/libnx/blob/20cbcfd90567f7bf84df7725f27e345e2164fa6b/nx/include/switch/sf/cmif.h#L89-L148)
+and [`hipc.h`](https://github.com/switchbrew/libnx/blob/20cbcfd90567f7bf84df7725f27e345e2164fa6b/nx/include/switch/sf/hipc.h#L149-L245).
+`wire-profile.expected.json` records that commit, complete source-file hashes,
+verified function ranges/hashes and exact fixture layout expectations. No libnx
+source is substituted for Pine's production decoder.
+
+For these non-domain, no-PID/no-handle requests, the raw word count includes
+16 bytes of combined front/rear padding, a 16-byte CMIF input header and the
+word-rounded argument bytes. The no-argument Count request is 40 bytes total
+(8 HIPC header + 32 raw bytes); its SFCI header starts at aligned offset 16 and
+its trailing bytes 32–39 are zero. The production Count response has nine raw
+words and is checked across all 44 bytes, including zero rear padding 36–43.
+One fixed Type-C output pointer uses receive-static mode 3 and has no output
+pointer-size table. A 16-argument-byte request has 12 raw words, zero rear
+padding 48–55 and its 8-byte C descriptor at offset 56, totaling 64 bytes.
+All pointer values come from real host buffers and fit the 48-bit field.
+
+Before dispatch, the actual IpcRequest decoder must preserve the aligned CMIF
+header, original argument pointer and each output span's exact original address
+and size. Each diagnostics mode performs 60 such request checks and 27 output
+span checks, retained in `wire-layout.json`. Historical raw-size-six Count and
+eight-byte-early C-descriptor copies are rejected by a test-side checker only;
+those invalid copies are never passed to the production decoder or dispatched.
+The same artifact retains the actual complete Count request/response hex and
+the fixed 56-byte Read(offset=0,size=80) prefix before the real address. The
+Read request's full 64-byte literal also checks its two size bytes and patches
+only the six real-buffer address bytes.
+
+Commits 019ed133 and e9ae0541 omitted the rear request padding and checked only
+a prefix of the Count response. Their preserved manifests demonstrate that
+the production implementation executed the synthetic service operations; they
+do not demonstrate canonical positive request framing. The corrected profile
+has version 2 and requires fresh exact-commit evidence.
+
+It uses ordinary non-domain sessions. Actual `kernel/ipc.cpp`
 decodes them; actual `BaseService::HandleRequest` and frozen `SERVICE_DECL`
 tables select the methods; actual `IpcResponse::WriteResponse` writes replies.
 No handwritten Pop/Push, callback dispatcher or service-algorithm substitute is

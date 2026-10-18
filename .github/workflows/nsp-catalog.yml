@@ -1,0 +1,71 @@
+name: NSP Catalog host checks
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'app/src/main/cpp/skyline/catalog/**'
+      - 'app/src/main/cpp/skyline/vfs/nca.*'
+      - 'app/CMakeLists.txt'
+      - 'app/src/main/cpp/skyline/crypto/aes_cipher.*'
+      - 'app/libraries/mbedtls'
+      - '.gitmodules'
+      - 'tests/catalog/**'
+      - 'tools/*nsp-catalog*'
+      - 'tools/tests/*nsp-catalog*'
+      - 'tools/tests/nsp_catalog_fixture.py'
+      - 'docs/nsp-catalog*'
+      - '.github/workflows/nsp-catalog.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'app/src/main/cpp/skyline/catalog/**'
+      - 'app/src/main/cpp/skyline/vfs/nca.*'
+      - 'app/CMakeLists.txt'
+      - 'app/src/main/cpp/skyline/crypto/aes_cipher.*'
+      - 'app/libraries/mbedtls'
+      - '.gitmodules'
+      - 'tests/catalog/**'
+      - 'tools/*nsp-catalog*'
+      - 'tools/tests/*nsp-catalog*'
+      - 'tools/tests/nsp_catalog_fixture.py'
+      - 'docs/nsp-catalog*'
+      - '.github/workflows/nsp-catalog.yml'
+permissions:
+  contents: read
+concurrency:
+  group: nsp-catalog-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  catalog:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Required JSON Schema validator
+        run: python3 -m pip install --disable-pip-version-check 'jsonschema==4.25.1'
+      - name: Native wire, real synthetic NSP and isolated Pine adapter tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsp-catalog-evidence"
+          set -o pipefail
+          python3 tools/tests/test-nsp-catalog.py 2>&1 | tee "$RUNNER_TEMP/nsp-catalog-evidence/host-tests.txt"
+          python3 tools/tests/test-nsp-catalog-native.py --schema-check --evidence-dir "$RUNNER_TEMP/nsp-catalog-evidence/native-controlled" 2>&1 | tee "$RUNNER_TEMP/nsp-catalog-evidence/native-adapter-tests.txt"
+      - name: Pinned crypto dependency for independent synthetic AES evidence
+        run: git submodule update --init --depth 1 app/libraries/mbedtls
+      - name: Real production AES against independently encrypted synthetic bytes
+        run: |
+          set -o pipefail
+          python3 tools/tests/test-nsp-catalog-native.py --real-aes --sanitize --schema-check --mbedtls-root app/libraries/mbedtls --evidence-dir "$RUNNER_TEMP/nsp-catalog-evidence/native-aes" 2>&1 | tee "$RUNNER_TEMP/nsp-catalog-evidence/native-real-aes-tests.txt"
+      - name: Generate exact-source synthetic evidence
+        run: python3 tools/generate-nsp-catalog-example.py --output-dir "$RUNNER_TEMP/nsp-catalog-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nsp-catalog-host-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nsp-catalog-evidence/
+          if-no-files-found: error

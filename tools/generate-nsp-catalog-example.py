@@ -24,7 +24,11 @@ def generate(output, binary):
     (output / 'catalog.json').write_text(json.dumps(catalog, indent=2, sort_keys=True) + '\n')
     for name in ('nsp-catalog-v1.schema.json', 'nsp-catalog-format-sources.md'):
         shutil.copyfile(ROOT / 'docs' / name, output / name)
-    files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(output.iterdir()) if path.is_file()}
+    evidence_files = [path for path in output.iterdir() if path.is_file() and path.name != 'manifest.json']
+    for lane in ('native-controlled', 'native-aes'):
+        evidence_files.extend((output / lane).glob('native-*.json'))
+    files = {path.relative_to(output).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+             for path in sorted(evidence_files) if path.is_file() and not path.is_symlink()}
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     tracked_diff = subprocess.check_output(['git', 'diff', '--binary', 'HEAD'], cwd=ROOT)
     untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().strip('\0').split('\0')

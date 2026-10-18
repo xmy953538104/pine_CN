@@ -6,9 +6,12 @@ from pathlib import Path
 
 def verify(text):
     tasks = [line.split()[0].rsplit(':', 1)[-1] for line in text.splitlines() if line.startswith(':')]
-    forbidden = [task for task in tasks if task.startswith((
-        'assemble', 'bundle', 'packageFull', 'validateSigning', 'buildCMake',
-        'configureCMake', 'externalNativeBuild', 'stripDebugSymbols', 'mergeFullDebugNativeLibs'))]
+    # Android's JVM graph legitimately packages resources, test fixtures and
+    # classes-to-JAR. Reject APK/AAB tasks precisely, not those shared prefixes.
+    forbidden = [task for task in tasks if task in (
+        'packageFullDebug', 'packageFullRelease', 'bundleFullDebug', 'bundleFullRelease')
+        or task.startswith(('assemble', 'validateSigning', 'buildCMake',
+                           'configureCMake', 'externalNativeBuild', 'stripDebugSymbols', 'mergeFullDebugNativeLibs'))]
     if 'testFullDebugUnitTest' not in tasks or forbidden:
         raise ValueError(f'Invalid JVM-only task graph: forbidden={forbidden}, tasks={tasks}')
 

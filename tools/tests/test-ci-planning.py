@@ -34,6 +34,8 @@ class PlanningTest(unittest.TestCase):
     def test_jvm_graph_rejects_build_and_signing_before_test(self):
         verify = load('verify-jvm-only').verify
         verify(':app:compileFullDebugKotlin SKIPPED\n:app:testFullDebugUnitTest SKIPPED')
+        verify(':app:packageFullDebugResources SKIPPED\n:app:bundleFullDebugClassesToRuntimeJar SKIPPED\n'
+               ':app:packageFullDebugUnitTestForUnitTest SKIPPED\n:app:testFullDebugUnitTest SKIPPED')
         for task in ('assembleFullDebug', 'buildCMakeDebug', 'configureCMakeDebug', 'validateSigningFullDebug', 'packageFullDebug'):
             with self.assertRaises(ValueError):
                 verify(':app:' + task + ' SKIPPED\n:app:testFullDebugUnitTest SKIPPED')

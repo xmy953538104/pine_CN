@@ -42,6 +42,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Required schema validator
+        run: python3 -m pip install --disable-pip-version-check 'jsonschema==4.25.1'
+      - name: Validate both versioned schemas and synthetic examples
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+          base = Path('tools/save-probe')
+          for schema_name, example_name in (
+              ('manifest-v1.schema.json', 'manifest-v1.example.json'),
+              ('payload-v1.schema.json', 'dfx_diag_probe_v1.json'),
+          ):
+              schema = json.loads((base / schema_name).read_text())
+              Draft202012Validator.check_schema(schema)
+              Draft202012Validator(schema).validate(json.loads((base / 'example' / example_name).read_text()))
+              print(schema_name + ': schema and synthetic example PASS')
+          PY
       - name: Record and check exact source
         run: |
           mkdir -p save-probe-evidence

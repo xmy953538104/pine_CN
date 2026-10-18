@@ -43,10 +43,11 @@ object DiagnosticExport {
         // Export redaction also handles the existing logger's level/time/thread
         // prefix. This does not weaken the native event parser's first-token rule.
         val plain = redactPlainLine(line)
-        val marker = line.indexOf("DFX1|")
-        // Original whole-line credential hiding/path-tail omission takes
-        // precedence; never append a protocol suffix that it already removed.
-        if (plain != line || marker < 0) plain else line.take(marker) + redactDfx1Wire(line.substring(marker))
+        val marker = plain.indexOf("DFX1|")
+        // Decode only what survived the original whole-line/tail omission, then
+        // apply that rule again. Removed suffixes never reappear; retained
+        // encoded secrets before a later plain path still get redacted.
+        if (marker < 0) plain else redactPlainLine(plain.take(marker) + redactDfx1Wire(plain.substring(marker)))
     }
 
     private fun redactPlainLine(line: String): String =

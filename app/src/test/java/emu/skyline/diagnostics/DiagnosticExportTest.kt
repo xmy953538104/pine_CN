@@ -69,6 +69,25 @@ class DiagnosticExportTest {
             assertTrue(entries.getValue("emulation.log").contains("REDACTED_PATH"))
         }
     }
+
+    @Test fun combinedDfxEncodingAndPlainPrivacyRulesComposeInBothFieldOrders() = sandbox { logs, textLog, cache, _ ->
+        val prefixes = listOf("INFO    |     123456 |      HOS-1      | OutputDebugString: ", "password=prefix ", "open /data/user/0/Alice/prefix ")
+        val payloads = listOf(
+            "message=password%3Dprivate-encoded|file=/data/user/0/Alice/private.lua|traceback=private-omitted-tail",
+            "file=/data/user/0/Alice/private.lua|message=password%3Dprivate-encoded|traceback=private-omitted-tail",
+            "message=password%3Dprivate-encoded|file=%2Fdata%2Fuser%2F0%2FAlice%2Fprivate.lua",
+            "file=%2Fdata%2Fuser%2F0%2FAlice%2Fprivate.lua|message=password%3Dprivate-encoded",
+            "message=password=private-plaintext|file=%2Fdata%2Fuser%2F0%2FAlice%2Fprivate.lua",
+            "file=%2Fdata%2Fuser%2F0%2FAlice%2Fprivate.lua|message=password=private-plaintext")
+        textLog.writeText(prefixes.flatMap { prefix -> payloads.map { payload ->
+            prefix + "DFX1|event=DFX_LUA_ERROR|probe_id=privacy|" + payload
+        } }.joinToString("\n", postfix = "\n"))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val all = archive(snapshot).values.joinToString("\n")
+            for (secret in listOf("Alice", "private.lua", "%2Fdata", "private-encoded", "private-plaintext", "private-omitted-tail", "password%3D"))
+                assertFalse(secret, all.contains(secret))
+        }
+    }
     @Test fun criticalStateSharesSequenceWithoutReplayingAnErrorAndRemainsAllowlisted() = sandbox { logs, textLog, cache, _ ->
         val original = Json.parseToJsonElement(record("same", 7, "exception", "NATIVE_EXCEPTION", "ERROR")).jsonObject
         val state = JsonObject(original + mapOf("record_kind" to JsonPrimitive("critical_snapshot"),

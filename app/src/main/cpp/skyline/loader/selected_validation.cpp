@@ -117,12 +117,17 @@ namespace skyline::loader::selected {
                 // failures before installation rather than relying on hooks
                 // or symbol lookup being disabled for a particular launch.
                 Need(!symbolBytes || (symbols % 8 == 0 && symbolBytes % 24 == 0), "selected_nso_symbol_table_layout");
+                uint32_t terminatedPrefix{};
+                if (symbolBytes) for (uint32_t at = stringBytes; at; --at) {
+                    if (!data[static_cast<size_t>(strings) + at - 1]) { terminatedPrefix = at; break; }
+                }
                 for (uint64_t at{}; at < symbolBytes; at += 24) {
                     const auto name = U32(data, static_cast<size_t>(Add(symbols, at)));
                     if (!name) continue;
                     Need(name < stringBytes, "selected_nso_symbol_name_range");
-                    const auto start = data.begin() + strings + name, end = data.begin() + strings + stringBytes;
-                    Need(std::find(start, end, 0) != end, "selected_nso_unterminated_symbol_name");
+                    // One reverse scan bounds all suffix checks, including
+                    // repeated names; never rescan a long suffix per symbol.
+                    Need(name < terminatedPrefix, "selected_nso_unterminated_symbol_name");
                 }
             }
         }

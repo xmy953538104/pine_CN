@@ -52,6 +52,7 @@ jobs:
           git submodule update --init --depth 1 app/libraries/vkma app/libraries/vkhpp
           git -C app/libraries/vkhpp submodule update --init --depth 1 Vulkan-Headers
           bash tools/tests/run-mapped-vma.sh
+          bash tools/tests/run-present-observer.sh
   tools:
     needs: scope
     if: needs.scope.outputs.tools == 'true'

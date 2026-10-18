@@ -11,6 +11,7 @@ inline bool CriticalEvent(std::string_view category, std::string_view event, std
         event == "DFX_MODMAIN_OK" || event == "DFX_HAMLET_ENTER" || event == "DFX_LUA_ERROR";
     if (category == "lifecycle") return event == "STAGE_COMPLETED" || event == "STAGE_STARTED" ||
         event == "LAUNCH_ENDED" || event == "LAUNCH_STOP_REQUESTED" || event == "LAUNCH_PROGRESS" || event == "FIRST_PRESENT_OBSERVED" ||
+        event == "LAUNCH_HOST_EXIT_REQUESTED" || event == "HOST_EXIT_REQUEST_ACCEPTED" ||
         event == "SESSION_METADATA" || event == "LAUNCH_BEGIN" || event == "LAUNCH_CONTEXT_OBSERVED" ||
         event == "PREVIOUS_PROCESS_CRASH" || event == "PREVIOUS_PROCESS_EXIT" || event == "PREVIOUS_NATIVE_TRACE";
     if ((category == "content" || category == "storage" || category == "audio" || category == "gpu") && level == "ERROR") return true;

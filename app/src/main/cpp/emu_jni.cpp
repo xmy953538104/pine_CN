@@ -437,3 +437,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_f
 extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_stopNative(JNIEnv *, jclass) {
     skyline::diagnostics::Stop();
 }
+
+extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_observeHostExitNative(JNIEnv *env, jclass, jstring source) {
+    try { skyline::diagnostics::ObserveHostExitRequest(ConvertDiagnosticJString(env, source)); } catch (...) {}
+}

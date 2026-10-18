@@ -53,8 +53,9 @@ void SetLaunchId(std::string_view launchId, bool newLaunch = false) noexcept;
 // Normal threads only. The rendering hook performs only a fast gate and atomic
 // updates, never formatting, queue admission, I/O or JNI. Vulkan returns are not
 // proof of visible pixels, a game menu or Lua execution.
-void PresentResult(int32_t result) noexcept;
+void PresentResult(int32_t result, bool wrapperException = false) noexcept;
 void RequestLaunchStop() noexcept;
+void ObserveHostExitRequest(std::string_view source) noexcept;
 void EndLaunch(std::string_view observedReason) noexcept;
 // True game boundaries only: clear at launch and after the final session drains.
 void ClearTitleId() noexcept;

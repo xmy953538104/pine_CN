@@ -49,6 +49,17 @@ int main(int argc, char **argv) {
     assert(text.find("launch-two") != std::string::npos && text.find("launch-one") == std::string::npos);
     assert(text.find("\"present_returns\":\"0\"") != std::string::npos && text.find("\"host_stop_requested\":\"false\"") != std::string::npos);
     assert(text.find("FIRST_PRESENT_OBSERVED") == std::string::npos);
+    // Actual UI/process-exit path may drain and kill before JNI can return.
+    // Preserve a request with last state, without fabricating native completion.
+    SetLaunchId("host-exit-only", true); config.sessionId = "host-exit-session";
+    assert(Start(config)); Stage("process_data_loaded");
+    ObserveHostExitRequest("menu_exit_confirmed"); Stop();
+    const auto requested = Read(root / "critical-state.jsonl");
+    assert(requested.find("LAUNCH_HOST_EXIT_REQUESTED") != std::string::npos);
+    assert(requested.find("\"request_source\":\"menu_exit_confirmed\"") != std::string::npos);
+    assert(requested.find("\"last_success_stage_at_request\":\"process_data_loaded\"") != std::string::npos);
+    assert(requested.find("request_only_native_return_not_observed_here") != std::string::npos);
+    assert(requested.find("LAUNCH_ENDED") == std::string::npos && requested.find("EMULATION_RETURNED") == std::string::npos);
     // Multiple launches in one diagnostic session keep the last eight endings.
     config.sessionId = "multiple-launches"; assert(Start(config));
     for (int i{}; i < 12; ++i) { SetLaunchId("same-session-launch-" + std::to_string(i), true); EndLaunch("execute_returned"); }

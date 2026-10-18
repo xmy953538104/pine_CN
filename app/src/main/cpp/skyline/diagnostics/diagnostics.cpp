@@ -69,7 +69,10 @@ struct Sink {
     std::string effectiveProgramContentId, effectiveProgramId, effectiveSource;
     std::atomic<uint64_t> presentReturns{}, presentAccepted{}, presentOther{}, firstPresentUs{}, launchStartedUs{};
     std::atomic<int32_t> lastPresentResult{};
+    std::atomic<uint64_t> presentWrapperExceptions{};
+    std::atomic<bool> lastPresentViaException{};
     std::atomic<bool> stopRequested{};
+    std::atomic<bool> hostExitRequested{};
     std::atomic<uint64_t> observationEpoch{};
     uint64_t firstRecordedEpoch{}; // protected by firstObservationMutex, ordinary observers only
     std::atomic<bool> stopping{};
@@ -253,8 +256,11 @@ bool EmitProgress(Sink &s, std::string_view event, std::string_view expectedLaun
     const std::pair<std::string, std::string> values[]{
         {"source", "vulkan_queue_present_khr_return"},
         {"observation_layer", "host_vulkan_api_return"}, {"counter_scope", "diagnostics_enabled_observations_per_launch"},
+        {"counter_snapshot", "independent_atomic_lower_bounds_may_overlap_present"},
         {"present_returns", std::to_string(returns)}, {"present_accepted", std::to_string(accepted)},
         {"present_other_results", std::to_string(other)}, {"last_present_result", std::to_string(s.lastPresentResult.load())},
+        {"present_wrapper_exceptions", std::to_string(s.presentWrapperExceptions.load())},
+        {"last_result_observation", s.lastPresentViaException ? "vulkan_hpp_system_error_code" : "returned_result"},
         {"first_accepted_present_monotonic_us", std::to_string(s.firstPresentUs.load())},
         {"launch_elapsed_us", std::to_string(started ? MonotonicUs() - started : 0)},
         {"visibility", "not_observed"}, {"guest_execution_phase", "not_inferred"}};
@@ -342,13 +348,15 @@ void Run(Sink &s) noexcept {
                 }
                 record.sequence = sequence;
                 if (record.category == "guest" && record.launchId == s.activeLaunchId) {
-                    if (record.event == "DFX_MAIN_ENTER" || record.event == "DFX_MODINDEX_READY" || record.event == "DFX_MODMAIN_OK" || record.event == "DFX_HAMLET_ENTER") s.guestStage = record.event;
-                    else if (s.guestStage == "unknown" && (record.event == "GUEST_DEBUG_MESSAGE" || record.event == "GUEST_RUNTIME_ERROR")) s.guestStage = "guest_message_observed";
-                    if (record.guestStage != s.guestStage) PublishContext(s);
+                    bool changed{};
+                    if ((record.event == "DFX_MAIN_ENTER" || record.event == "DFX_MODINDEX_READY" || record.event == "DFX_MODMAIN_OK" || record.event == "DFX_HAMLET_ENTER") && s.guestStage != record.event) { s.guestStage = record.event; changed = true; }
+                    else if (s.guestStage == "unknown" && (record.event == "GUEST_DEBUG_MESSAGE" || record.event == "GUEST_RUNTIME_ERROR")) { s.guestStage = "guest_message_observed"; changed = true; }
+                    if (changed) PublishContext(s);
                     record.guestStage = s.guestStage;
                 }
                 pendingRecord = true; pendingCritical = record.critical;
             }
+            CopyDropCounts(record, s); // Writer-observed cumulative counters follow stream order.
             auto line = Serialize(record, c);
             snapshot.Observe(record);
 #ifdef __ANDROID__
@@ -685,6 +693,8 @@ void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
         if (newLaunch) {
             s.stage.clear(); s.presentReturns = 0; s.presentAccepted = 0; s.presentOther = 0;
             s.firstPresentUs = 0; s.lastPresentResult = 0; s.stopRequested = false; s.launchStartedUs = MonotonicUs();
+            s.hostExitRequested = false;
+            s.presentWrapperExceptions = 0; s.lastPresentViaException = false;
         }
         if (newLaunch || launchId.empty()) s.guestStage = "unknown";
         PublishContext(s);
@@ -692,10 +702,12 @@ void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
         s.observationEpoch.fetch_add(1);
     } catch (...) {}
 }
-void PresentResult(int32_t result) noexcept {
+void PresentResult(int32_t result, bool wrapperException) noexcept {
     auto &s = Get(); if (!IsEnabled(s)) return;
     s.presentReturns.fetch_add(1, std::memory_order_relaxed); s.lastPresentResult.store(result, std::memory_order_relaxed);
-    if (result == 0 || result == 1000001003) { // VK_SUCCESS / VK_SUBOPTIMAL_KHR: accepted by the host API.
+    s.lastPresentViaException.store(wrapperException, std::memory_order_relaxed);
+    if (wrapperException) s.presentWrapperExceptions.fetch_add(1, std::memory_order_relaxed);
+    if (!wrapperException && (result == 0 || result == 1000001003)) { // VK_SUCCESS / VK_SUBOPTIMAL_KHR: accepted by the host API.
         s.presentAccepted.fetch_add(1, std::memory_order_relaxed);
         uint64_t empty{};
         if (!s.firstPresentUs.load(std::memory_order_relaxed)) s.firstPresentUs.compare_exchange_strong(empty, MonotonicUs(), std::memory_order_relaxed);
@@ -712,8 +724,25 @@ void EndLaunch(std::string_view observedReason) noexcept {
         EmitProgress(s, "LAUNCH_PROGRESS");
         Emit("lifecycle", "LAUNCH_ENDED", {{"end_reason", observedReason},
             {"end_reason_source", "JNI_executeApplication_control_flow"}, {"host_stop_requested", s.stopRequested ? "true" : "false"},
+            {"host_exit_request_observed", s.hostExitRequested ? "true" : "false"},
             {"last_success_stage_before_end", LastStage()}, {"present_returns", std::to_string(s.presentReturns.load())},
             {"present_accepted", std::to_string(s.presentAccepted.load())}, {"present_other_results", std::to_string(s.presentOther.load())},
+            {"first_accepted_present_monotonic_us", std::to_string(s.firstPresentUs.load())},
+            {"visibility", "not_observed"}, {"guest_execution_phase", "not_inferred"}});
+    } catch (...) {}
+}
+void ObserveHostExitRequest(std::string_view source) noexcept {
+    auto &s = Get(); if (!IsEnabled(s)) return;
+    try {
+        s.hostExitRequested = true;
+        EmitFirstPresent(s); EmitProgress(s, "LAUNCH_PROGRESS");
+        Emit("lifecycle", "LAUNCH_HOST_EXIT_REQUESTED", {{"request_source", source},
+            {"observation_layer", "accepted_Activity_generation_before_drain_and_process_kill"},
+            {"end_reason_observation", "request_only_native_return_not_observed_here"},
+            {"last_success_stage_at_request", LastStage()}, {"present_returns", std::to_string(s.presentReturns.load())},
+            {"present_accepted", std::to_string(s.presentAccepted.load())}, {"present_other_results", std::to_string(s.presentOther.load())},
+            {"present_wrapper_exceptions", std::to_string(s.presentWrapperExceptions.load())},
+            {"last_present_result", std::to_string(s.lastPresentResult.load())},
             {"first_accepted_present_monotonic_us", std::to_string(s.firstPresentUs.load())},
             {"visibility", "not_observed"}, {"guest_execution_phase", "not_inferred"}});
     } catch (...) {}

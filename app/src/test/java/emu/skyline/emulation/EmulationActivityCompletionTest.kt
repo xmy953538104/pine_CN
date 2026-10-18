@@ -61,8 +61,13 @@ class EmulationActivityCompletionTest {
                 flushes.incrementAndGet(); order.add("flush"); onFlush?.invoke(); return true
             }
             @JvmStatic @Implementation fun stopNative() {
+                order.add("drain")
                 drains.incrementAndGet()
                 onDrain?.invoke()
+            }
+            @JvmStatic @Implementation fun observeHostExitNative(source: String) {
+                events.add(NativeEvent("LAUNCH_HOST_EXIT_REQUESTED", mapOf("request_source" to source)))
+                order.add("LAUNCH_HOST_EXIT_REQUESTED")
             }
         }
     }
@@ -276,6 +281,39 @@ class EmulationActivityCompletionTest {
         assertTrue(state.active); assertEquals(replacementId, state.id); assertEquals(replacement, state.owner)
         assertEquals("0100751007ADA000", ReflectionHelpers.getField<String>(Diagnostics, "applicationTitleId"))
         assertFalse(ShadowProcess.wasKilled(Process.myPid()))
+    }
+
+    @Test fun actualMenuConfirmationRecordsRequestBeforeOwnedDrainAndKill() {
+        startObservedLaunch(token); events.clear(); order.clear()
+        val entered = CountDownLatch(1)
+        onDrain = {
+            assertEquals("menu_exit_confirmed", events.single { it.name == "LAUNCH_HOST_EXIT_REQUESTED" }.fields["request_source"])
+            assertTrue(order.indexOf("LAUNCH_HOST_EXIT_REQUESTED") < order.indexOf("drain"))
+            assertFalse(ShadowProcess.wasKilled(Process.myPid()))
+            entered.countDown(); awaitCheckpoint(releaseDrain)
+        }
+        activity.confirmExitFromMenu(token)
+        awaitCheckpoint(entered); releaseDrain.countDown()
+        awaitMainCondition { ShadowProcess.wasKilled(Process.myPid()) }
+        assertEquals(1, drains.get())
+        assertFalse(events.any { it.name == "LAUNCH_ENDED" || it.name == "EMULATION_RETURNED" })
+    }
+
+    @Test fun staleMenuConfirmationCannotRecordIntoReplacementLaunch() {
+        startObservedLaunch(token)
+        val replacement = owner.begin(); val replacementId = startObservedLaunch(replacement)
+        events.clear(); order.clear()
+        activity.confirmExitFromMenu(token); shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(events.any { it.name == "LAUNCH_HOST_EXIT_REQUESTED" || it.name == "HOST_EXIT_REQUEST_ACCEPTED" })
+        assertEquals(replacementId, Diagnostics.currentAssociation().launch)
+        assertEquals(0, drains.get()); assertFalse(ShadowProcess.wasKilled(Process.myPid()))
+    }
+
+    @Test fun destroyedGenerationCannotRecordANewMenuExitRequest() {
+        startObservedLaunch(token); destroy(); events.clear(); order.clear()
+        activity.confirmExitFromMenu(token); shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(events.any { it.name == "LAUNCH_HOST_EXIT_REQUESTED" || it.name == "HOST_EXIT_REQUEST_ACCEPTED" })
+        assertEquals(0, drains.get()); assertFalse(ShadowProcess.wasKilled(Process.myPid()))
     }
 
     @Test fun destructionBeforeNativeCompletionDoesNotStartNewExit() {

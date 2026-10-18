@@ -266,12 +266,16 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
     @SuppressWarnings("WeakerAccess")
     fun returnFromEmulation() = returnFromEmulation(generationToken)
 
-    private fun returnFromEmulation(token: Long) {
+    /** Actual positive-button continuation; generation ownership is checked at drain time. */
+    internal fun confirmExitFromMenu(token: Long) = returnFromEmulation(token, "menu_exit_confirmed")
+
+    private fun returnFromEmulation(token: Long, requestSource: String = "activity_return_from_emulation") {
         runOnUiThread {
             if (generations.isCurrent(token)) {
                 val navigateToMain = returnToMain
                 endingScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     generations.finish(token, {
+                        emu.skyline.diagnostics.Diagnostics.recordHostExitRequest(token, requestSource)
                         emu.skyline.diagnostics.Diagnostics.finishSession(token)
                     }, {
                         if (navigateToMain)
@@ -603,7 +607,7 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                         .setTitle(R.string.emulation_close_game)
                         .setMessage(R.string.emulation_close_game_message)
                         .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
-                            returnFromEmulation(token)
+                            confirmExitFromMenu(token)
                         }
                         .setNegativeButton(android.R.string.cancel) { _: DialogInterface?, _: Int ->
                             if (generations.isCurrent(token)) resumeEmulator()

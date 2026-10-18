@@ -52,6 +52,7 @@ object Diagnostics {
     @JvmStatic external fun statusNative(): LongArray
     @JvmStatic external fun flushNative(): Boolean
     @JvmStatic external fun stopNative()
+    @JvmStatic external fun observeHostExitNative(source: String)
     @JvmStatic external fun emitNative(category: String, event: String, detail: String, titleId: String)
     @JvmStatic external fun emitFieldsNative(category: String, event: String, level: String, keys: Array<String>, values: Array<String>): Boolean
     fun fieldsEvent(category: String, event: String, level: String = "INFO", fields: () -> Map<String, String>): Boolean {
@@ -255,6 +256,14 @@ object Diagnostics {
         runCatching { setLaunchNative("", "", true) }
         runCatching { ProcessStateAssociation.clear() }
         return true
+    }
+    /** Called inside the accepted generation's session callback, before drain/kill. */
+    @Synchronized internal fun recordHostExitRequest(owner: Long, source: String): Boolean {
+        if (!active || !launch.active || !launch.belongsTo(owner)) return false
+        fieldsEvent("lifecycle", "HOST_EXIT_REQUEST_ACCEPTED") {
+            mapOf("request_source" to source, "scope" to "host_request_only_not_native_return_or_crash")
+        }
+        return runCatching { observeHostExitNative(source) }.isSuccess
     }
     @Synchronized fun finishSession(owner: Long? = null) {
         if (owner != null && !launch.belongsTo(owner)) return

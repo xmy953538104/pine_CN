@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pine:save-probe:payload:v1",
+  "title": "Dedicated probe JSON UTF-8 codec v1",
+  "description": "The complete file is at most 1024 UTF-8 bytes, including whitespace; byte length/hash cover the original bytes, not JSON reserialization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "logical_key", "write_id", "nonce", "text"],
+  "properties": {
+    "schema": {"type": "integer", "const": 1},
+    "logical_key": {"const": "dfx_diag_probe_v1"},
+    "write_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "text": {"const": "pine dedicated save probe v1"}
+  }
+}

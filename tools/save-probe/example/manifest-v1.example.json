@@ -1,0 +1,86 @@
+{
+  "schema": "pine.save-probe.manifest.v1",
+  "evidence_origin": "synthetic",
+  "authorization": {
+    "scope": "dedicated_probe_only",
+    "logical_key": "dfx_diag_probe_v1",
+    "basename": "dfx_diag_probe_v1.json"
+  },
+  "codec": "pine-probe-json-utf8-v1",
+  "zip_member": "0100000000ABCDEF/dfx_diag_probe_v1.json",
+  "expected": {
+    "identity": {
+      "space": "user",
+      "type": "account",
+      "user_id": "00000000000000000000000000000001",
+      "save_owner_id": "0100000000abcdef",
+      "program_id": "0100000000abcdef",
+      "path": "switch/nand/user/save/0000000000000000/00000000000000000000000000000001/0100000000ABCDEF/dfx_diag_probe_v1.json"
+    },
+    "write_id": "1234567890abcdef1234567890abcdef",
+    "payload": {
+      "nonce": "fedcba0987654321fedcba0987654321",
+      "length": 174,
+      "sha256": "c7a1ee263396f9721f5d8f32d0cfea4565f13fa381c1f0a40bdd79881fcc4692"
+    }
+  },
+  "observations": {
+    "writer": {
+      "identity": {
+        "space": "user",
+        "type": "account",
+        "user_id": "00000000000000000000000000000001",
+        "save_owner_id": "0100000000ABCDEF",
+        "program_id": "0100000000ABCDEF",
+        "path": "switch/nand/user/save/0000000000000000/00000000000000000000000000000001/0100000000ABCDEF/dfx_diag_probe_v1.json"
+      },
+      "write_id": "1234567890abcdef1234567890abcdef",
+      "callback": "success",
+      "writer": "completed",
+      "file_closed": true
+    },
+    "initial": {
+      "identity": {
+        "space": "user",
+        "type": "account",
+        "user_id": "00000000000000000000000000000001",
+        "save_owner_id": "0100000000ABCDEF",
+        "program_id": "0100000000ABCDEF",
+        "path": "switch/nand/user/save/0000000000000000/00000000000000000000000000000001/0100000000ABCDEF/dfx_diag_probe_v1.json"
+      },
+      "write_id": "1234567890abcdef1234567890abcdef",
+      "capture_id": "synthetic-initial-capture",
+      "process_id": "synthetic-writer-process",
+      "source": "dedicated_file_snapshot"
+    },
+    "restart": {
+      "identity": {
+        "space": "user",
+        "type": "account",
+        "user_id": "00000000000000000000000000000001",
+        "save_owner_id": "0100000000ABCDEF",
+        "program_id": "0100000000ABCDEF",
+        "path": "switch/nand/user/save/0000000000000000/00000000000000000000000000000001/0100000000ABCDEF/dfx_diag_probe_v1.json"
+      },
+      "write_id": "1234567890abcdef1234567890abcdef",
+      "capture_id": "synthetic-restart-capture",
+      "process_id": "synthetic-reader-process",
+      "source": "validated_get_api",
+      "api_signature_verified": true,
+      "previous_process_stopped": true
+    },
+    "export": {
+      "identity": {
+        "space": "user",
+        "type": "account",
+        "user_id": "00000000000000000000000000000001",
+        "save_owner_id": "0100000000ABCDEF",
+        "program_id": "0100000000ABCDEF",
+        "path": "switch/nand/user/save/0000000000000000/00000000000000000000000000000001/0100000000ABCDEF/dfx_diag_probe_v1.json"
+      },
+      "write_id": "1234567890abcdef1234567890abcdef",
+      "consistency": "stopped",
+      "source": "save_management_utils_v79a"
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pine:save-probe:manifest:v1",
+  "title": "Dedicated Pine SaveData probe evidence manifest v1",
+  "description": "Assertions are not authenticated. Omitted evidence stays missing; the CLI enforces additional UTF-8 byte and file/ZIP limits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "authorization"],
+  "properties": {
+    "schema": {"const": "pine.save-probe.manifest.v1"},
+    "evidence_origin": {"enum": ["synthetic", "owner_local"]},
+    "authorization": {
+      "const": {"scope": "dedicated_probe_only", "logical_key": "dfx_diag_probe_v1", "basename": "dfx_diag_probe_v1.json"}
+    },
+    "codec": {"$ref": "#/$defs/token", "description": "Only pine-probe-json-utf8-v1 is implemented. All other names are unsupported."},
+    "zip_member": {"$ref": "#/$defs/probePath"},
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "write_id": {"$ref": "#/$defs/hex32"},
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nonce": {"$ref": "#/$defs/hex32"},
+            "length": {"type": "integer", "minimum": 1, "maximum": 1024},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "writer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "identity": {"$ref": "#/$defs/identity"},
+            "write_id": {"$ref": "#/$defs/hex32"},
+            "callback": {"enum": ["success", "failure", "unknown"]},
+            "writer": {"enum": ["completed", "failed", "unknown"]},
+            "file_closed": {"type": "boolean"}
+          }
+        },
+        "initial": {"$ref": "#/$defs/capture"},
+        "restart": {"$ref": "#/$defs/capture"},
+        "export": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "identity": {"$ref": "#/$defs/identity"},
+            "write_id": {"$ref": "#/$defs/hex32"},
+            "consistency": {"enum": ["stopped", "coordinated", "uncoordinated", "unknown"]},
+            "source": {"enum": ["save_management_utils_v79a", "explicit_dedicated_probe_archive", "unknown"]}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hex32": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "token": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"},
+    "probePath": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*[\\\\:\\u0000-\\u001f\\u007f])(?:[^/]+/){0,15}dfx_diag_probe_v1\\.json$",
+      "description": "Canonical relative dedicated filename; CLI also enforces 512 UTF-8 bytes. Identity paths are relative to Pine public-files root, never host paths."
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "space": {"enum": ["system", "user", "temporary", "unknown", null]},
+        "type": {"enum": ["system", "account", "device", "temporary", "cache", "unknown", null]},
+        "user_id": {"type": ["string", "null"], "pattern": "^[0-9A-Fa-f]{32}$"},
+        "save_owner_id": {"type": ["string", "null"], "pattern": "^[0-9A-Fa-f]{16}$"},
+        "program_id": {"type": ["string", "null"], "pattern": "^[0-9A-Fa-f]{16}$"},
+        "path": {"anyOf": [{"$ref": "#/$defs/probePath"}, {"type": "null"}]}
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "write_id": {"$ref": "#/$defs/hex32"},
+        "capture_id": {"$ref": "#/$defs/token"},
+        "process_id": {"$ref": "#/$defs/token"},
+        "source": {"$ref": "#/$defs/token", "description": "initial: dedicated_file_snapshot; restart: validated_get_api. Other values contradict the required source."},
+        "api_signature_verified": {"type": "boolean"},
+        "previous_process_stopped": {"type": "boolean"}
+      }
+    }
+  }
+}

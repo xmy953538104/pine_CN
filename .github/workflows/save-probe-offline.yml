@@ -1,0 +1,72 @@
+name: Save probe offline
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - tools/pine-save-probe-verify.py
+      - tools/save-probe/**
+      - tools/tests/*save-probe*
+      - docs/save-probe-offline.md
+      - .github/workflows/save-probe-offline.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - tools/pine-save-probe-verify.py
+      - tools/save-probe/**
+      - tools/tests/*save-probe*
+      - docs/save-probe-offline.md
+      - .github/workflows/save-probe-offline.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: save-probe-offline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-host-verifier:
+    # Same-repository branches use push once; fork PRs get the unprivileged PR event.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Record and check exact source
+        run: |
+          mkdir -p save-probe-evidence
+          git rev-parse HEAD > save-probe-evidence/source-commit.txt
+          python3 --version > save-probe-evidence/python-version.txt
+          python3 -c 'import os,pathlib; assert pathlib.Path("save-probe-evidence/source-commit.txt").read_text().strip() == os.environ["EXPECTED_SOURCE_COMMIT"], "Source commit mismatch"'
+          cp tools/save-probe/*schema.json save-probe-evidence/
+      - name: Synthetic and hostile input regressions
+        run: |
+          set -o pipefail
+          python3 tools/tests/test-save-probe-verifier.py 2>&1 | tee save-probe-evidence/test-log.txt
+      - name: Generate only noncommercial synthetic evidence
+        run: python3 tools/tests/make-save-probe-fixture.py --output save-probe-evidence/synthetic
+      - name: Compare actual synthetic bytes in separate stages
+        run: |
+          python3 tools/pine-save-probe-verify.py \
+            --manifest save-probe-evidence/synthetic/manifest.json \
+            --initial-file save-probe-evidence/synthetic/initial/dfx_diag_probe_v1.json \
+            --restart-file save-probe-evidence/synthetic/restart/dfx_diag_probe_v1.json \
+            --export-zip save-probe-evidence/synthetic/stopped.zip \
+            > save-probe-evidence/synthetic-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: save-probe-offline-${{ github.event.pull_request.head.sha || github.sha }}
+          path: save-probe-evidence/
+          if-no-files-found: error
+          retention-days: 14

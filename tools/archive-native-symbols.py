@@ -27,6 +27,11 @@ def inspect_elf(path, readelf):
         raise ValueError("Missing or ambiguous GNU Build ID")
     return identifiers[0].lower(), bool(re.search(r"\s\.debug_info\s", result.stdout))
 
+def verified_artifact_name(name, commit):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", name) or not name.endswith("-" + commit):
+        raise ValueError("Symbol artifact name must be safe and end in this exact source SHA")
+    return name
+
 def archive_symbols(apk, commit, roots, output, readelf, inspector=inspect_elf):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("Expected exact source SHA")
@@ -86,10 +91,12 @@ def main():
     parser.add_argument("output", type=pathlib.Path)
     parser.add_argument("--root", action="append", required=True, type=pathlib.Path)
     parser.add_argument("--readelf", required=True, type=pathlib.Path)
+    parser.add_argument("--artifact-name", required=True, help="Exact Actions upload-artifact name for these symbols")
     args = parser.parse_args()
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     if actual != args.commit:
         raise ValueError("Source checkout does not match requested symbols")
+    artifact_name = verified_artifact_name(args.artifact_name, actual)
     identity_path = args.apk.with_name("build-identity.json")
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
     if identity["commit"] != actual or identity["sha256"] != digest(args.apk):
@@ -98,7 +105,7 @@ def main():
     if identity["skyline_elf_sha256"] != manifest["packaged_elf_sha256"]:
         raise ValueError("Packaged ELF differs from APK verification")
     identity["native_symbols"] = {key: manifest[key] for key in ("elf_build_id", "unstripped_elf_sha256", "debug_info_present")}
-    identity["native_symbols"]["artifact"] = "pine-diagnostics-native-symbols-" + actual
+    identity["native_symbols"]["artifact"] = artifact_name
     identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(manifest, sort_keys=True))
 

@@ -4,8 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
 
 concurrency:
   group: pine-ci-${{ github.ref }}
@@ -32,7 +30,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          submodules: recursive
+
+      - name: Pinned shallow native dependencies
+        run: git submodule update --init --recursive --depth 1 --jobs 8
 
       - name: Restore CCache
         uses: hendrikmuhs/ccache-action@v1.2

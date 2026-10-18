@@ -1,0 +1,111 @@
+name: Diagnostics fast checks
+on:
+  push:
+    branches-ignore: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore: ['docs/**', '**/*.md']
+permissions:
+  contents: read
+concurrency:
+  group: diagnostics-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  scope:
+    # Same-repository branches use push once; forks use the unprivileged PR event.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
+      tools: ${{ steps.scope.outputs.tools }}
+      windows: ${{ steps.scope.outputs.windows }}
+      jvm: ${{ steps.scope.outputs.jvm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || '908c76225e027b325eca319fb94820c403cb68c5' }}
+        run: python3 tools/ci/diagnostics-changes.py --base "$BASE" --output "$GITHUB_OUTPUT"
+  native:
+    needs: scope
+    if: needs.scope.outputs.native == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: bash tools/tests/run-native-diagnostics.sh
+      - run: bash tools/tests/run-content-diagnostics.sh
+      - name: Pinned VMA contract
+        run: |
+          git submodule update --init --depth 1 app/libraries/vkma app/libraries/vkhpp
+          git -C app/libraries/vkhpp submodule update --init --depth 1 Vulkan-Headers
+          bash tools/tests/run-mapped-vma.sh
+  tools:
+    needs: scope
+    if: needs.scope.outputs.tools == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Host observer, metadata, signer and CI regressions
+        run: |
+          for test in tools/tests/test-*.py; do
+            case "$test" in *test-ctrlc.py) continue ;; esac
+            python3 "$test"
+          done
+  windows:
+    needs: scope
+    if: needs.scope.outputs.windows == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - shell: powershell
+        run: ./tools/tests/pine-diag.Tests.ps1
+      - if: always()
+        shell: pwsh
+        run: ./tools/tests/pine-diag.Tests.ps1
+  jvm:
+    needs: scope
+    if: needs.scope.outputs.jvm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IS_BUILD_SIGNED: 'false'
+      SIGNING_STORE_PATH: unused.jks
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+      - name: JVM task graph must not build native code or an APK
+        run: |
+          ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --dry-run > unit-task-graph.txt
+          python3 tools/ci/verify-jvm-only.py unit-task-graph.txt
+      - name: O2 JVM tests without signing credentials or native dependencies
+        run: ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostics-fast-jvm-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            app/build/test-results/testFullDebugUnitTest/
+            app/build/reports/tests/
+            unit-task-graph.txt

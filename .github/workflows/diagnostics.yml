@@ -1,14 +1,15 @@
 name: Diagnostics Debug
 on:
   workflow_dispatch:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    inputs:
+      run_runtime:
+        description: Explicit runtime attempt on an already qualified host
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  # Keep the evidence from an already-running APK attempt when a later test fix
-  # is pushed; duplicate runs for the same source commit still cancel.
-  group: diagnostics-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  group: diagnostics-manual-o0-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   native:
@@ -48,6 +49,9 @@ jobs:
         shell: pwsh
         run: ./tools/tests/pine-diag.Tests.ps1
   debug-apk:
+    needs: [native, adb]
+    env:
+      NATIVE_SYMBOLS_ARTIFACT: pine-diagnostics-native-symbols-${{ github.sha }}
     # Fork PRs run the host tests but cannot use this repository's signer.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -83,6 +87,8 @@ jobs:
       # sample Gradle wrappers are not used by this CMake build (Oboe includes an
       # unverifiable 2013 wrapper). Keep root validation enabled.
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: diagnostics-ndk-27.3
@@ -99,7 +105,7 @@ jobs:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_COMPILERCHECK: 'string:27.3.13750724'
-        run: ./gradlew --no-daemon testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
+        run: ./gradlew --no-daemon --build-cache testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
       - name: Remove the temporary signing file
         if: always()
         run: rm -f "$RUNNER_TEMP/pine-ci-signing.jks"
@@ -121,13 +127,14 @@ jobs:
           python3 tools/archive-native-symbols.py \
             app/build/outputs/apk/full/debug/app-full-debug.apk "$EXPECTED_COMMIT" \
             app/build/outputs/diagnostics-symbols \
+            --artifact-name "$NATIVE_SYMBOLS_ARTIFACT" \
             --root app/build/intermediates/cxx --root app/.cxx \
             --readelf "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
       - name: Upload matching unstripped native symbols
         if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
         uses: actions/upload-artifact@v4
         with:
-          name: pine-diagnostics-native-symbols-${{ github.event.pull_request.head.sha || github.sha }}
+          name: ${{ env.NATIVE_SYMBOLS_ARTIFACT }}
           path: app/build/outputs/diagnostics-symbols/
           if-no-files-found: error
       - name: Upload Debug APK
@@ -152,7 +159,7 @@ jobs:
   android-runtime:
     name: Android runtime attempt (${{ matrix.runner }})
     needs: debug-apk
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci')
+    if: github.event_name == 'workflow_dispatch' && inputs.run_runtime
     # Qualify actual hardware acceleration first. Retained macOS attempts had
     # severe system-app/attach failures; repeating that matrix is not reliable
     # acceptance. Linux must not silently fall back when KVM access is denied.

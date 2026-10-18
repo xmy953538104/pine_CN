@@ -1,18 +1,48 @@
-name: Diagnostics optimized candidate
+name: Diagnostics O2 candidate
 on:
-  push:
-    branches: [feat/diagnostics-perf-candidate]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      host_comparisons:
+        description: Run optional host performance comparisons
+        type: boolean
+        default: false
+      run_runtime:
+        description: Explicit runtime attempt on an already qualified host
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: diagnostics-performance-${{ github.sha }}
-  cancel-in-progress: false
+  group: diagnostics-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
-  host-comparisons:
+  fast-gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'apk-o2' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'ci'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Require successful fast checks for this exact source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 tools/ci/require-fast-checks.py
+  host-comparisons:
+    needs: fast-gate
+    if: github.event_name == 'workflow_dispatch' && inputs.host_comparisons
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Pinned fmt headers for the production legacy logger fixture
         run: git submodule update --init --depth 1 app/libraries/fmt
       - name: Native flag rejection tests and controlled host comparisons
@@ -23,15 +53,48 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diagnostics-host-performance-${{ github.sha }}
+          name: diagnostics-host-performance-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ${{ runner.temp }}/host-comparison/probe-results.json
             ${{ runner.temp }}/host-comparison/legacy-results.json
   optimized-apk:
+    needs: fast-gate
+    env:
+      IS_BUILD_SIGNED: 'false'
+      SIGNING_STORE_PATH: unused.jks
+      NATIVE_SYMBOLS_ARTIFACT: pine-diagnostics-O2-symbols-${{ github.event.pull_request.head.sha || github.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: JVM Android tools
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+      - name: Verify the unsigned JVM-only task graph before any native dependencies
+        run: |
+          ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --dry-run > unit-task-graph.txt
+          python3 tools/ci/verify-jvm-only.py unit-task-graph.txt
+      - name: JVM tests first, without signing secrets
+        run: ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --stacktrace
+      - name: Pinned native tools, only after JVM tests pass
+        run: sdkmanager 'ndk;27.3.13750724' 'cmake;3.22.1'
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: diagnostics-ndk-27.3-optimized-candidate
+          max-size: 3Gi
+      - name: Native dependencies at pinned revisions
+        run: git submodule update --init --recursive --depth 1 --jobs 8
       - name: Require and decode the repository's existing CI signer
         env:
           KEYSTORE_ENCODED: ${{ secrets.KEYSTORE }}
@@ -46,23 +109,7 @@ jobs:
           umask 077
           printf '%s' "$KEYSTORE_ENCODED" | base64 --decode > "$RUNNER_TEMP/pine-ci-signing.jks"
           test -s "$RUNNER_TEMP/pine-ci-signing.jks"
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-      - name: Pinned Android tools
-        run: sdkmanager 'ndk;27.3.13750724' 'cmake;3.22.1' 'platforms;android-35' 'build-tools;35.0.0'
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: diagnostics-ndk-27.3-optimized-candidate
-          max-size: 3Gi
-      - name: Native dependencies at pinned revisions
-        run: git submodule update --init --recursive --depth 1 --jobs 8
-      - name: JVM tests and explicit optimized Debug candidate
+      - name: Assemble O2 Debug only after tests and native dependencies pass
         env:
           IS_BUILD_SIGNED: 'true'
           SIGNING_STORE_PATH: ${{ runner.temp }}/pine-ci-signing.jks
@@ -72,13 +119,16 @@ jobs:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_COMPILERCHECK: 'string:27.3.13750724'
-        run: ./gradlew --no-daemon -PpineNativeDebugOptimization=2 testFullDebugUnitTest processFullReleaseMainManifest assembleFullDebug --stacktrace
+        run: ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 processFullReleaseMainManifest assembleFullDebug --stacktrace
+      - name: Actual compiler cache statistics
+        if: always()
+        run: ccache --show-stats
       - name: Remove the temporary signing file
         if: always()
         run: rm -f "$RUNNER_TEMP/pine-ci-signing.jks"
       - name: Verify actual compiler flags, APK and matching symbols
         env:
-          EXPECTED_COMMIT: ${{ github.sha }}
+          EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           apk=app/build/outputs/apk/full/debug/app-full-debug.apk
           python3 tools/verify-apk-signer.py --apk "$apk" --commit "$EXPECTED_COMMIT" \
@@ -87,11 +137,12 @@ jobs:
           python3 tools/verify-diagnostics-apk.py "$apk" "$EXPECTED_COMMIT"
           python3 tools/verify-native-debug-flags.py --optimization 2 --apk "$apk" --output app/build/outputs/apk/full/debug/native-build-flags.json
           python3 tools/archive-native-symbols.py "$apk" "$EXPECTED_COMMIT" app/build/outputs/optimized-symbols \
+            --artifact-name "$NATIVE_SYMBOLS_ARTIFACT" \
             --root app/build/intermediates/cxx --root app/.cxx \
             --readelf "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
       - uses: actions/upload-artifact@v4
         with:
-          name: pine-diagnostics-O2-debug-candidate-${{ github.sha }}
+          name: pine-diagnostics-O2-debug-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             app/build/outputs/apk/full/debug/*.apk
             app/build/outputs/apk/full/debug/*.json
@@ -99,15 +150,16 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: pine-diagnostics-O2-symbols-${{ github.sha }}
+          name: ${{ env.NATIVE_SYMBOLS_ARTIFACT }}
           path: app/build/outputs/optimized-symbols/
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diagnostics-O2-jvm-reports-${{ github.sha }}
+          name: diagnostics-O2-jvm-reports-${{ github.event.pull_request.head.sha || github.sha }}
           path: app/build/reports/tests/
   optimized-runtime:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_runtime
     needs: optimized-apk
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -116,6 +168,8 @@ jobs:
       PINE_DIAGNOSTICS_OWNED_AVD_PROFILE: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -129,10 +183,10 @@ jobs:
       - run: sdkmanager 'system-images;android-35;google_apis;x86_64'
       - uses: actions/download-artifact@v4
         with:
-          name: pine-diagnostics-O2-debug-candidate-${{ github.sha }}
+          name: pine-diagnostics-O2-debug-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: runtime-apk
       - name: Actual ARM64 APK settings, native diagnostics and SAF export
-        run: bash tools/tests/attempt-android-runtime.sh runtime-apk/app-full-debug.apk '${{ github.sha }}' runtime-evidence
+        run: bash tools/tests/attempt-android-runtime.sh runtime-apk/app-full-debug.apk '${{ github.event.pull_request.head.sha || github.sha }}' runtime-evidence
       - name: Retain every outcome and scoped system-dialog action
         if: always()
         run: |
@@ -160,5 +214,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diagnostics-O2-qualified-runtime-${{ github.sha }}
+          name: diagnostics-O2-qualified-runtime-${{ github.event.pull_request.head.sha || github.sha }}
           path: runtime-evidence/

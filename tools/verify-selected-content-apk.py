@@ -13,7 +13,7 @@ import zipfile
 REQUIRED = ('/emu_jni.cpp', '/selected_jni.cpp', '/selected_scan_jni.cpp', '/skyline/loader/selected_launch.cpp',
             '/skyline/loader/selected_content.cpp', '/skyline/loader/selected_execute.cpp',
             '/skyline/catalog/native_adapter.cpp', '/skyline/catalog/wire.cpp',
-            '/skyline/catalog/scan_report.cpp')
+            '/skyline/catalog/scan_report.cpp', '/skyline/crypto/selected_key_store.cpp')
 
 
 def definitions(arguments):
@@ -85,6 +85,7 @@ def main():
               'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
               'skyline_elf_sha256': hashlib.sha256(native).hexdigest(),
               'selected_content_compiled': True, 'selected_debug_build_config': True,
+              'selected_key_state_compiled': True,
               'default_build_enabled': False, 'bktr_supported': False,
               'runtime_validation': 'not_performed_by_this_build_verifier', 'commands': rows}
     apk.with_name('selected-content-build-identity.json').write_text(json.dumps(report, indent=2) + '\n')

@@ -28,15 +28,18 @@ class SelectedBuildFlags(unittest.TestCase):
                      'arguments': ['clang++', '-DPINE_ENABLE_SELECTED_CONTENT=1']} for suffix in flags.REQUIRED]
             path.write_text(json.dumps(rows))
             self.assertEqual(set(flags.collect(Path(temporary))), set(flags.REQUIRED))
-            for arguments in (['clang++'], ['clang++', '-DPINE_ENABLE_SELECTED_CONTENT=0'],
-                              ['clang++', '-DPINE_ENABLE_SELECTED_CONTENT=1', '-UPINE_ENABLE_SELECTED_CONTENT']):
-                changed = [*rows[:-1], dict(rows[-1], arguments=arguments)]
-                path.write_text(json.dumps(changed))
+            self.assertIn('/skyline/crypto/selected_key_store.cpp', flags.REQUIRED)
+            for index in range(len(rows)):
+                for arguments in (['clang++'], ['clang++', '-DPINE_ENABLE_SELECTED_CONTENT=0'],
+                                  ['clang++', '-DPINE_ENABLE_SELECTED_CONTENT=1', '-UPINE_ENABLE_SELECTED_CONTENT']):
+                    changed = [dict(row, arguments=arguments) if current == index else row
+                               for current, row in enumerate(rows)]
+                    path.write_text(json.dumps(changed))
+                    with self.assertRaises(ValueError):
+                        flags.collect(Path(temporary))
+                path.write_text(json.dumps(rows[:index] + rows[index + 1:]))
                 with self.assertRaises(ValueError):
                     flags.collect(Path(temporary))
-            path.write_text(json.dumps(rows[:-1]))
-            with self.assertRaises(ValueError):
-                flags.collect(Path(temporary))
 
 
 if __name__ == '__main__':

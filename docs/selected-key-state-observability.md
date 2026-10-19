@@ -16,12 +16,20 @@ this operation and must not be inferred from its rows.
 
 The two fixed `title_keys` and `prod_keys` entries report file presence, actual
 read completion and load outcome separately. They do not expose filenames,
-paths, key material, Rights IDs, key hashes or rejected input lines. A present
-file may be empty, unreadable or malformed. A completed read is not necessarily
+paths, key material, Rights IDs, key hashes or rejected input lines. `present`
+does not certify a regular readable file: a directory at the fixed name remains
+skipped by the original loader. A file may be empty, unreadable or malformed.
+A completed read is not necessarily
 a successful parse. Counts come from the strict native parser's resulting map
 and recognized optional slots, rather than counting input lines. Duplicate
 title entries retain the existing first-wins rule. Counts are marked partial
-when loading fails; a title-file failure can leave the prod-file read unstarted.
+on loading failure, short or unknown reads, or an inconclusive presence check;
+a title-file failure can leave the prod-file read unstarted. Counts after a
+failure describe the parser's partial attempt, not a store supplied to a Loader.
+`loaded` means the existing parser returned. It does not certify whole-file
+validity: the original parser ignores an unterminated last line, and its prod
+slot-index parser does not require complete suffix consumption. Neither behavior
+is changed by this supplement.
 
 `title_key_lookup` is a probe of the already loaded title-key map using the
 existing decrypted NCA header. Its values are `not_observed`, `not_required`,

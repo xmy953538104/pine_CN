@@ -41,7 +41,8 @@ UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 LOG_NAME = re.compile(r"(?:(?:main|emulation)/)?diagnostics-[0-7]\.jsonl")
 CRITICAL_NAMES = {prefix + name for prefix in ("", "main/", "emulation/")
                   for name in ("critical-state.jsonl", *(f"critical-state-{i}.jsonl" for i in range(1, 8)))}
-ALLOWED = {"session-metadata.txt", "emulation.log"} | CRITICAL_NAMES | {
+SELECTED_SCAN_NAMES = {"main/selected-scan-0.jsonl", "main/selected-scan-1.jsonl"}
+ALLOWED = {"session-metadata.txt", "emulation.log"} | CRITICAL_NAMES | SELECTED_SCAN_NAMES | {
     prefix + "diagnostics-" + str(index) + ".jsonl"
     for prefix in ("", "main/", "emulation/") for index in range(8)
 }
@@ -49,6 +50,8 @@ ALLOWED = {"session-metadata.txt", "emulation.log"} | CRITICAL_NAMES | {
 def export_entry_limit(name):
     if name == "session-metadata.txt":
         return 1024 * 1024
+    if name in SELECTED_SCAN_NAMES:
+        return 128 * 1024
     return 64 * 1024 if name in CRITICAL_NAMES else 8 * 1024 * 1024
 
 REQUIRED = (
@@ -99,6 +102,8 @@ def require(condition, message):
 
 def parse_records(data, source):
     records = []
+    entry = source.removeprefix("snapshot/").removeprefix("ZIP/")
+    selected_scan = entry in SELECTED_SCAN_NAMES
     for number, line in enumerate(data.splitlines(), 1):
         if not line.strip() or line.startswith(b"---------"):
             continue
@@ -110,9 +115,26 @@ def parse_records(data, source):
                 f"{source}:{number}: expected schema-1 JSON object")
         require(UUID_RE.fullmatch(str(row.get("session_id", ""))) is not None,
                 f"{source}:{number}: invalid native session ID")
-        require(isinstance(row.get("sequence"), int) and row["sequence"] > 0,
-                f"{source}:{number}: invalid sequence")
         require(isinstance(row.get("fields"), dict), f"{source}:{number}: fields is not an object")
+        if selected_scan:
+            require(len(line) + 1 <= 32 * 1024, f"{source}:{number}: selected report exceeds line bound")
+            require(set(row) == {"schema", "record_kind", "category", "event", "level", "session_id",
+                                 "process_scope", "report_sequence", "fields"},
+                    f"{source}:{number}: unexpected selected report envelope")
+            require(row.get("record_kind") == "selected_scan_report" and
+                    row.get("category") == "content" and row.get("event") == "SELECTED_SCAN_REPORT" and
+                    row.get("level") == "INFO" and row.get("process_scope") == "main",
+                    f"{source}:{number}: invalid selected report identity")
+            require(type(row.get("report_sequence")) is int and 0 < row["report_sequence"] <= 2**63 - 1,
+                    f"{source}:{number}: invalid report sequence")
+            fields = row["fields"]
+            require(UUID_RE.fullmatch(str(fields.get("scan_attempt_id", ""))) is not None and
+                    fields.get("profile") in ("modern-40", "legacy-48") and
+                    fields.get("terminal_status") in ("completed", "failed", "cancelled"),
+                    f"{source}:{number}: invalid selected scan attempt")
+        else:
+            require(isinstance(row.get("sequence"), int) and row["sequence"] > 0,
+                    f"{source}:{number}: invalid sequence")
         records.append(row)
     return records
 

@@ -565,14 +565,14 @@ class ObservationDeadlines(unittest.TestCase):
         listings = [row for row in self.commands(smoke) if "ls" in row["argv"]]
         self.assertEqual(listings[-1]["argv"][-3:], ["ls", "-1", "cache/diagnostics-exports"])
 
-    def critical_export_fixture(self, name, critical_name, critical_size=None):
+    def critical_export_fixture(self, name, critical_name, critical_size=None, report=None):
         # Actual production-sink row; normalize only the controlled session to Android's UUID shape.
         row = json.loads((Path(__file__).resolve().parent / "fixtures/native-trace-snapshot.jsonl").read_text())
         row["session_id"] = SESSION
         files = {"session-metadata.txt": "exporter_commit=" + "a" * 40 + "\nconfigured_enabled=true\nsink_active=true\n",
                  "main/diagnostics-0.jsonl": json.dumps({"schema": 1, "session_id": SESSION, "sequence": 1,
                      "event": "SESSION_METADATA", "fields": {"commit": "a" * 40}}) + "\n",
-                 critical_name: json.dumps(row) + "\n"}
+                 critical_name: json.dumps(row if report is None else report) + "\n"}
         lines = [entry + " (" + str(critical_size if entry == critical_name and critical_size is not None else len(data.encode())) + " bytes)"
                  for entry, data in files.items()]
         smoke = self.smoke(name, {"snapshot_files": files, "xml_sequence": [
@@ -580,6 +580,72 @@ class ObservationDeadlines(unittest.TestCase):
             ui_xml({"text": "Export snapshot / 导出快照"}, {"text": "\n".join(lines)})]})
         smoke.session = SESSION
         return smoke, files
+
+    @staticmethod
+    def selected_scan_report():
+        # Controlled Kotlin-report-shaped input; this is not an actual APK/runtime trace.
+        return {"schema": 1, "record_kind": "selected_scan_report", "category": "content",
+                "event": "SELECTED_SCAN_REPORT", "level": "INFO", "session_id": SESSION,
+                "process_scope": "main", "report_sequence": 1,
+                "fields": {"scan_attempt_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                           "profile": "modern-40", "terminal_status": "completed",
+                           "ui_outcome": "no_groups", "native_report": None}}
+
+    def test_exact_selected_scan_names_survive_preview_snapshot_and_zip(self):
+        for index, name in enumerate(sorted(MODULE["SELECTED_SCAN_NAMES"])):
+            with self.subTest(name=name):
+                smoke, files = self.critical_export_fixture("selected-" + str(index), name,
+                                                           report=self.selected_scan_report())
+                smoke.export_preview()
+                smoke.export_snapshot()
+                with zipfile.ZipFile(smoke.output / "exported-diagnostics.zip", "w") as archive:
+                    for entry, data in smoke.snapshot_bytes.items():
+                        archive.writestr(entry, data)
+                self.assertTrue(smoke.verify_zip()["preview_bytes_match"])
+                self.assertEqual(smoke.snapshot_bytes[name], files[name].encode())
+                self.assertNotIn("sequence", json.loads(smoke.snapshot_bytes[name]))
+
+    def test_selected_scan_name_allowlist_and_128k_file_bound(self):
+        for index, name in enumerate(("selected-scan-0.jsonl", "emulation/selected-scan-0.jsonl",
+                                      "main/selected-scan-2.jsonl", "main/sub/selected-scan-0.jsonl",
+                                      "../main/selected-scan-0.jsonl", "main/selected-scan-0.jsonl.bak")):
+            with self.subTest(name=name):
+                smoke, _ = self.critical_export_fixture("selected-reject-" + str(index), name,
+                                                        report=self.selected_scan_report())
+                with self.assertRaisesRegex(AssertionError, "non-allowlisted"):
+                    smoke.export_preview()
+        name = "main/selected-scan-0.jsonl"
+        smoke, files = self.critical_export_fixture("selected-large", name, 128 * 1024 + 1,
+                                                   self.selected_scan_report())
+        with self.assertRaisesRegex(AssertionError, "per-entry export bound"):
+            smoke.export_preview()
+        files[name] = files[name] * (128 * 1024 // len(files[name]) + 1)
+        smoke.snapshot_bytes = {entry: data.encode() for entry, data in files.items()}
+        smoke.preview_entries = {entry: len(data) for entry, data in smoke.snapshot_bytes.items()}
+        with zipfile.ZipFile(smoke.output / "exported-diagnostics.zip", "w") as archive:
+            for entry, data in smoke.snapshot_bytes.items():
+                archive.writestr(entry, data)
+        with self.assertRaisesRegex(AssertionError, "per-entry export bound"):
+            smoke.verify_zip()
+
+    def test_selected_scan_records_use_separate_sequence_and_bounded_lines(self):
+        name = "ZIP/main/selected-scan-1.jsonl"
+        parse = MODULE["parse_records"]
+        row = self.selected_scan_report()
+        self.assertEqual(len(parse(json.dumps(row).encode(), name)), 1)
+        for bad in (0, -1, True, 2**63):
+            with self.subTest(report_sequence=bad):
+                row["report_sequence"] = bad
+                with self.assertRaisesRegex(AssertionError, "report sequence"):
+                    parse(json.dumps(row).encode(), name)
+        row = self.selected_scan_report()
+        row["sequence"] = 1
+        with self.assertRaisesRegex(AssertionError, "envelope"):
+            parse(json.dumps(row).encode(), name)
+        row = self.selected_scan_report()
+        row["fields"]["padding"] = "x" * 32768
+        with self.assertRaisesRegex(AssertionError, "line bound"):
+            parse(json.dumps(row).encode(), name)
 
     def test_exact_critical_state_names_survive_preview_snapshot_and_zip_verification(self):
         names = [prefix + stem for prefix in ("", "main/", "emulation/")

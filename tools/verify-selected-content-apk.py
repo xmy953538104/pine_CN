@@ -10,9 +10,10 @@ import subprocess
 import sys
 import zipfile
 
-REQUIRED = ('/emu_jni.cpp', '/selected_jni.cpp', '/skyline/loader/selected_launch.cpp',
+REQUIRED = ('/emu_jni.cpp', '/selected_jni.cpp', '/selected_scan_jni.cpp', '/skyline/loader/selected_launch.cpp',
             '/skyline/loader/selected_content.cpp', '/skyline/loader/selected_execute.cpp',
-            '/skyline/catalog/native_adapter.cpp', '/skyline/catalog/wire.cpp')
+            '/skyline/catalog/native_adapter.cpp', '/skyline/catalog/wire.cpp',
+            '/skyline/catalog/scan_report.cpp')
 
 
 def definitions(arguments):
@@ -76,6 +77,7 @@ def main():
     # packaged JNI symbol strings additionally catch omission of the bridge TU.
     for name in ('Java_emu_skyline_loader_SelectedContentBridge_isAvailable',
                  'Java_emu_skyline_loader_SelectedContentBridge_inspect',
+                 'Java_emu_skyline_loader_SelectedContentBridge_inspectObserved',
                  'Java_emu_skyline_EmulationActivity_executeSelectedApplication'):
         if name.encode() + b'\0' not in native:
             raise ValueError('packaged native JNI entry absent: ' + name)

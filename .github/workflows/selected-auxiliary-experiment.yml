@@ -1,0 +1,65 @@
+name: Selected auxiliary experiment
+on:
+  push:
+    branches: [experiment/selected-compat-policy-v1]
+    paths:
+      - 'experiments/selected_compat/**'
+      - 'tools/run-auxiliary-experiment.py'
+      - 'tools/tests/test-auxiliary-experiment-runner.py'
+      - 'docs/selected-auxiliary-classification.md'
+      - 'docs/selected-compat-integration-conditions.md'
+      - '.github/workflows/selected-auxiliary-experiment.yml'
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle'
+      - 'gradle.properties'
+      - 'gradlew*'
+      - '.gitmodules'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'experiments/selected_compat/**'
+      - 'tools/run-auxiliary-experiment.py'
+      - 'tools/tests/test-auxiliary-experiment-runner.py'
+      - 'docs/selected-auxiliary-classification.md'
+      - 'docs/selected-compat-integration-conditions.md'
+      - '.github/workflows/selected-auxiliary-experiment.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: selected-auxiliary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-structure:
+    # Same-repository PRs have the exact-head push run; forks use an unprivileged PR run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Fetch the immutable production comparison commit
+        run: git fetch --no-tags --depth=1 origin b25e9e411dde6921b4fb1fda3c3cb7842930c2f3
+      - name: Qualification failure regressions in disposable repositories
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/selected-auxiliary"
+          python3 tools/tests/test-auxiliary-experiment-runner.py 2>&1 | tee "$RUNNER_TEMP/selected-auxiliary/runner-tests.txt"
+      - name: Bounded synthetic structure tests with production source guard
+        run: python3 tools/run-auxiliary-experiment.py --evidence-dir "$RUNNER_TEMP/selected-auxiliary/core"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selected-auxiliary-${{ github.event.pull_request.head.sha || github.sha }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/selected-auxiliary/
+          if-no-files-found: error

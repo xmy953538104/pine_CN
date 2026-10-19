@@ -78,6 +78,27 @@ not establish the contents or cause of any Owner file. Do not request keys,
 repeat installation as a diagnosis, remove Tickets, or modify commercial
 metadata based on it. A separate scoped change is needed to alter validation.
 
+## Offline checks
+
+Use Java 17 and the pinned dependencies in the
+[integration workflow](../.github/workflows/selected-content-integration.yml).
+The native runner requires Clang, an empty evidence directory outside the
+checkout, and the pinned real AES backend; missing prerequisites are errors.
+
+```sh
+CXX=clang++ CC=clang python3 tools/run-selected-scan-observed.py --sanitize --evidence-dir /tmp/pine-selected-key-state-evidence
+IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon -PpineNativeDebugOptimization=2 -PpineSelectedContent=false testFullDebugUnitTest
+IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon -PpineNativeDebugOptimization=2 -PpineSelectedContent=true testFullDebugUnitTest
+python3 tools/tests/test-selected-build-flags.py
+```
+
+The native executable uses the unchanged production key parser and controlled
+synthetic files/backings. The host-JVM lane calls the actual observed JNI under
+`-Xcheck:jni`. Native sanitizers and host JNI are separate lanes; neither is an
+Android runtime test. The APK verifier also requires a real compile command for
+the Selected-only key observer translation unit, with its feature gate enabled.
+These checks do not establish normal-game FPS or a commercial-game pass.
+
 ## Reproduction after qualification
 
 1. Install this PR's exact qualified Debug APK and confirm its commit.

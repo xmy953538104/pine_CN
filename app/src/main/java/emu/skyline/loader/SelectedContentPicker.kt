@@ -17,6 +17,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import emu.skyline.R
+import emu.skyline.diagnostics.SelectedScanAttempt
+import emu.skyline.diagnostics.SelectedScanUi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +34,28 @@ internal fun inspectSelectedContent(resolver: ContentResolver, uri: Uri, private
     }
 }
 
+internal fun inspectObservedSelectedContent(resolver: ContentResolver, uri: Uri, privateFilesPath: String,
+    profile: SelectedContentProfile, inspect: (Int, String, String) -> String = SelectedContentBridge::inspectObserved): SelectedObservedScan =
+    (resolver.openFileDescriptor(uri, "r") ?: throw FileNotFoundException("selected_input_unavailable")).use { descriptor ->
+        SelectedObservedScan.parse(inspect(descriptor.fd, privateFilesPath, profile.wire), profile)
+    }
+
+internal fun primaryState(catalog: SelectedContentCatalog): SelectedScanUi {
+    val rows = catalog.primaryGroups()
+    val outcome = when {
+        catalog.groups.isEmpty() -> "no_groups"
+        rows.isEmpty() -> "no_primary_role"
+        rows.all { it.rejection != null } -> "primary_rows_all_rejected"
+        else -> "primary_rows_available"
+    }
+    val resource = when (outcome) {
+        "no_groups", "no_primary_role" -> "selected_no_candidates"
+        "primary_rows_all_rejected" -> "selected_primary_all_rejected"
+        else -> "selected_primary_title"
+    }
+    return SelectedScanUi(outcome, resource, "primary_groups", rows)
+}
+
 /** One explicit, lifecycle-owned chooser; cancellation never publishes a late scan. */
 internal class SelectedContentPicker(private val fragment: Fragment, private val uri: Uri,
     private val launch: (SelectedContentSelection) -> Unit, private val finished: () -> Unit) : DefaultLifecycleObserver {
@@ -41,6 +65,7 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
     private var scan: Job? = null
     private var active = true
     private var released = false
+    private var attempt: SelectedScanAttempt? = null
     private data class Row(val text: String, val rejection: SelectedRejection? = null)
 
     init { owner.lifecycle.addObserver(this) }
@@ -52,10 +77,11 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
         }
     }
 
-    override fun onDestroy(owner: LifecycleOwner) = cancel()
+    override fun onDestroy(owner: LifecycleOwner) = cancel("view_destroyed")
 
-    private fun cancel() {
+    private fun cancel(reason: String = "user_cancelled") {
         active = false
+        attempt?.finish("cancelled", SelectedScanUi("cancelled", "selected_scan_caveat", "scan"), failureCode = reason)
         dialog?.dismiss(); dialog = null
         scan?.cancel()
         if (scan == null || scan?.isCompleted == true) release()
@@ -69,6 +95,7 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
     }
 
     private fun inspect(profile: SelectedContentProfile) {
+        attempt = SelectedScanAttempt(context.applicationContext, profile)
         dialog?.dismiss()
         dialog = MaterialAlertDialogBuilder(context).setTitle(R.string.selected_scanning)
             .setMessage(R.string.selected_scan_caveat).setNegativeButton(android.R.string.cancel) { _, _ -> cancel() }
@@ -76,23 +103,39 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
         val app = context.applicationContext
         scan = owner.lifecycleScope.launch {
             try {
-                val catalog = withContext(Dispatchers.IO) {
-                    inspectSelectedContent(app.contentResolver, uri, app.filesDir.canonicalPath + "/", profile)
+                val observed = withContext(Dispatchers.IO) {
+                    inspectObservedSelectedContent(app.contentResolver, uri, app.filesDir.canonicalPath + "/", profile)
                 }
-                if (active) { dialog?.dismiss(); primary(catalog) }
+                if (active) {
+                    dialog?.dismiss()
+                    val catalog = observed.catalog
+                    if (catalog == null) failure(observed.report, observed.report.errorCode ?: "other_native_issue")
+                    else {
+                        val ui = primaryState(catalog)
+                        primary(catalog, ui, observed.report)
+                        attempt?.finish("completed", ui, observed.report)
+                    }
+                }
             } catch (error: CancellationException) { throw error }
-            catch (error: Exception) { failure() }
-            catch (error: LinkageError) { failure() }
+            catch (error: SelectedScanFailure) { failure(error.report, error.code) }
+            catch (error: SecurityException) { failure(code = "input_permission_denied") }
+            catch (error: FileNotFoundException) { failure(code = "input_unavailable") }
+            catch (error: Exception) { failure(code = "java_inspection_failed") }
+            catch (error: LinkageError) { failure(code = "native_entry_unavailable") }
             finally { if (!active) release() }
         }
     }
 
-    private fun failure() {
+    private fun failure(native: SelectedNativeScanReport? = null, code: String = "java_inspection_failed") {
         if (!active) return
         dialog?.dismiss()
         dialog = MaterialAlertDialogBuilder(context).setTitle(R.string.selected_content_title)
-            .setMessage(R.string.selected_scan_failed).setPositiveButton(android.R.string.ok) { _, _ -> cancel() }
+            .setMessage(context.getString(R.string.selected_scan_failed) + "\n" +
+                context.getString(R.string.selected_scan_fixed_reason, code.takeIf { it in emu.skyline.diagnostics.SelectedScanRecord.failures || it in SelectedNativeScanReport.codes } ?: "java_inspection_failed") +
+                "\n" + attemptReference("scan_failed"))
+            .setPositiveButton(android.R.string.ok) { _, _ -> cancel() }
             .setOnCancelListener { cancel() }.show()
+        attempt?.finish("failed", SelectedScanUi("scan_failed", "selected_scan_failed", "scan"), native, code)
     }
 
     private fun role(group: SelectedCatalogGroup) = context.getString(when (group.type) {
@@ -116,10 +159,10 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
         else -> R.string.selected_reason_unsupported
     })
 
-    private fun choose(title: String, rows: List<Row>, selected: (Int) -> Unit) {
+    private fun choose(title: String, rows: List<Row>, message: String? = null, selected: (Int) -> Unit) {
         if (!active) return
         if (rows.isEmpty()) {
-            dialog = MaterialAlertDialogBuilder(context).setTitle(title).setMessage(R.string.selected_no_candidates)
+            dialog = MaterialAlertDialogBuilder(context).setTitle(title).setMessage(message ?: context.getString(R.string.selected_no_candidates))
                 .setPositiveButton(android.R.string.ok) { _, _ -> cancel() }.setOnCancelListener { cancel() }.show()
             return
         }
@@ -132,16 +175,36 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
                 (this as TextView).apply { setSingleLine(false); maxLines = 10; textSize = 13f }
             }
         }
-        dialog = MaterialAlertDialogBuilder(context).setTitle(title).setAdapter(adapter) { _, index ->
+        val builder = MaterialAlertDialogBuilder(context)
+        if (message == null) builder.setTitle(title)
+        else builder.setCustomTitle(TextView(context).apply {
+            text = "$title\n$message"; maxLines = 12; textSize = 15f
+            val inset = (24 * resources.displayMetrics.density).toInt()
+            setPadding(inset, inset, inset, inset / 2)
+        })
+        dialog = builder.setAdapter(adapter) { _, index ->
             if (rows[index].rejection == null && active) selected(index)
         }.setNegativeButton(android.R.string.cancel) { _, _ -> cancel() }.setOnCancelListener { cancel() }.show()
     }
 
-    private fun primary(catalog: SelectedContentCatalog) {
-        val groups = catalog.primaryGroups()
+    private fun attemptReference(outcome: String) = context.getString(R.string.selected_scan_attempt_reference,
+        outcome, attempt?.id ?: "unknown")
+
+    private fun primary(catalog: SelectedContentCatalog, ui: SelectedScanUi, native: SelectedNativeScanReport) {
+        val groups = ui.primaryRows
+        val message = when (ui.outcome) {
+            "no_groups" -> context.getString(R.string.selected_no_candidates) + "\n" + context.getString(R.string.selected_scan_no_groups)
+            "no_primary_role" -> context.getString(R.string.selected_no_candidates) + "\n" + context.getString(R.string.selected_scan_no_primary_role)
+            "primary_rows_all_rejected" -> context.getString(R.string.selected_primary_all_rejected)
+            else -> null
+        }?.let {
+            it + "\n" + context.getString(R.string.selected_scan_native_issue, native.firstIssue ?: "none") +
+                "\n" + context.getString(R.string.selected_scan_first_check, ui.primaryRows.firstOrNull { row -> row.rejection != null }?.predicate ?: "none") +
+                "\n" + attemptReference(ui.outcome)
+        }
         choose(context.getString(R.string.selected_primary_title), groups.map {
             Row((if (it.group.type == 129) context.getString(R.string.selected_role_standalone_patch) + "\n" else "") + label(it.group), it.rejection)
-        }) { index ->
+        }, message) { index ->
             val programs = catalog.programs(groups[index].group.id)
             choose(context.getString(R.string.selected_program_title), programs.map { Row(label(it), it.rejection) }) { program ->
                 update(catalog, requireNotNull(programs[program].program.choice))

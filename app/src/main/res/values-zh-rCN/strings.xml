@@ -411,4 +411,11 @@
     <string name="selected_reason_program">不可用：确切的 Program ID 或索引未知。</string>
     <string name="selected_reason_unsupported">不可用：不支持此元数据或内容格式。</string>
     <string name="selected_invalid_launch">明确选择的 NSP 内容无效或不可用。未回退到普通启动。</string>
+    <string name="selected_scan_no_groups">本次扫描未返回 CNMT 组。</string>
+    <string name="selected_scan_no_primary_role">已扫描的组中没有 Application 或 Patch 角色。</string>
+    <string name="selected_primary_all_rejected">所有 Application 和 Patch 行均未通过当前严格检查。禁用行及其原因仍予以保留。</string>
+    <string name="selected_scan_attempt_reference">结果：%1$s · 扫描编号 %2$s</string>
+    <string name="selected_scan_fixed_reason">原因代码：%1$s</string>
+    <string name="selected_scan_native_issue">首个原生问题：%1$s</string>
+    <string name="selected_scan_first_check">首个选择检查：%1$s</string>
 </resources>

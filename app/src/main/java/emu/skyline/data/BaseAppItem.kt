@@ -70,7 +70,7 @@ open class BaseAppItem(private val meta : AppEntry, val enabled: Boolean = false
 
     val loaderResult get() = meta.loaderResult
 
-    fun loaderResultString(context : Context) = context.getString(
+    internal fun loaderResultResource() =
         when (meta.loaderResult) {
             LoaderResult.Success -> R.string.metadata_missing
 
@@ -84,7 +84,7 @@ open class BaseAppItem(private val meta : AppEntry, val enabled: Boolean = false
             LoaderResult.ErrorSparseNCA -> R.string.error_sparse_nca
             LoaderResult.ErrorCompressedNCA -> R.string.error_compressed_nca
         }
-    )
+    fun loaderResultString(context : Context) = context.getString(loaderResultResource())
 
     /**
      * The name and author is used as the key

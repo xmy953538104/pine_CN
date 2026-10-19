@@ -164,7 +164,7 @@ class AppDialog : BottomSheetDialogFragment() {
 
         binding.gameIcon.setImageBitmap(item.bitmapIcon)
         binding.gameTitle.text = item.title
-        binding.gameVersion.text = (item as AppItem).getVersion() ?: item.loaderResultString(requireContext())
+        binding.gameVersion.text = emu.skyline.diagnostics.appDetailsVersion(requireContext(), item, (item as AppItem).getVersion())
         binding.gameTitleId.text = item.titleId
         binding.gameAuthor.text = item.author
 

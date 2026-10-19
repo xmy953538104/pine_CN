@@ -309,4 +309,9 @@ object Diagnostics {
         Status(true, values[0] != 0L, values[1], values[2], values[3])
     }.getOrDefault(Status(false))
     fun isActive() = active
+    /** Memory-only capture. OFF must not consult session markers or create a writer. */
+    @Synchronized internal fun selectedScanSession(): SelectedScanSession? =
+        if (active && processScope == "main" && sessionId.isNotEmpty()) SelectedScanSession(sessionId) else null
+    @Synchronized internal fun selectedScanSessionMatches(expected: SelectedScanSession): Boolean =
+        active && processScope == "main" && sessionId == expected.id
 }

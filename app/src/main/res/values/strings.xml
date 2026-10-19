@@ -412,4 +412,11 @@
     <string name="selected_reason_program">Unavailable: exact Program ID and index are unknown.</string>
     <string name="selected_reason_unsupported">Unavailable: this metadata or content profile is unsupported.</string>
     <string name="selected_invalid_launch">The explicit NSP selection is invalid or unavailable. No ordinary playback fallback was used.</string>
+    <string name="selected_scan_no_groups">The scan returned no CNMT groups.</string>
+    <string name="selected_scan_no_primary_role">The scanned groups contain no Application or Patch role.</string>
+    <string name="selected_primary_all_rejected">All Application and Patch rows are unavailable under the current strict checks. Their disabled rows and reasons are retained.</string>
+    <string name="selected_scan_attempt_reference">Result: %1$s · attempt %2$s</string>
+    <string name="selected_scan_fixed_reason">Reason code: %1$s</string>
+    <string name="selected_scan_native_issue">First native issue: %1$s</string>
+    <string name="selected_scan_first_check">First selection check: %1$s</string>
 </resources>

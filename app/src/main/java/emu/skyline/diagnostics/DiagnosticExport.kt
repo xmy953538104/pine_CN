@@ -18,7 +18,12 @@ import java.util.zip.ZipOutputStream
 object DiagnosticExport {
     private const val MAX_CRITICAL_BYTES = 64 * 1024
     private val criticalName = Regex("(?:^|/)(?:critical-state|critical-state-[1-7])\\.jsonl$")
-    private fun fileLimit(name: String) = if (criticalName.containsMatchIn(name)) MAX_CRITICAL_BYTES else MAX_FILE_BYTES
+    private val selectedScanName = Regex("(?:^|/)selected-scan-[01]\\.jsonl$")
+    private fun fileLimit(name: String) = when {
+        selectedScanName.containsMatchIn(name) -> SelectedScanRecord.MaxFileBytes
+        criticalName.containsMatchIn(name) -> MAX_CRITICAL_BYTES
+        else -> MAX_FILE_BYTES
+    }
     const val MAX_FILE_BYTES = 8 * 1024 * 1024
     const val MAX_SNAPSHOT_BYTES = 40 * 1024 * 1024
     const val MAX_METADATA_BYTES = 1024 * 1024
@@ -30,7 +35,7 @@ object DiagnosticExport {
     private val sensitiveName = Regex("(?i)(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)")
     private val credentialLine = Regex("(?i)(?:prod\\.keys|title\\.keys|\\b(?:password|passwd|(?:access[_-]?|refresh[_-]?|auth[_-]?)?token|secret|credential|ticket|authorization|api[_-]?key|private[_-]?key|cookie)\\b[\\s=:])")
     private val snapshotId = Regex("snapshot-[0-9a-f-]{36}")
-    private val names = (listOf("emulation/", "main/", "").flatMap { scope ->
+    private val names = (SelectedScanRecord.names + listOf("emulation/", "main/", "").flatMap { scope ->
         listOf("${scope}critical-state.jsonl") + (1..7).map { "${scope}critical-state-$it.jsonl" } +
             (0..7).map { "${scope}diagnostics-$it.jsonl" }
     } + "emulation.log")
@@ -238,7 +243,8 @@ object DiagnosticExport {
                         val destination = snapshot.file(name)
                         check(destination.parentFile!!.isDirectory || destination.parentFile!!.mkdirs())
                         destination.outputStream().buffered().use { output ->
-                            copy(channel, length, output, name.endsWith(".jsonl"), summary)
+                            copy(channel, length, output, name.endsWith(".jsonl"), summary,
+                                fileLimit(name), name in SelectedScanRecord.names)
                         }
                     }
                 }
@@ -253,7 +259,8 @@ object DiagnosticExport {
         }
     }
 
-    private fun copy(channel: FileChannel, length: Long, output: OutputStream, structured: Boolean, summary: Summary) {
+    private fun copy(channel: FileChannel, length: Long, output: OutputStream, structured: Boolean, summary: Summary,
+        fileByteLimit: Int, selectedScan: Boolean) {
         val line = ByteArrayOutputStream()
         var oversized = false
         var remaining = length
@@ -263,7 +270,7 @@ object DiagnosticExport {
         fun writeLine(text: String, newline: Boolean) {
             val bytes = text.toByteArray(Charsets.UTF_8)
             val size = bytes.size + if (newline) 1 else 0
-            if (size + written > MAX_FILE_BYTES) {
+            if (size + written > fileByteLimit) {
                 summary.exportLimit++; summary.fileLimit++
             } else if (size > summary.remainingBytes) {
                 summary.exportLimit++; summary.snapshotLimit++
@@ -279,7 +286,8 @@ object DiagnosticExport {
             else if (structured) {
                 if (!complete) summary.incomplete++
                 else if (line.size() != 0) {
-                    val record = runCatching { json.parseToJsonElement(line.toString("UTF-8")) as? JsonObject }.getOrNull()
+                    val record = if (selectedScan) SelectedScanRecord.parseLine(line.toString("UTF-8")) else
+                        runCatching { json.parseToJsonElement(line.toString("UTF-8")) as? JsonObject }.getOrNull()
                     if (record == null) summary.malformed++
                     else if (summary.accept(record)) {
                         val safe = redactJson(record)
@@ -300,7 +308,7 @@ object DiagnosticExport {
             for (index in 0 until count) {
                 val byte = chunk[index]
                 if (byte == '\n'.code.toByte()) finishLine(true)
-                else if (line.size() < MAX_RECORD_BYTES) line.write(byte.toInt())
+                else if (line.size() < (if (selectedScan) SelectedScanRecord.MaxRecordBytes - 1 else MAX_RECORD_BYTES)) line.write(byte.toInt())
                 else oversized = true
             }
         }
@@ -309,6 +317,8 @@ object DiagnosticExport {
     }
 
     private class Summary(private val byteBudget: Long) {
+        private fun recordSequence(record: JsonObject): Long? =
+            (record[if ((record["record_kind"] as? JsonPrimitive)?.contentOrNull == "selected_scan_report") "report_sequence" else "sequence"] as? JsonPrimitive)?.longOrNull
         var remainingBytes = byteBudget
         var records = 0L
         var malformed = 0L
@@ -356,7 +366,7 @@ object DiagnosticExport {
                 historicalDuplicates++; return false
             }
             val session = (record["session_id"] as? JsonPrimitive)?.contentOrNull
-            val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull
+            val sequence = recordSequence(record)
             if (session != null && session.length <= 128 && sequence != null) {
                 val identity = Triple(session, (record["record_kind"] as? JsonPrimitive)?.contentOrNull ?: "event", sequence)
                 if (identity in identities) { duplicates++; return false }
@@ -370,7 +380,7 @@ object DiagnosticExport {
             val event = (record["event"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(96)
             val level = (record["level"] as? JsonPrimitive)?.contentOrNull
             val stage = (record["last_stage"] as? JsonPrimitive)?.contentOrNull
-            val sequence = (record["sequence"] as? JsonPrimitive)?.longOrNull ?: -1L
+            val sequence = recordSequence(record) ?: -1L
             if (session.isNotEmpty() && sequence >= 0) {
                 if (identities.size < MAX_IDENTITIES) identities.add(Triple(session, (record["record_kind"] as? JsonPrimitive)?.contentOrNull ?: "event", sequence)) else dedupLimit = true
             }
@@ -440,7 +450,7 @@ object DiagnosticExport {
             appendLine("snapshot=bounded live snapshot; files may span sessions; queued events are not flushed")
             appendLine("snapshot_log_byte_budget=$byteBudget")
             appendLine("snapshot_exported_log_bytes=${byteBudget - remainingBytes}")
-            appendLine("snapshot_priority=emulation, main, legacy, emulation.log")
+            appendLine("snapshot_priority=selected-scan, emulation, main, legacy, emulation.log")
             appendLine("snapshot_rotation=opened file descriptors; duplicate session/sequence records omitted; concurrent rotation may omit records")
             appendLine("exported_records=$records")
             appendLine("exported_critical_state_records=$criticalSnapshots")

@@ -15,6 +15,13 @@ import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import emu.skyline.R
+import emu.skyline.diagnostics.Diagnostics
+import emu.skyline.diagnostics.SelectedScanReports
+import emu.skyline.diagnostics.SelectedScanReportsTest
+import kotlinx.serialization.json.*
+import java.io.File
+import org.junit.Before
+import org.junit.After
 import emu.skyline.emulation.SelectedContentLaunchTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -35,20 +42,35 @@ import java.util.concurrent.TimeUnit
 /** UI lifecycle tests use an explicitly substituted native preview return. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, manifest = Config.NONE, sdk = [29],
-    instrumentedPackages = ["emu.skyline.loader"],
-    shadows = [SelectedContentPickerTest.NativePreviewShadow::class, SelectedContentLaunchTest.PreviewDescriptorShadow::class])
+    instrumentedPackages = ["emu.skyline.loader", "emu.skyline.diagnostics.Diagnostics"],
+    shadows = [SelectedContentPickerTest.NativePreviewShadow::class, SelectedContentLaunchTest.PreviewDescriptorShadow::class, SelectedScanReportsTest.NativeDiagnostics::class])
 class SelectedContentPickerTest {
     @Implements(SelectedContentBridge::class, isInAndroidSdk = false)
     class NativePreviewShadow {
         companion object {
             var inspect: (Int, String, String) -> String = { _, _, _ -> error("No preview expected") }
-            @JvmStatic @Implementation fun inspect(romFd: Int, privateFilesPath: String, profile: String) =
+            @JvmStatic @Implementation fun inspectObserved(romFd: Int, privateFilesPath: String, profile: String) =
                 inspect.invoke(romFd, privateFilesPath, profile)
         }
     }
 
     class HostFragment : Fragment() {
         override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View = FrameLayout(requireContext())
+    }
+
+    @Before fun diagnostics() {
+        val app = RuntimeEnvironment.getApplication()
+        Diagnostics.finishSession(); SelectedScanReports.awaitIdle()
+        File(app.filesDir, "diagnostics").deleteRecursively()
+        Diagnostics.preferences(app).edit().clear().putBoolean("enabled", true).commit()
+        Diagnostics.apply(app)
+    }
+    @After fun closeDiagnostics() { Diagnostics.finishSession(); SelectedScanReports.awaitIdle() }
+    private fun persisted(): List<JsonObject> {
+        assertTrue(SelectedScanReports.awaitIdle())
+        val dir = File(RuntimeEnvironment.getApplication().filesDir, "diagnostics/main")
+        return (0..1).flatMap { index -> val file = File(dir, "selected-scan-$index.jsonl")
+            if (file.exists()) file.readLines().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject } else emptyList() }
     }
 
     private fun latest() = ShadowDialog.getLatestDialog() as AlertDialog
@@ -85,6 +107,46 @@ class SelectedContentPickerTest {
 
     @Test fun destroyedViewSuppressesLateResultAndClosesFdAfterSynchronousInspectionReturns() = pendingScan(true)
 
+    @Test fun allRejectedRowsRemainAttachedVisibleDisabledAndInCatalogOrder() {
+        val file = Files.createTempFile("selected-disabled-rows", ".bin").toFile()
+        val controller = Robolectric.buildActivity(FragmentActivity::class.java)
+        controller.get().setTheme(R.style.AppTheme); controller.setup()
+        val fragment = HostFragment()
+        controller.get().supportFragmentManager.beginTransaction().add(android.R.id.content, fragment).commitNow()
+        val raw = SelectedPreviewFixture.json()
+        val groups = raw.getValue("groups").jsonArray
+        val aocs = groups.filter { it.jsonObject.getValue("type").jsonPrimitive.int == 130 }
+        fun disabled(type: Int) = groups.single { it.jsonObject.getValue("type").jsonPrimitive.int == type }.jsonObject.let {
+            JsonObject(it + ("cnmt_trailer_digest_observation" to JsonPrimitive("mismatch")))
+        }
+        val catalog = JsonObject(raw + ("groups" to JsonArray(listOf(aocs[0], disabled(129), aocs[1], disabled(128)))))
+        val provider = SelectedContentLaunchTest.PreviewProvider().apply {
+            this.file = file; attachInfo(RuntimeEnvironment.getApplication(), ProviderInfo().apply { authority = "selected-synthetic" })
+            ShadowContentResolver.registerProviderInternal("selected-synthetic", this)
+        }
+        var entered = false
+        NativePreviewShadow.inspect = { _, _, _ -> entered = true; SelectedScanTestFixture.envelope(catalog) }
+        try {
+            SelectedContentPicker(fragment, Uri.parse("content://selected-synthetic/container"), { fail("disabled launch") }, {}).show()
+            latest().listView.performItemClick(null, 0, 0)
+            drainUntil { entered && latest().listView?.adapter?.count == 2 && !latest().listView.adapter.isEnabled(0) }
+            val list = latest().listView
+            assertNotNull(list.parent); assertTrue(list.isShown)
+            assertFalse(list.adapter.isEnabled(0)); assertFalse(list.adapter.isEnabled(1))
+            assertTrue(list.adapter.getItem(0).toString().contains(disabled(129).getValue("id").jsonPrimitive.content))
+            assertTrue(list.adapter.getItem(1).toString().contains(disabled(128).getValue("id").jsonPrimitive.content))
+            assertTrue(provider.opened.all(::closed))
+            val report = persisted().single().getValue("fields").jsonObject
+            assertEquals("completed", report.getValue("terminal_status").jsonPrimitive.content)
+            assertEquals("primary_rows_all_rejected", report.getValue("ui_outcome").jsonPrimitive.content)
+            assertEquals("selected_primary_all_rejected", report.getValue("ui_resource_name").jsonPrimitive.content)
+            assertEquals(listOf(1, 3), report.getValue("primary_rows").jsonArray.map { it.jsonObject.getValue("ordinal").jsonPrimitive.int })
+            assertEquals("cnmt_digest_not_verified", report.getValue("first_rejection_predicate").jsonPrimitive.content)
+            latest().cancel(); shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(1, persisted().size)
+        } finally { controller.pause().stop().destroy(); file.delete() }
+    }
+
     private fun pendingScan(destroyView: Boolean) {
         val file = Files.createTempFile("selected-picker", ".bin").toFile()
         val controller = Robolectric.buildActivity(FragmentActivity::class.java)
@@ -103,7 +165,7 @@ class SelectedContentPickerTest {
             assertEquals(314, fd); assertEquals("modern-40", profile)
             entered.countDown()
             check(returnPreview.await(5, TimeUnit.SECONDS)) { "synthetic_preview_deadline" }
-            SelectedPreviewFixture.text()
+            SelectedScanTestFixture.envelope()
         }
         try {
             SelectedContentPicker(fragment, Uri.parse("content://selected-synthetic/container"), { launched++ }, { finished++ }).show()
@@ -119,6 +181,10 @@ class SelectedContentPickerTest {
             drainUntil { finished == 1 }
             assertTrue(provider.opened.all(::closed)); assertEquals(0, launched)
             assertFalse(latest().isShowing)
+            val report = persisted().single().getValue("fields").jsonObject
+            assertEquals("cancelled", report.getValue("terminal_status").jsonPrimitive.content)
+            assertEquals(if (destroyView) "view_destroyed" else "user_cancelled", report.getValue("failure_code").jsonPrimitive.content)
+            assertEquals(JsonNull, report.getValue("native_report"))
         } finally {
             returnPreview.countDown()
             controller.pause().stop().destroy()

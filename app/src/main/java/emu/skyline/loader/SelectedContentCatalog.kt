@@ -28,66 +28,120 @@ data class SelectedCatalogGroup(val id: String, val titleId: String?, val versio
 }
 
 data class SelectedProgramCandidate(val group: SelectedCatalogGroup, val program: SelectedCatalogProgram,
-                                     val rejection: SelectedRejection?)
-data class SelectedGroupCandidate(val group: SelectedCatalogGroup, val rejection: SelectedRejection?)
+                                     val rejection: SelectedRejection?, val predicate: String? = null)
+data class SelectedGroupCandidate(val group: SelectedCatalogGroup, val rejection: SelectedRejection?, val predicate: String? = null,
+    val ordinal: Int = -1)
 
 /** Metadata observations are candidates, never successful launch/signature/hash verification. */
 class SelectedContentCatalog private constructor(val profile: SelectedContentProfile,
     val groups: List<SelectedCatalogGroup>, val ncas: Map<String, SelectedCatalogNca>,
     val complete: Boolean, val nativeInspector: Boolean) {
 
-    private fun groupRejection(group: SelectedCatalogGroup): SelectedRejection? {
-        if (!complete || !nativeInspector) return SelectedRejection.IncompleteCatalog
-        if (group.type !in setOf(128, 129, 130)) return SelectedRejection.UnknownRole
-        if (group.parsing != "parsed" || group.titleId == null || group.titleId.all { it == '0' } || group.version == null || group.digest != "verified" ||
-            group.installType != 0 || group.platform != 0 || group.attributes != 0 || group.storageId == null || group.storageId !in 0..6 ||
-            group.committed == null || group.committed !in 0..1 || group.extendedData != "none" ||
-            (group.type != 128 && (group.applicationId == null || group.applicationId.all { it == '0' }))) return SelectedRejection.InvalidMetadata
-        if (group.issues.any { it in setOf("metadata_ambiguity", "duplicate_content_reference") } ||
-            group.programs.map { it.idOffset }.distinct().size != group.programs.size) return SelectedRejection.Ambiguous
-        if (!group.metaReferencesResolved || group.references.isEmpty()) return SelectedRejection.MissingContent
+    private data class Decision(val rejection: SelectedRejection, val predicate: String)
+
+    // Each predicate is recorded at its original short-circuit decision point.
+    // The order and returned eligibility remain the selection policy.
+    private fun groupDecision(group: SelectedCatalogGroup): Decision? {
+        fun reject(reason: SelectedRejection, predicate: String) = Decision(reason, predicate)
+        if (!complete) return reject(SelectedRejection.IncompleteCatalog, "catalog_incomplete")
+        if (!nativeInspector) return reject(SelectedRejection.IncompleteCatalog, "native_inspector_required")
+        if (group.type !in setOf(128, 129, 130)) return reject(SelectedRejection.UnknownRole, "unsupported_group_role")
+        val metadata = when {
+            group.parsing != "parsed" -> "group_not_parsed"
+            group.titleId == null -> "title_id_missing"
+            group.titleId.all { it == '0' } -> "title_id_zero"
+            group.version == null -> "version_missing"
+            group.digest != "verified" -> "cnmt_digest_not_verified"
+            group.installType != 0 -> "install_type_not_full"
+            group.platform != 0 -> "platform_unsupported"
+            group.attributes != 0 -> "group_attributes_unsupported"
+            group.storageId == null || group.storageId !in 0..6 -> "storage_id_unknown"
+            group.committed == null || group.committed !in 0..1 -> "committed_unknown"
+            group.extendedData != "none" -> "extended_data_unsupported"
+            group.type != 128 && (group.applicationId == null || group.applicationId.all { it == '0' }) -> "explicit_parent_missing"
+            else -> null
+        }
+        if (metadata != null) return reject(SelectedRejection.InvalidMetadata, metadata)
+        if (group.issues.any { it in setOf("metadata_ambiguity", "duplicate_content_reference") })
+            return reject(SelectedRejection.Ambiguous, "metadata_or_reference_ambiguous")
+        if (group.programs.map { it.idOffset }.distinct().size != group.programs.size)
+            return reject(SelectedRejection.Ambiguous, "duplicate_program_offset")
+        if (!group.metaReferencesResolved) return reject(SelectedRejection.MissingContent, "meta_reference_unresolved")
+        if (group.references.isEmpty()) return reject(SelectedRejection.MissingContent, "content_table_empty")
         for (reference in group.references) {
-            if (reference.candidates.size != 1 || reference.member != reference.candidates.singleOrNull() ||
-                reference.consistency != "consistent" || reference.size == null || reference.size != reference.actualSize)
-                return SelectedRejection.MissingContent
-            val nca = ncas[reference.member] ?: return SelectedRejection.MissingContent
-            if (nca.issues.contains("duplicate_content_id")) return SelectedRejection.Ambiguous
-            if (nca.sections.any { it.requiresBase }) return SelectedRejection.BktrUnsupported
+            val missing = when {
+                reference.candidates.size != 1 -> "reference_candidate_count"
+                reference.member != reference.candidates.singleOrNull() -> "reference_member_mismatch"
+                reference.consistency != "consistent" -> "reference_inconsistent"
+                reference.size == null -> "reference_size_missing"
+                reference.size != reference.actualSize -> "reference_size_mismatch"
+                else -> null
+            }
+            if (missing != null) return reject(SelectedRejection.MissingContent, missing)
+            val nca = ncas[reference.member] ?: return reject(SelectedRejection.MissingContent, "referenced_member_missing")
+            if (nca.issues.contains("duplicate_content_id")) return reject(SelectedRejection.Ambiguous, "duplicate_content_id")
+            if (nca.sections.any { it.requiresBase }) return reject(SelectedRejection.BktrUnsupported, "section_requires_base")
             val expectedType = listOf(1, 0, 4, 2, 3, 3).getOrNull(reference.type)
-                ?: return SelectedRejection.UnsupportedContent
+                ?: return reject(SelectedRejection.UnsupportedContent, "content_type_unsupported")
             val publicData = reference.type == 2 && reference.actualType == 5
-            if ((!publicData && reference.actualType != expectedType) || reference.actualType != nca.type || nca.size != reference.size ||
-                nca.support != "metadata_readable" || reference.attributes?.let { it != 0 } == true ||
-                (profile == SelectedContentProfile.Modern40 && reference.attributes == null) || reference.contentId.all { it == '0' } ||
-                reference.hashVerification !in setOf("unverified", "verified") ||
-                nca.sections.any { it.sparse || it.compressed || it.encryptionType !in setOf(1, 3) })
-                return SelectedRejection.UnsupportedContent
+            val unsupported = when {
+                !publicData && reference.actualType != expectedType -> "reference_nca_type_mismatch"
+                reference.actualType != nca.type -> "member_nca_type_mismatch"
+                nca.size != reference.size -> "member_size_mismatch"
+                nca.support != "metadata_readable" -> "member_not_metadata_readable"
+                reference.attributes?.let { it != 0 } == true -> "content_attributes_unsupported"
+                profile == SelectedContentProfile.Modern40 && reference.attributes == null -> "content_attributes_missing"
+                reference.contentId.all { it == '0' } -> "content_id_zero"
+                reference.hashVerification !in setOf("unverified", "verified") -> "content_hash_state_unsupported"
+                else -> null
+            }
+            if (unsupported != null) return reject(SelectedRejection.UnsupportedContent, unsupported)
+            for (section in nca.sections) {
+                val predicate = when {
+                    section.sparse -> "sparse_section"
+                    section.compressed -> "compressed_section"
+                    section.encryptionType !in setOf(1, 3) -> "section_encryption_unsupported"
+                    else -> null
+                }
+                if (predicate != null) return reject(SelectedRejection.UnsupportedContent, predicate)
+            }
         }
         if (group.type == 130) {
             val data = group.references.singleOrNull()
-            if (data?.type != 2 || data.actualType != 5 || ncas[data.member]?.programId != group.titleId ||
-                group.applicationId == null || group.dataPatchId?.any { it != '0' } == true)
-                return SelectedRejection.PublicDataRequired
-        } else if (group.references.count { it.type == 3 } != 1) return SelectedRejection.ControlRequired
+            val predicate = when {
+                data?.type != 2 -> "aoc_data_reference_not_unique"
+                data.actualType != 5 -> "aoc_public_data_required"
+                ncas[data.member]?.programId != group.titleId -> "aoc_data_id_mismatch"
+                group.applicationId == null -> "aoc_parent_missing"
+                group.dataPatchId?.any { it != '0' } == true -> "aoc_data_patch_unsupported"
+                else -> null
+            }
+            if (predicate != null) return reject(SelectedRejection.PublicDataRequired, predicate)
+        } else if (group.references.count { it.type == 3 } != 1) return reject(SelectedRejection.ControlRequired, "control_not_unique")
         return null
     }
 
-    fun primaryGroups(): List<SelectedGroupCandidate> = groups.filter { it.type == 128 || it.type == 129 }
-        .map { SelectedGroupCandidate(it, groupRejection(it) ?: if (it.programs.isEmpty()) SelectedRejection.ProgramIdentityUnknown else null) }
+    fun primaryGroups(): List<SelectedGroupCandidate> = groups.mapIndexedNotNull { ordinal, group ->
+        if (group.type != 128 && group.type != 129) return@mapIndexedNotNull null
+        val decision = groupDecision(group) ?: if (group.programs.isEmpty()) Decision(SelectedRejection.ProgramIdentityUnknown, "program_table_empty") else null
+        SelectedGroupCandidate(group, decision?.rejection, decision?.predicate, ordinal)
+    }
 
     fun programs(groupId: String): List<SelectedProgramCandidate> {
         val group = requireNotNull(groups.singleOrNull { it.id == groupId }) { "selected_group_not_available" }
         return group.programs.map { program ->
             val reference = group.references.singleOrNull { it.type == 1 && it.contentId == program.contentId && it.idOffset == program.idOffset }
             val nca = reference?.member?.let(ncas::get)
-            val rejection = groupRejection(group) ?: when {
-                program.requiresBase -> SelectedRejection.BktrUnsupported
-                program.choice == null || nca == null || nca.programId != program.choice.programId -> SelectedRejection.ProgramIdentityUnknown
-                // ExeFS/NPDM names and RomFS bodies still require native launch preflight.
-                nca.sections.none { it.fsType == 1 && it.hashType == 2 } || nca.sections.count { it.fsType == 0 && it.hashType == 3 } != 1 -> SelectedRejection.UnsupportedContent
+            val decision = groupDecision(group) ?: when {
+                program.requiresBase -> Decision(SelectedRejection.BktrUnsupported, "program_requires_base")
+                program.choice == null -> Decision(SelectedRejection.ProgramIdentityUnknown, "program_identity_unknown")
+                nca == null -> Decision(SelectedRejection.ProgramIdentityUnknown, "program_member_missing")
+                nca.programId != program.choice.programId -> Decision(SelectedRejection.ProgramIdentityUnknown, "program_id_mismatch")
+                nca.sections.none { it.fsType == 1 && it.hashType == 2 } -> Decision(SelectedRejection.UnsupportedContent, "program_exefs_section_missing")
+                nca.sections.count { it.fsType == 0 && it.hashType == 3 } != 1 -> Decision(SelectedRejection.UnsupportedContent, "program_romfs_not_unique")
                 else -> null
             }
-            SelectedProgramCandidate(group, program, rejection)
+            SelectedProgramCandidate(group, program, decision?.rejection, decision?.predicate)
         }
     }
 
@@ -99,19 +153,23 @@ class SelectedContentCatalog private constructor(val profile: SelectedContentPro
         val base = requirePrimary(primary)
         if (base.group.type != 128) return emptyList()
         return groups.filter { it.type == 129 }.flatMap { programs(it.id) }.map { candidate ->
-            candidate.copy(rejection = candidate.rejection ?: when {
-                candidate.group.applicationId != base.group.titleId ||
-                    base.group.patchId?.let { id -> id.any { it != '0' } && id != candidate.group.titleId } == true -> SelectedRejection.ParentMismatch
-                candidate.program.choice?.index != primary.index || candidate.program.choice?.programId != primary.programId -> SelectedRejection.UpdateIdentityMismatch
+            val decision = when {
+                candidate.rejection != null -> null
+                candidate.group.applicationId != base.group.titleId -> Decision(SelectedRejection.ParentMismatch, "patch_parent_mismatch")
+                base.group.patchId?.let { id -> id.any { it != '0' } && id != candidate.group.titleId } == true -> Decision(SelectedRejection.ParentMismatch, "application_patch_id_mismatch")
+                candidate.program.choice?.index != primary.index -> Decision(SelectedRejection.UpdateIdentityMismatch, "update_program_index_mismatch")
+                candidate.program.choice?.programId != primary.programId -> Decision(SelectedRejection.UpdateIdentityMismatch, "update_program_id_mismatch")
                 else -> null
-            })
+            }
+            if (decision == null) candidate else candidate.copy(rejection = decision.rejection, predicate = decision.predicate)
         }
     }
 
     fun addOns(primary: SelectedProgramChoice): List<SelectedGroupCandidate> {
         val parent = requirePrimary(primary).group.applicationTarget
         return groups.filter { it.type == 130 }.map { group ->
-            SelectedGroupCandidate(group, groupRejection(group) ?: if (group.applicationId != parent) SelectedRejection.ParentMismatch else null)
+            val decision = groupDecision(group) ?: if (group.applicationId != parent) Decision(SelectedRejection.ParentMismatch, "aoc_parent_mismatch") else null
+            SelectedGroupCandidate(group, decision?.rejection, decision?.predicate, groups.indexOf(group))
         }
     }
 

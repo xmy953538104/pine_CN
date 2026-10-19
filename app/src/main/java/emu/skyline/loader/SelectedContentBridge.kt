@@ -5,4 +5,5 @@ package emu.skyline.loader
 object SelectedContentBridge {
     @JvmStatic external fun isAvailable(): Boolean
     @JvmStatic external fun inspect(romFd: Int, privateFilesPath: String, profile: String): String
+    @JvmStatic external fun inspectObserved(romFd: Int, privateFilesPath: String, profile: String): String
 }

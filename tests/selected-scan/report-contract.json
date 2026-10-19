@@ -1,0 +1,271 @@
+{
+  "contract_version": 1,
+  "max_report_bytes": 16384,
+  "max_combined_groups_members": 32,
+  "max_issue_codes_per_array": 8,
+  "max_count": 2147483647,
+  "max_time_us": 9223372036854775807,
+  "summary_priority": "groups_then_members_with_12288_byte_total_row_budget",
+  "phase_stages": [
+    "profile_validation",
+    "keystore_load",
+    "fd_duplicate",
+    "catalog_scan",
+    "catalog_serialize"
+  ],
+  "phase_statuses": [
+    "begun",
+    "completed",
+    "failed"
+  ],
+  "report_statuses": [
+    "completed",
+    "failed"
+  ],
+  "roles": [
+    "application",
+    "patch",
+    "aoc",
+    "other"
+  ],
+  "parsing": [
+    "unknown",
+    "parsed",
+    "unsupported",
+    "invalid",
+    "not_inspected"
+  ],
+  "digest_observation": [
+    "unknown",
+    "unverified",
+    "verified",
+    "mismatch"
+  ],
+  "readability": [
+    "unknown",
+    "plaintext_header",
+    "decrypted_header",
+    "encrypted_or_unknown",
+    "unreadable",
+    "not_inspected"
+  ],
+  "support": [
+    "unknown",
+    "metadata_readable",
+    "unsupported",
+    "invalid"
+  ],
+  "code_allowlist": [
+    "ambiguous_content",
+    "aoc_data_runtime_unsupported",
+    "association_budget",
+    "bktr_requires_base",
+    "cnmt_digest_mismatch",
+    "compression_unsupported",
+    "content_attributes_unsupported",
+    "content_info_layout_unknown",
+    "content_size_mismatch",
+    "content_type_mismatch",
+    "data_patch_unsupported",
+    "delta_fragment_unsupported",
+    "delta_unsupported",
+    "duplicate_content_id",
+    "duplicate_content_reference",
+    "duplicate_pfs_name",
+    "encrypted_header_or_unknown_format",
+    "encrypted_section_unsupported",
+    "explicit_parent_ambiguous",
+    "explicit_parent_invalid",
+    "explicit_parent_mismatch",
+    "explicit_parent_missing",
+    "extended_data_unsupported",
+    "hash_budget",
+    "input_changed",
+    "input_fd_duplicate_failed",
+    "input_fd_invalid",
+    "input_fd_not_readable",
+    "input_not_regular",
+    "input_open_failed",
+    "input_read_failed",
+    "install_type_unsupported",
+    "integer_overflow",
+    "invalid_cnmt_length",
+    "invalid_cnmt_reserved",
+    "invalid_integer_width",
+    "invalid_nca_hash_block_size",
+    "invalid_nca_hash_layer_count",
+    "invalid_nca_section_range",
+    "invalid_pfs_name",
+    "invalid_pfs_reserved",
+    "meta_cnmt_unreadable",
+    "meta_has_no_cnmt",
+    "meta_reference_ambiguous",
+    "meta_reference_missing",
+    "metadata_ambiguity",
+    "metadata_hash_unsupported",
+    "missing_aoc_data",
+    "missing_content",
+    "missing_header_key",
+    "missing_key_area",
+    "missing_key_store",
+    "missing_program",
+    "missing_title_kek",
+    "missing_title_key",
+    "multiple_programs",
+    "native_backend_inspection_only",
+    "native_content_type_unsupported",
+    "native_ctr_alignment_unsupported",
+    "native_invalid_header",
+    "native_invalid_ivfc",
+    "native_invalid_ivfc_block_order",
+    "native_invalid_ivfc_reserved",
+    "native_invalid_read_count",
+    "native_ivfc_levels_unsupported",
+    "native_key_area_unsupported",
+    "native_key_generation_unsupported",
+    "native_missing_input",
+    "native_nca_backend_failed",
+    "native_nca_parse_failed",
+    "native_noncontiguous_sections_unsupported",
+    "native_null_backing",
+    "native_null_source",
+    "native_pfs_backing_unavailable",
+    "native_plaintext_unsupported",
+    "native_section_count_unsupported",
+    "native_section_encryption_unsupported",
+    "native_section_not_validated",
+    "native_size_overflow",
+    "native_unreliable_backing",
+    "nca_fs_header_hash_mismatch",
+    "nca_hash_layers_unsupported",
+    "nca_inspector_failed",
+    "nca_no_sections",
+    "nca_section_format_unsupported",
+    "nca_size_mismatch",
+    "other_native_issue",
+    "out_of_range",
+    "overlapping_nca_sections",
+    "overlapping_pfs_entries",
+    "patch_info_unsupported",
+    "patch_parent_mismatch",
+    "romfs_not_validated",
+    "scan_budget",
+    "section_data_hash_not_verified",
+    "selected_content_unavailable",
+    "selected_inspection_failed",
+    "selected_jni_exception",
+    "selected_preview_limit",
+    "selected_private_path_invalid",
+    "selected_private_path_required",
+    "selected_profile_required",
+    "selected_report_limit",
+    "selected_wire_invalid",
+    "selected_wire_limit",
+    "short_read",
+    "sparse_unsupported",
+    "truncated_nca_header",
+    "unclassified_meta_member",
+    "unknown_content_type",
+    "unsupported_cnmt_platform",
+    "unsupported_cnmt_role",
+    "unsupported_distribution_type",
+    "unsupported_extended_header",
+    "unsupported_nca_fs_version",
+    "unsupported_pfs_format"
+  ],
+  "unknown_code": "other_native_issue",
+  "group_optional_fields": {
+    "title_id": "exactly16 lowercase hex from parsed numeric field",
+    "application_id": "exactly16 lowercase hex from parsed explicit numeric field",
+    "cnmt_group_id": "cnmt-sha256: plus64 lowercase hex, only parsed"
+  },
+  "nca_type_range": [
+    0,
+    255
+  ],
+  "example_envelope": {
+    "selected_scan_schema": 1,
+    "status": "completed",
+    "catalog": null,
+    "scan_report": {
+      "schema_version": 1,
+      "status": "completed",
+      "failed_stage": null,
+      "error_code": null,
+      "elapsed_us": 100,
+      "phases": [
+        {
+          "stage": "profile_validation",
+          "start_us": 0,
+          "duration_us": 10,
+          "status": "completed"
+        },
+        {
+          "stage": "keystore_load",
+          "start_us": 10,
+          "duration_us": 10,
+          "status": "completed"
+        },
+        {
+          "stage": "fd_duplicate",
+          "start_us": 20,
+          "duration_us": 10,
+          "status": "completed"
+        },
+        {
+          "stage": "catalog_scan",
+          "start_us": 30,
+          "duration_us": 10,
+          "status": "completed"
+        },
+        {
+          "stage": "catalog_serialize",
+          "start_us": 40,
+          "duration_us": 10,
+          "status": "completed"
+        }
+      ],
+      "catalog_summary": {
+        "bounded_scan_complete": true,
+        "all_metadata_enumerated": false,
+        "nca_count": 1,
+        "group_count": 0,
+        "other_entry_count": 0,
+        "meta_nca_count": 0,
+        "unknown_nca_count": 1,
+        "unreadable_nca_count": 1,
+        "role_counts": {
+          "application": 0,
+          "patch": 0,
+          "aoc": 0,
+          "other": 0
+        },
+        "issue_codes": [
+          "missing_header_key"
+        ],
+        "groups": [],
+        "members": [
+          {
+            "ordinal": 0,
+            "nca_type": null,
+            "readability": "unreadable",
+            "support": "unsupported",
+            "issue_codes": [
+              "missing_header_key"
+            ]
+          }
+        ],
+        "groups_omitted": 0,
+        "members_omitted": 0
+      }
+    }
+  },
+  "notes": [
+    "Example catalog:null is a report-only model fixture, not a completed production envelope. Production completed envelope has existing raw Catalog object transient only.",
+    "Counts clamp to max_count; times clamp to max_time_us. Ordinals are zero-based positions, never catalog member IDs.",
+    "Unknown enum strings map unknown (role maps other); unknown codes map other_native_issue; no exception text is exported.",
+    "Issue array unique first-occurrence order. Summary gathers catalog, then NCA, then group issues.",
+    "Digest mismatch is an observation on an untrusted embedded digest, not authentication or a corruption conclusion.",
+    "OFF inspectObserved throws fixed selected_content_unavailable, preserves pending VM exceptions; no native report source built by default."
+  ]
+}

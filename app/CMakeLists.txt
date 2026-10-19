@@ -149,6 +149,7 @@ add_library(skyline SHARED
         ${source_DIR}/driver_jni.cpp
         ${source_DIR}/emu_jni.cpp
         ${source_DIR}/selected_jni.cpp
+        ${source_DIR}/selected_scan_jni.cpp
         ${source_DIR}/loader_jni.cpp
         ${source_DIR}/skyline/common.cpp
         ${source_DIR}/skyline/common/exception.cpp
@@ -426,6 +427,7 @@ if(PINE_ENABLE_NSP_CATALOG)
         ${source_DIR}/skyline/catalog/catalog.cpp
         ${source_DIR}/skyline/catalog/json.cpp
         ${source_DIR}/skyline/catalog/native_adapter.cpp)
+    target_sources(skyline PRIVATE ${source_DIR}/skyline/catalog/scan_report.cpp)
 endif()
 option(PINE_ENABLE_SELECTED_CONTENT "Compile the explicit selected native content entry" OFF)
 if(PINE_ENABLE_SELECTED_CONTENT)

@@ -26,7 +26,8 @@ def main():
     java_home = Path(os.environ.get("JAVA_HOME", Path(javac).resolve().parents[1]))
     platform = "darwin" if os.uname().sysname == "Darwin" else "linux"
     sources = ["tests/selected/jni_fixture.cpp", "app/src/main/cpp/skyline/catalog/wire.cpp",
-               "app/src/main/cpp/skyline/loader/selected_launch.cpp", "app/src/main/cpp/selected_jni.cpp"]
+               "app/src/main/cpp/skyline/loader/selected_launch.cpp", "app/src/main/cpp/selected_jni.cpp",
+               "app/src/main/cpp/selected_scan_jni.cpp"]
     inputs = sources + ["tests/selected/SelectedJniFixture.java", "app/src/main/cpp/selected_jni.h",
                        "app/src/main/cpp/skyline/loader/selected_launch_jni.h",
                        "app/src/main/cpp/skyline/loader/selected_launch.h", "tools/tests/test-selected-jni.py",

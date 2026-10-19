@@ -6,11 +6,13 @@ import java.util.Arrays;
 class SelectedContentBridge {
     static native boolean isAvailable();
     static native String inspect(int borrowedFd, String privatePath, String profile);
+    static native String inspectObserved(int borrowedFd, String privatePath, String profile);
 }
 
 public final class SelectedJniFixture {
     static native String parse(Object[] fields, int[] indices);
     static native void pending();
+    static native void pendingObserved();
     private static int passed;
 
     private static String[] valid() {
@@ -36,6 +38,12 @@ public final class SelectedJniFixture {
             throw new AssertionError("default-OFF inspect succeeded");
         } catch (IllegalStateException expected) {
             require(expected.getMessage().equals("selected_content_unavailable"), "OFF inspection fails closed");
+        }
+        try {
+            SelectedContentBridge.inspectObserved(-1, "/PRIVATE/not-opened/", "modern-40");
+            throw new AssertionError("default-OFF observed inspect succeeded");
+        } catch (IllegalStateException expected) {
+            require(expected.getMessage().equals("selected_content_unavailable"), "OFF observed inspection fails closed");
         }
         require(parse(valid(), new int[]{0, -1}).equals(
             "application:0100000000001000:" + "cd".repeat(16) + ":0:0"), "actual Java string/int transfer and normalization");
@@ -65,6 +73,10 @@ public final class SelectedJniFixture {
         try { pending(); throw new AssertionError("pending exception cleared"); }
         catch (IllegalStateException expected) {
             require(expected.getMessage().equals("synthetic_pending_exception"), "pending VM exception preserved");
+        }
+        try { pendingObserved(); throw new AssertionError("OFF observed pending exception cleared"); }
+        catch (IllegalStateException expected) {
+            require(expected.getMessage().equals("synthetic_pending_exception"), "OFF observed pending VM exception preserved");
         }
         // -Xcheck:jni observes real local references across repeated calls.
         for (int i = 0; i < 4096; ++i) parse(valid(), new int[]{0, -1});

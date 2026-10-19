@@ -3,6 +3,8 @@
 // pure request validator, never an Android OS, loader tail or guest process.
 #include <loader/selected_launch_jni.h>
 
+extern "C" jstring Java_emu_skyline_loader_SelectedContentBridge_inspectObserved(JNIEnv *, jclass, jint, jstring, jstring);
+
 extern "C" JNIEXPORT jstring JNICALL Java_emu_skyline_loader_SelectedJniFixture_parse(
     JNIEnv *env, jclass, jobjectArray fields, jintArray indices) {
     try {
@@ -26,4 +28,11 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_loader_SelectedJniFixture_pen
     env->DeleteLocalRef(clazz);
     try { (void)skyline::loader::ParseSelectedLaunchJni(env, nullptr, nullptr); }
     catch (const skyline::catalog::Error &) { /* Pending VM exception must survive. */ }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_emu_skyline_loader_SelectedJniFixture_pendingObserved(JNIEnv *env, jclass) {
+    const auto clazz = env->FindClass("java/lang/IllegalStateException");
+    if (!clazz) return;
+    env->ThrowNew(clazz, "synthetic_pending_exception"); env->DeleteLocalRef(clazz);
+    (void)Java_emu_skyline_loader_SelectedContentBridge_inspectObserved(env, nullptr, -1, nullptr, nullptr);
 }

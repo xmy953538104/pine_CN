@@ -1,0 +1,13 @@
+{
+  "baseline_commit": "40419e0e04578a91de00f5709a0cdb4633f81107",
+  "unchanged_sha256": {
+    "app/src/main/cpp/selected_jni.cpp": "6500c6e07a7f84d55638ef4827286b62b5c7cff2d88465065aedb7f252fc3968",
+    "app/src/main/cpp/skyline/catalog/json.cpp": "84e0944f588cd8f43b5f4882942a9ddae2baf0eee651f16423d6719cade82724",
+    "app/src/main/cpp/skyline/catalog/catalog.cpp": "0371df696c365f0f3521d4a9c63846c34e4b874b6368b7faf068bab26c79a7e5",
+    "app/src/main/cpp/skyline/catalog/native_adapter.cpp": "7403b59ad33ffcae921b8e39a23e7cef0aa292799d8ea2aa048d9c41f82120a4",
+    "app/src/main/cpp/skyline/loader/selected_content.cpp": "9eebe8f348162215ca1d904f5afbbbc3bfb97fa426d67490ce36a743f4a2ffd6",
+    "app/src/main/cpp/skyline/loader/selected_validation.cpp": "fe05caa2f61ed2f1d31897296b120b7cc74f355380e2fa54c85f285b66b58943",
+    "app/src/main/cpp/skyline/crypto/key_store.cpp": "549cf0c6d491ccd77f6f7f358fd0c84066d160cd3867f186a740d4573dab71cc",
+    "docs/nsp-catalog-v1.schema.json": "9a454ae3d54d2c24b3f820d4fb5957d0bd7c71d1e63d7257e2223d672db90450"
+  }
+}

@@ -5,6 +5,7 @@ import kotlinx.serialization.json.*
 
 /** Rebuilt safe values only: the transient Catalog/unknown native fields are never retained here. */
 internal class SelectedNativeScanReport private constructor(val safe: JsonObject) {
+    val schemaVersion: Int get() = safe.getValue("schema_version").jsonPrimitive.int
     val status: String get() = safe.getValue("status").jsonPrimitive.content
     val errorCode: String? get() = (safe["error_code"] as? JsonPrimitive)?.contentOrNull
     val firstIssue: String? get() = ((safe["catalog_summary"] as? JsonObject)?.get("issue_codes") as? JsonArray)
@@ -138,16 +139,24 @@ internal class SelectedNativeScanReport private constructor(val safe: JsonObject
         private val support = setOf("unknown", "metadata_readable", "unsupported", "invalid")
         private val publicId = Regex("[0-9a-f]{16}")
         private val groupId = Regex("cnmt-sha256:[0-9a-f]{64}")
+        private val contentId = Regex("[0-9a-f]{32}")
+        private val decimalSize = Regex("0|[1-9][0-9]{0,19}")
+        private val keyStatuses = setOf("not_started", "loading", "loaded", "failed")
+        private val keyPresence = setOf("not_checked", "missing", "present", "check_failed")
+        private val keyReads = setOf("not_attempted", "complete", "short", "failed", "unknown")
+        private val keyLoads = setOf("not_attempted", "skipped", "loaded", "failed")
+        private val keyLookups = setOf("not_observed", "not_required", "matched", "not_matched")
+        private val hashObservations = setOf("not_performed", "not_reported")
 
         fun sanitize(source: JsonObject): SelectedNativeScanReport {
             require(source.toString().toByteArray(Charsets.UTF_8).size <= MaxBytes) { "observed_report_limit" }
-            require(source.scanInt("schema_version") == 1L)
+            val version = source.scanInt("schema_version").also { require(it == 1L || it == 2L) }.toInt()
             val status = source.scanText("status")
             require(status in setOf("completed", "failed"))
             val phases = source.scanArray("phases")
             require(phases.size <= 5)
             val safe = buildJsonObject {
-                put("schema_version", 1); put("status", status)
+                put("schema_version", version); put("status", status)
                 put("failed_stage", source["failed_stage"].scanNullableToken(stages, "unknown"))
                 put("error_code", source["error_code"].scanNullableToken(codes, "other_native_issue"))
                 put("elapsed_us", source.scanInt("elapsed_us"))
@@ -160,18 +169,54 @@ internal class SelectedNativeScanReport private constructor(val safe: JsonObject
                     }
                 }))
                 val summary = source.getValue("catalog_summary")
-                put("catalog_summary", if (summary == JsonNull) JsonNull else sanitizeSummary(summary.scanObject()))
+                put("catalog_summary", if (summary == JsonNull) JsonNull else sanitizeSummary(summary.scanObject(), version))
+                if (version == 2) put("key_state", sanitizeKeyState(source.getValue("key_state").scanObject()))
             }
             require(safe.toString().toByteArray(Charsets.UTF_8).size <= MaxBytes)
             return SelectedNativeScanReport(safe)
         }
 
-        private fun sanitizeSummary(source: JsonObject): JsonObject {
+        private fun sanitizeKeyState(source: JsonObject): JsonObject = buildJsonObject {
+            val status = source.scanExactToken("status", keyStatuses)
+            put("status", status)
+            var incomplete = status != "loaded"
+            listOf("title_keys", "prod_keys").forEach { file ->
+                val state = source.getValue(file).scanObject()
+                val presence = state.scanExactToken("presence", keyPresence)
+                val read = state.scanExactToken("read", keyReads)
+                val load = state.scanExactToken("load", keyLoads)
+                if (status == "not_started") require(presence == "not_checked" && read == "not_attempted" && load == "not_attempted")
+                incomplete = incomplete || presence == "check_failed" || read in setOf("short", "unknown", "failed") || load == "failed"
+                put(file, buildJsonObject {
+                    put("presence", presence); put("read", read); put("load", load)
+                })
+            }
+            listOf("loaded_unique_title_key_count" to Int.MAX_VALUE.toLong(), "recognized_prod_slot_count" to 81L).forEach { (field, max) ->
+                val raw = source.getValue(field)
+                put(field, if (raw == JsonNull) JsonNull else JsonPrimitive(source.scanInt(field).also { require(it <= max) }))
+            }
+            val partial = source.scanBool("counts_partial")
+            require(!incomplete || partial)
+            if (!partial) require(source.getValue("loaded_unique_title_key_count") != JsonNull && source.getValue("recognized_prod_slot_count") != JsonNull)
+            if (status == "not_started") {
+                require(source.getValue("loaded_unique_title_key_count") == JsonNull && source.getValue("recognized_prod_slot_count") == JsonNull && partial)
+            }
+            put("counts_partial", partial)
+        }
+
+        private fun sanitizeSummary(source: JsonObject, version: Int): JsonObject {
             val groups = source.scanArray("groups")
             val members = source.scanArray("members")
             val selectedGroups = groups.take(MaxRows)
             val selectedMembers = members.take(MaxRows - selectedGroups.size)
             return buildJsonObject {
+                if (version == 2) {
+                    put("container_scope", source.scanExactToken("container_scope", setOf("single_container")))
+                    require(!source.scanBool("includes_external_associations"))
+                    put("includes_external_associations", false)
+                    put("container_size_bytes", source.scanSize("container_size_bytes"))
+                    put("full_content_hash", source.scanExactToken("full_content_hash", hashObservations))
+                }
                 put("bounded_scan_complete", source.scanBool("bounded_scan_complete"))
                 put("all_metadata_enumerated", source.scanBool("all_metadata_enumerated"))
                 listOf("nca_count", "group_count", "other_entry_count", "meta_nca_count", "unknown_nca_count", "unreadable_nca_count")
@@ -187,6 +232,7 @@ internal class SelectedNativeScanReport private constructor(val safe: JsonObject
                         put("parsing", parsed); put("digest_observation", group.scanToken("digest_observation", digests))
                         put("issue_codes", issueCodes(group))
                         if (parsed == "parsed") {
+                            if (version == 2 && "version" in group) put("version", group.scanInt("version").also { require(it <= 0xffffffffL) })
                             listOf("title_id", "application_id", "cnmt_group_id").forEach { field ->
                                 val value = (group[field] as? JsonPrimitive)?.takeIf { it.isString }?.content
                                 if (value != null && (if (field == "cnmt_group_id") groupId else publicId).matches(value)) put(field, value)
@@ -202,11 +248,37 @@ internal class SelectedNativeScanReport private constructor(val safe: JsonObject
                         put("nca_type", if (type == JsonNull) JsonNull else JsonPrimitive(member.scanInt("nca_type").also { require(it <= 255) }))
                         put("readability", member.scanToken("readability", readability)); put("support", member.scanToken("support", support))
                         put("issue_codes", issueCodes(member))
+                        if (version == 2) {
+                            put("size_bytes", member.scanSize("size_bytes"))
+                            put("size_source", member.scanExactToken("size_source", setOf("container_member_extent")))
+                            put("container_scope", member.scanExactToken("container_scope", setOf("single_container")))
+                            put("external_lookup", member.scanExactToken("external_lookup", setOf("not_performed")))
+                            put("full_hash_verification", member.scanExactToken("full_hash_verification", hashObservations))
+                            val lookup = member.scanExactToken("title_key_lookup", keyLookups)
+                            val evidence = member.scanExactToken("title_key_lookup_evidence", setOf("read_only_loaded_map_probe", "not_performed"))
+                            require(evidence == if (lookup == "not_observed") "not_performed" else "read_only_loaded_map_probe")
+                            put("title_key_lookup", lookup); put("title_key_lookup_evidence", evidence)
+                            if (type != JsonNull && member.scanInt("nca_type") in setOf(0L, 5L)) {
+                                val hint = (member["content_id_hint"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                                val provenance = (member["content_id_source"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                                if (hint != null && contentId.matches(hint) && provenance == "entry_name_hint") {
+                                    put("content_id_hint", hint); put("content_id_source", "entry_name_hint")
+                                }
+                            }
+                        }
                     }
                 }))
                 put("groups_omitted", minOf(Int.MAX_VALUE.toLong(), source.scanCount("groups_omitted") + groups.size - selectedGroups.size))
                 put("members_omitted", minOf(Int.MAX_VALUE.toLong(), source.scanCount("members_omitted") + members.size - selectedMembers.size))
+            }.also { safe ->
+                if (version == 2) require(listOf("groups", "members").sumOf { field ->
+                    safe.getValue(field).jsonArray.sumOf { row -> row.toString().toByteArray(Charsets.UTF_8).size }
+                } <= 12 * 1024)
             }
+        }
+
+        private fun JsonObject.scanSize(field: String): String = scanText(field).also {
+            require(decimalSize.matches(it) && it.toULongOrNull() != null)
         }
 
         private fun issueCodes(source: JsonObject): JsonArray = JsonArray(source.scanArray("issue_codes").take(8)
@@ -246,6 +318,7 @@ private fun JsonElement.scanObject() = this as? JsonObject ?: throw IllegalArgum
 private fun JsonObject.scanText(key: String): String = (getValue(key) as? JsonPrimitive)?.also { require(it.isString) }?.content
     ?: throw IllegalArgumentException("observed_string")
 private fun JsonObject.scanToken(key: String, allowed: Set<String>, unknown: String = "unknown") = scanText(key).let { if (it in allowed) it else unknown }
+private fun JsonObject.scanExactToken(key: String, allowed: Set<String>) = scanText(key).also { require(it in allowed) }
 private fun JsonElement?.scanNullableToken(allowed: Set<String>, unknown: String): JsonElement =
     if (this == JsonNull) JsonNull else JsonPrimitive((this as? JsonPrimitive)?.takeIf { it.isString }?.content.let { if (it in allowed) it!! else unknown })
 private fun JsonObject.scanInt(key: String): Long = (getValue(key) as? JsonPrimitive)?.also { require(!it.isString) }

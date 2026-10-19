@@ -107,7 +107,29 @@ class SelectedContentPickerTest {
 
     @Test fun destroyedViewSuppressesLateResultAndClosesFdAfterSynchronousInspectionReturns() = pendingScan(true)
 
-    @Test fun allRejectedRowsRemainAttachedVisibleDisabledAndInCatalogOrder() {
+    @Test fun v2CancellationDiscardsLateKeyReportAndKeepsBorrowedFdAlive() = pendingScan(false, true)
+
+    @Test fun v2ViewDestructionDiscardsLateKeyReportAndKeepsBorrowedFdAlive() = pendingScan(true, true)
+
+    @Test fun allRejectedRowsRemainAttachedVisibleDisabledAndInCatalogOrder() = rejectedRows(false)
+
+    @Test fun v2DetailsPreserveFirstPredicateRowsAndSingleTerminalWhenCancelledAfterReport() = rejectedRows(true)
+
+    @Test fun detailsDistinguishPresentMissingMatchAndUnobservedWithoutClaimingDecryption() {
+        val context = RuntimeEnvironment.getApplication()
+        val missing = SelectedScanDetails.text(context, SelectedNativeScanReport.sanitize(SelectedKeyStateFixture.loadedReport()))!!
+        assertTrue(missing.contains("presence present")); assertTrue(missing.contains(context.getString(R.string.selected_observation_lookup_missing)))
+        assertTrue(missing.contains("4294967295")); assertTrue(missing.contains("single container")); assertTrue(missing.contains("not_performed"))
+        val matched = SelectedScanDetails.text(context, SelectedNativeScanReport.sanitize(SelectedKeyStateFixture.loadedReport("matched")))!!
+        assertTrue(matched.contains(context.getString(R.string.selected_observation_lookup_matched)))
+        assertFalse(matched.contains(context.getString(R.string.selected_observation_lookup_missing)))
+        val unknown = SelectedScanDetails.text(context, SelectedNativeScanReport.sanitize(SelectedKeyStateFixture.report()))!!
+        assertTrue(unknown.contains("not_checked")); assertTrue(unknown.contains(context.getString(R.string.selected_observation_lookup_unknown)))
+        assertTrue(unknown.length <= SelectedScanDetails.MaxTextChars)
+        assertNull(SelectedScanDetails.text(context, SelectedNativeScanReport.sanitize(SelectedScanTestFixture.report())))
+    }
+
+    private fun rejectedRows(v2: Boolean) {
         val file = Files.createTempFile("selected-disabled-rows", ".bin").toFile()
         val controller = Robolectric.buildActivity(FragmentActivity::class.java)
         controller.get().setTheme(R.style.AppTheme); controller.setup()
@@ -125,7 +147,8 @@ class SelectedContentPickerTest {
             ShadowContentResolver.registerProviderInternal("selected-synthetic", this)
         }
         var entered = false
-        NativePreviewShadow.inspect = { _, _, _ -> entered = true; SelectedScanTestFixture.envelope(catalog) }
+        NativePreviewShadow.inspect = { _, _, _ -> entered = true; SelectedScanTestFixture.envelope(catalog,
+            if (v2) SelectedKeyStateFixture.loadedReport() else SelectedScanTestFixture.report()) }
         try {
             SelectedContentPicker(fragment, Uri.parse("content://selected-synthetic/container"), { fail("disabled launch") }, {}).show()
             latest().listView.performItemClick(null, 0, 0)
@@ -142,12 +165,25 @@ class SelectedContentPickerTest {
             assertEquals("selected_primary_all_rejected", report.getValue("ui_resource_name").jsonPrimitive.content)
             assertEquals(listOf(1, 3), report.getValue("primary_rows").jsonArray.map { it.jsonObject.getValue("ordinal").jsonPrimitive.int })
             assertEquals("cnmt_digest_not_verified", report.getValue("first_rejection_predicate").jsonPrimitive.content)
+            if (v2) {
+                val orderedLabels = (0 until list.adapter.count).map { list.adapter.getItem(it).toString() }
+                latest().getButton(AlertDialog.BUTTON_NEUTRAL).performClick(); shadowOf(Looper.getMainLooper()).idle()
+                assertTrue(latest().findViewById<android.widget.TextView>(android.R.id.message)!!.text.toString()
+                    .contains(RuntimeEnvironment.getApplication().getString(R.string.selected_observation_lookup_missing)))
+                latest().getButton(AlertDialog.BUTTON_POSITIVE).performClick(); shadowOf(Looper.getMainLooper()).idle()
+                assertEquals(orderedLabels, (0 until latest().listView.adapter.count).map { latest().listView.adapter.getItem(it).toString() })
+                assertNotNull(latest().listView.parent); assertTrue(latest().listView.isShown)
+                assertFalse(latest().listView.adapter.isEnabled(0)); assertFalse(latest().listView.adapter.isEnabled(1))
+                assertEquals(1, persisted().size)
+                latest().getButton(AlertDialog.BUTTON_NEUTRAL).performClick(); shadowOf(Looper.getMainLooper()).idle()
+            }
             latest().cancel(); shadowOf(Looper.getMainLooper()).idle()
             assertEquals(1, persisted().size)
+            assertEquals("completed", persisted().single().getValue("fields").jsonObject.getValue("terminal_status").jsonPrimitive.content)
         } finally { controller.pause().stop().destroy(); file.delete() }
     }
 
-    private fun pendingScan(destroyView: Boolean) {
+    private fun pendingScan(destroyView: Boolean, v2: Boolean = false) {
         val file = Files.createTempFile("selected-picker", ".bin").toFile()
         val controller = Robolectric.buildActivity(FragmentActivity::class.java)
         controller.get().setTheme(R.style.AppTheme)
@@ -165,7 +201,7 @@ class SelectedContentPickerTest {
             assertEquals(314, fd); assertEquals("modern-40", profile)
             entered.countDown()
             check(returnPreview.await(5, TimeUnit.SECONDS)) { "synthetic_preview_deadline" }
-            SelectedScanTestFixture.envelope()
+            SelectedScanTestFixture.envelope(report = if (v2) SelectedKeyStateFixture.loadedReport() else SelectedScanTestFixture.report())
         }
         try {
             SelectedContentPicker(fragment, Uri.parse("content://selected-synthetic/container"), { launched++ }, { finished++ }).show()

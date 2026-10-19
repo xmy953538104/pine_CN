@@ -419,4 +419,22 @@
     <string name="selected_scan_fixed_reason">Reason code: %1$s</string>
     <string name="selected_scan_native_issue">First native issue: %1$s</string>
     <string name="selected_scan_first_check">First selection check: %1$s</string>
+    <string name="selected_observation_details">Scan observations</string>
+    <string name="selected_observation_back">Back to scan result</string>
+    <string name="selected_observation_summary">Key files: title %1$s (%2$s entries), prod %3$s (%4$s slots). Details are separate from selection checks.</string>
+    <string name="selected_observation_caveat">A present key file does not establish a matching loaded entry. A map match does not prove decryption, authorization, integrity or launch. These observations do not override the first selection rejection.</string>
+    <string name="selected_observation_load">Native key load: %1$s · counts partial: %2$s</string>
+    <string name="selected_observation_title_keys">Title-key file</string>
+    <string name="selected_observation_prod_keys">Production-key file</string>
+    <string name="selected_observation_file">%1$s: presence %2$s · read %3$s · load %4$s</string>
+    <string name="selected_observation_counts">Native parser result: %1$s loaded unique title entries · %2$s recognized prod slots. These are not input-line counts. A loaded result does not validate the entire file or establish usable keys.</string>
+    <string name="selected_observation_scope">Scope: this single container only, %1$s bytes. Associated external Update/DLC files were not scanned. Full-content hash: %2$s.</string>
+    <string name="selected_observation_group">Group #%1$s · %2$s · CNMT version %3$s\nTitle %4$s · digest %5$s</string>
+    <string name="selected_observation_member">Member #%1$s · NCA type %2$s · container extent %3$s bytes\nContent ID hint %4$s (entry-name hint only; not a hash or CNMT association)\nHeader %5$s · support %6$s\n%7$s\nFull-member hash: %8$s</string>
+    <string name="selected_observation_lookup_matched">A matching entry exists in the loaded title-key map; decryption is not established.</string>
+    <string name="selected_observation_lookup_missing">No matching entry exists in the loaded title-key map, even if the title-key file is present.</string>
+    <string name="selected_observation_lookup_not_required">The inspected header does not require a title-key lookup.</string>
+    <string name="selected_observation_lookup_unknown">No map probe was observed. Whether a matching title-key entry exists is unknown.</string>
+    <string name="selected_observation_omitted">Rows omitted by the bounded report: %1$s groups, %2$s members.</string>
+    <string name="selected_observation_truncated">The on-screen details were truncated. The bounded safe report is available in diagnostic export.</string>
 </resources>

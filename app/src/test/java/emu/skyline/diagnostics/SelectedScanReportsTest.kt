@@ -84,6 +84,19 @@ class SelectedScanReportsTest {
         assertEquals(0, filesLookups.get()); assertTrue(records().isEmpty())
     }
 
+    @Test fun defaultOffV2KeyReportCannotResolvePathsOrCreateWriterWork() {
+        val context = object : ContextWrapper(app) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir(): File = error("OFF must not resolve paths for v2")
+        }
+        val native = SelectedNativeScanReport.sanitize(SelectedKeyStateFixture.loadedReport())
+        val attempt = SelectedScanAttempt(context, SelectedContentProfile.Modern40, publish = { _, _, _ -> error("OFF publication") })
+        assertTrue(attempt.finish("completed", primaryState(SelectedPreviewFixture.catalog()), native))
+        assertFalse(attempt.finish("cancelled", SelectedScanUi("cancelled", "selected_scan_caveat", "scan"), native))
+        SelectedScanReports.submit(context, SelectedScanSession("00000000-0000-0000-0000-000000000001"), SelectedScanTestFixture.fields(native.safe))
+        assertTrue(SelectedScanReports.awaitIdle()); assertTrue(records().isEmpty())
+    }
+
     @Test fun oneTerminalAndSafeMonotonicFieldsArePreservedEvenIfPublisherFails() {
         val captured = mutableListOf<JsonObject>(); var clock = 100L
         val attempt = SelectedScanAttempt(app, SelectedContentProfile.Legacy48, SelectedScanSession("synthetic"), { clock }) { _, _, fields -> captured.add(fields) }
@@ -211,6 +224,37 @@ class SelectedScanReportsTest {
         assertTrue(snapshot.entries.all { it.bytes <= if (it.name.contains("selected-scan")) SelectedScanRecord.MaxFileBytes else DiagnosticExport.MAX_METADATA_BYTES })
         val restored = requireNotNull(DiagnosticExport.restore(cache, snapshot.id))
         assertEquals(result, archive(restored)); restored.close(); snapshot.close()
+        assertFalse(File(cache, snapshot.id).exists())
+    }
+
+    @Test fun historicalV1AndV2KeyStateShareBoundedExportRestoreAndPrivacyRebuild() = sandbox { root ->
+        val logs = File(root, "logs").apply { mkdir() }; val main = File(logs, "main").apply { mkdir() }
+        val old = SelectedScanTestFixture.record()
+        val report = SelectedKeyStateFixture.loadedReport()
+        val state = report.getValue("key_state").jsonObject
+        val polluted = JsonObject(report + mapOf("catalog" to buildJsonObject { put("private", "PRIVATE_CANARY") },
+            "key_state" to JsonObject(state + mapOf("path" to JsonPrimitive("content://PRIVATE_CANARY/file"),
+                "line" to JsonPrimitive("prod.keys PRIVATE_CANARY"), "rights_id" to JsonPrimitive("PRIVATE_CANARY")))))
+        val newest = SelectedScanTestFixture.record(2, SelectedScanTestFixture.fields(polluted))
+        val writer = SelectedScanLogWriter(main)
+        assertTrue(writer.append(old)); assertTrue(writer.append(newest))
+        File(main, "selected-scan-1.jsonl").writeText(newest.toString() + "\n") // Historical duplicate across rotation.
+        val cache = File(root, "cache")
+        val snapshot = DiagnosticExport.capture(logs, File(root, "absent.log"), cache, "schema=1")
+        val exported = archive(snapshot)
+        val rows = exported.filterKeys { it in SelectedScanRecord.names }.values.flatMap { text -> text.lines().filter(String::isNotBlank) }
+            .map { Json.parseToJsonElement(it).jsonObject }
+        assertEquals(2, rows.size)
+        val reports = rows.map { it.getValue("fields").jsonObject.getValue("native_report").jsonObject }
+        assertEquals(listOf(1, 2), reports.map { it.getValue("schema_version").jsonPrimitive.int })
+        assertEquals(SelectedScanTestFixture.report(), reports[0])
+        assertEquals(report, reports[1])
+        assertEquals("not_matched", reports[1].getValue("catalog_summary").jsonObject.getValue("members").jsonArray.single().jsonObject.getValue("title_key_lookup").jsonPrimitive.content)
+        assertFalse(exported.values.any { it.contains("PRIVATE_CANARY") || it.contains("REDACTED_CREDENTIAL_LINE") || it.contains("catalog_kind") })
+        assertTrue(snapshot.entries.filter { it.name in SelectedScanRecord.names }.all { it.bytes <= SelectedScanRecord.MaxFileBytes })
+        assertEquals(setOf("main/selected-scan-0.jsonl", "main/selected-scan-1.jsonl"), exported.keys.filter { it.startsWith("main/selected-scan") }.toSet())
+        val restored = requireNotNull(DiagnosticExport.restore(cache, snapshot.id))
+        assertEquals(exported, archive(restored)); restored.close(); snapshot.close()
         assertFalse(File(cache, snapshot.id).exists())
     }
 

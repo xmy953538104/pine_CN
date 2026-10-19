@@ -127,15 +127,23 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
     }
 
     private fun failure(native: SelectedNativeScanReport? = null, code: String = "java_inspection_failed") {
+        showFailure(native, code)
+        if (active) attempt?.finish("failed", SelectedScanUi("scan_failed", "selected_scan_failed", "scan"), native, code)
+    }
+
+    private fun showFailure(native: SelectedNativeScanReport?, code: String) {
         if (!active) return
         dialog?.dismiss()
-        dialog = MaterialAlertDialogBuilder(context).setTitle(R.string.selected_content_title)
+        val builder = MaterialAlertDialogBuilder(context).setTitle(R.string.selected_content_title)
             .setMessage(context.getString(R.string.selected_scan_failed) + "\n" +
                 context.getString(R.string.selected_scan_fixed_reason, code.takeIf { it in emu.skyline.diagnostics.SelectedScanRecord.failures || it in SelectedNativeScanReport.codes } ?: "java_inspection_failed") +
-                "\n" + attemptReference("scan_failed"))
+                "\n" + attemptReference("scan_failed") + (native?.let { SelectedScanDetails.summary(context, it) }?.let { "\n$it" } ?: ""))
             .setPositiveButton(android.R.string.ok) { _, _ -> cancel() }
-            .setOnCancelListener { cancel() }.show()
-        attempt?.finish("failed", SelectedScanUi("scan_failed", "selected_scan_failed", "scan"), native, code)
+            .setOnCancelListener { cancel() }
+        if (native?.schemaVersion == 2) builder.setNeutralButton(R.string.selected_observation_details) { _, _ ->
+            observations(native) { showFailure(native, code) }
+        }
+        dialog = builder.show()
     }
 
     private fun role(group: SelectedCatalogGroup) = context.getString(when (group.type) {
@@ -159,11 +167,13 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
         else -> R.string.selected_reason_unsupported
     })
 
-    private fun choose(title: String, rows: List<Row>, message: String? = null, selected: (Int) -> Unit) {
+    private fun choose(title: String, rows: List<Row>, message: String? = null, details: (() -> Unit)? = null, selected: (Int) -> Unit) {
         if (!active) return
         if (rows.isEmpty()) {
-            dialog = MaterialAlertDialogBuilder(context).setTitle(title).setMessage(message ?: context.getString(R.string.selected_no_candidates))
-                .setPositiveButton(android.R.string.ok) { _, _ -> cancel() }.setOnCancelListener { cancel() }.show()
+            val builder = MaterialAlertDialogBuilder(context).setTitle(title).setMessage(message ?: context.getString(R.string.selected_no_candidates))
+                .setPositiveButton(android.R.string.ok) { _, _ -> cancel() }.setOnCancelListener { cancel() }
+            if (details != null) builder.setNeutralButton(R.string.selected_observation_details) { _, _ -> if (active) details() }
+            dialog = builder.show()
             return
         }
         val labels = rows.map { it.text + (it.rejection?.let { reason -> "\n${rejection(reason)}" } ?: "") }
@@ -182,6 +192,7 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
             val inset = (24 * resources.displayMetrics.density).toInt()
             setPadding(inset, inset, inset, inset / 2)
         })
+        if (details != null) builder.setNeutralButton(R.string.selected_observation_details) { _, _ -> if (active) details() }
         dialog = builder.setAdapter(adapter) { _, index ->
             if (rows[index].rejection == null && active) selected(index)
         }.setNegativeButton(android.R.string.cancel) { _, _ -> cancel() }.setOnCancelListener { cancel() }.show()
@@ -192,7 +203,7 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
 
     private fun primary(catalog: SelectedContentCatalog, ui: SelectedScanUi, native: SelectedNativeScanReport) {
         val groups = ui.primaryRows
-        val message = when (ui.outcome) {
+        val rejectionMessage = when (ui.outcome) {
             "no_groups" -> context.getString(R.string.selected_no_candidates) + "\n" + context.getString(R.string.selected_scan_no_groups)
             "no_primary_role" -> context.getString(R.string.selected_no_candidates) + "\n" + context.getString(R.string.selected_scan_no_primary_role)
             "primary_rows_all_rejected" -> context.getString(R.string.selected_primary_all_rejected)
@@ -202,14 +213,23 @@ internal class SelectedContentPicker(private val fragment: Fragment, private val
                 "\n" + context.getString(R.string.selected_scan_first_check, ui.primaryRows.firstOrNull { row -> row.rejection != null }?.predicate ?: "none") +
                 "\n" + attemptReference(ui.outcome)
         }
+        val message = listOfNotNull(rejectionMessage, SelectedScanDetails.summary(context, native)).joinToString("\n").ifEmpty { null }
         choose(context.getString(R.string.selected_primary_title), groups.map {
             Row((if (it.group.type == 129) context.getString(R.string.selected_role_standalone_patch) + "\n" else "") + label(it.group), it.rejection)
-        }, message) { index ->
+        }, message, if (native.schemaVersion == 2) ({ observations(native) { primary(catalog, ui, native) } }) else null) { index ->
             val programs = catalog.programs(groups[index].group.id)
             choose(context.getString(R.string.selected_program_title), programs.map { Row(label(it), it.rejection) }) { program ->
                 update(catalog, requireNotNull(programs[program].program.choice))
             }
         }
+    }
+
+    private fun observations(native: SelectedNativeScanReport, back: () -> Unit) {
+        if (!active) return
+        val text = SelectedScanDetails.text(context, native) ?: return
+        dialog = MaterialAlertDialogBuilder(context).setTitle(R.string.selected_observation_details).setMessage(text)
+            .setPositiveButton(R.string.selected_observation_back) { _, _ -> if (active) back() }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> cancel() }.setOnCancelListener { cancel() }.show()
     }
 
     private fun update(catalog: SelectedContentCatalog, primary: SelectedProgramChoice) {

@@ -1,0 +1,29 @@
+{
+  "capture_kind": "development_only",
+  "source_parent_commit": "a70ad001464434d14e9bdea653790af0255c07be",
+  "source_worktree_clean": false,
+  "final_qualification": false,
+  "generator": "tools/run-selected-scan-observed.py",
+  "source_input_sha256_scope": "Report, factory, adapter and JNI sources from the development manifest; final whole-tree qualification is separate.",
+  "source_input_sha256": {
+    "app/src/main/cpp/selected_scan_jni.cpp": "c684c8c4ac5deab70133c6dfc1faef2371950c7a204abc5ab51dd535621366a0",
+    "app/src/main/cpp/skyline/catalog/native_adapter.cpp": "50c9550eb888349d0a1f2b4a4288ae48f9e46f89b881e8afff78ffe9a701e10d",
+    "app/src/main/cpp/skyline/catalog/scan_observations.h": "05bd989df82c7ff8fc52d0ce37bf5eec7147613c24ed596f70d32c093a2cef99",
+    "app/src/main/cpp/skyline/catalog/scan_report.cpp": "af6de13253bd73891a426010f15c9dc87f223bc29e0831f2c12635ac6559823c",
+    "app/src/main/cpp/skyline/catalog/scan_report.h": "30f33f6324153134866d53dc6949b436d47c0116b8b292600aa6b92c88f6a75a",
+    "app/src/main/cpp/skyline/crypto/key_store.cpp": "549cf0c6d491ccd77f6f7f358fd0c84066d160cd3867f186a740d4573dab71cc",
+    "app/src/main/cpp/skyline/crypto/selected_key_store.cpp": "03c12cc623cbfba6173f5e2649fe78735acf74cfee63bc505eb0109ece3df7f5",
+    "app/src/main/cpp/skyline/crypto/selected_key_store.h": "9b2f4f0b45b02a93ea5fe7f7f6ca05b009a3fc234004c4f1544312449497faa2",
+    "app/src/main/cpp/skyline/vfs/nca.cpp": "4fc3a8fd530ee7a33555d257c35c91a175ac434fa0a11fc899db4d616346cb20",
+    "tests/selected-scan/report-contract-v2.json": "2cd60be4586542d267fc31ee65d114c9fb1e6a79d7e82b3a4236f37249d17893"
+  },
+  "reports": [
+    "valid-modern.json",
+    "missing-meta-area-key.json",
+    "missing-header-key.json",
+    "unknown-native-error.json"
+  ],
+  "native_assertions": 8,
+  "model_assertions": 4,
+  "host_jvm_assertions": 16
+}

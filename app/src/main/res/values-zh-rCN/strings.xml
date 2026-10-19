@@ -418,4 +418,22 @@
     <string name="selected_scan_fixed_reason">原因代码：%1$s</string>
     <string name="selected_scan_native_issue">首个原生问题：%1$s</string>
     <string name="selected_scan_first_check">首个选择检查：%1$s</string>
+    <string name="selected_observation_details">扫描观测详情</string>
+    <string name="selected_observation_back">返回扫描结果</string>
+    <string name="selected_observation_summary">密钥文件：title %1$s（%2$s 条），prod %3$s（%4$s 槽）。这些观测与选择检查分开。</string>
+    <string name="selected_observation_caveat">密钥文件存在不代表已加载匹配条目；映射命中也不证明解密、授权、完整性或启动成功。这些观测不会覆盖首个选择拒绝原因。</string>
+    <string name="selected_observation_load">原生密钥加载：%1$s · 计数是否不完整：%2$s</string>
+    <string name="selected_observation_title_keys">Title 密钥文件</string>
+    <string name="selected_observation_prod_keys">Prod 密钥文件</string>
+    <string name="selected_observation_file">%1$s：存在状态 %2$s · 读取 %3$s · 加载 %4$s</string>
+    <string name="selected_observation_counts">原生解析结果：已加载 %1$s 个唯一 title 条目、%2$s 个已识别 prod 槽。计数并非输入行数。加载完成不证明整个文件有效或密钥可用。</string>
+    <string name="selected_observation_scope">范围：仅本次单个容器，%1$s 字节。未扫描普通入口关联的外部 Update/DLC 文件。完整内容哈希：%2$s。</string>
+    <string name="selected_observation_group">组 #%1$s · %2$s · CNMT 版本 %3$s\nTitle %4$s · 摘要观测 %5$s</string>
+    <string name="selected_observation_member">成员 #%1$s · NCA 类型 %2$s · 容器范围 %3$s 字节\nContent ID 提示 %4$s（仅条目名提示，不是哈希或 CNMT 关联证明）\n头部 %5$s · 支持状态 %6$s\n%7$s\n完整成员哈希：%8$s</string>
+    <string name="selected_observation_lookup_matched">已加载的 title 密钥映射中存在匹配条目；尚未证明解密成功。</string>
+    <string name="selected_observation_lookup_missing">已加载的 title 密钥映射中没有匹配条目，即使 title 密钥文件存在。</string>
+    <string name="selected_observation_lookup_not_required">已检查的头部不需要查询 title 密钥。</string>
+    <string name="selected_observation_lookup_unknown">未观测到映射查询，是否存在匹配的 title 密钥条目仍未知。</string>
+    <string name="selected_observation_omitted">有界报告省略的行：%1$s 个组、%2$s 个成员。</string>
+    <string name="selected_observation_truncated">屏幕详情已截断。可通过诊断导出查看有界安全报告。</string>
 </resources>

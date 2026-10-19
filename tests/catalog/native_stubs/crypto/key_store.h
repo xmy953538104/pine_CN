@@ -11,5 +11,6 @@ class KeyStore {
     IndexedKeys128 titleKek{}, areaKeyApplication{}, areaKeyOcean{}, areaKeySystem{};
     std::optional<Key128> titleKey;
     std::optional<Key128> GetTitleKey(const Key128 &) { return titleKey; }
+    bool ContainsTitleKey(const Key128 &) const noexcept { return titleKey.has_value(); }
 };
 }

@@ -58,28 +58,66 @@ bool GroupId(const std::string &value) {
     return value.size() == 76 && value.compare(0, prefix.size(), prefix) == 0 &&
         std::all_of(value.begin() + prefix.size(), value.end(), [](unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
+bool ContentId(const std::string &value) {
+    return value.size() == 32 && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    });
+}
+std::string KeyFileJson(const KeyFileState &file) {
+    Object out;
+    out.Token("presence", file.presence == FilePresence::Missing ? "missing" : file.presence == FilePresence::Present ? "present" :
+        file.presence == FilePresence::CheckFailed ? "check_failed" : "not_checked");
+    out.Token("read", file.read == FileRead::Complete ? "complete" : file.read == FileRead::Short ? "short" :
+        file.read == FileRead::Failed ? "failed" : file.read == FileRead::Unknown ? "unknown" : "not_attempted");
+    out.Token("load", file.load == FileLoad::Skipped ? "skipped" : file.load == FileLoad::Loaded ? "loaded" :
+        file.load == FileLoad::Failed ? "failed" : "not_attempted");
+    return out.End();
+}
+std::string KeyStateJson(const KeyState &keys) {
+    Object out;
+    out.Token("status", keys.status == KeyLoad::Loading ? "loading" : keys.status == KeyLoad::Loaded ? "loaded" :
+        keys.status == KeyLoad::Failed ? "failed" : "not_started");
+    out.Raw("title_keys", KeyFileJson(keys.titleKeys)); out.Raw("prod_keys", KeyFileJson(keys.prodKeys));
+    out.Raw("loaded_unique_title_key_count", keys.loadedUniqueTitleKeys ? std::to_string(Count(*keys.loadedUniqueTitleKeys)) : "null");
+    out.Raw("recognized_prod_slot_count", keys.recognizedProdSlots ? std::to_string(std::min<uint64_t>(*keys.recognizedProdSlots, 81)) : "null");
+    out.Bool("counts_partial", keys.countsPartial); return out.End();
+}
 std::string GroupRow(const Group &group, size_t ordinal) {
     Object out; out.Number("ordinal", Count(ordinal)); out.Token("role", Role(group));
     out.Token("parsing", Enum(group.parsing, {"unknown", "parsed", "unsupported", "invalid", "not_inspected"}));
     out.Token("digest_observation", Enum(group.digest, {"unknown", "unverified", "verified", "mismatch"}));
     out.Raw("issue_codes", IssueArray(group.issues));
     if (group.parsing == "parsed") {
+        if (group.version) out.Number("version", *group.version);
         if (group.titleId) out.Token("title_id", Hex64(*group.titleId));
         if (group.applicationId) out.Token("application_id", Hex64(*group.applicationId));
         if (GroupId(group.id)) out.Token("cnmt_group_id", group.id);
     }
     return out.End();
 }
-std::string MemberRow(const NcaDescriptor &nca, size_t ordinal) {
+std::string MemberRow(const NcaDescriptor &nca, size_t ordinal, const Catalog &catalog, const KeyLookups &lookups) {
     Object out; out.Number("ordinal", Count(ordinal));
     out.Raw("nca_type", nca.contentType ? std::to_string(*nca.contentType) : "null");
     out.Token("readability", Enum(nca.readability, {"unknown", "plaintext_header", "decrypted_header", "encrypted_or_unknown", "unreadable", "not_inspected"}));
     out.Token("support", Enum(nca.support, {"unknown", "metadata_readable", "unsupported", "invalid"}));
+    out.Token("size_bytes", std::to_string(nca.size)); out.Token("size_source", "container_member_extent");
+    out.Token("container_scope", "single_container"); out.Token("external_lookup", "not_performed");
+    out.Token("full_hash_verification", catalog.options.verifyHashes ? "not_reported" : "not_performed");
+    const auto lookup = lookups.For(nca.source.get());
+    out.Token("title_key_lookup", lookup == TitleKeyLookup::NotRequired ? "not_required" : lookup == TitleKeyLookup::Matched ? "matched" :
+        lookup == TitleKeyLookup::NotMatched ? "not_matched" : "not_observed");
+    out.Token("title_key_lookup_evidence", lookup == TitleKeyLookup::NotObserved ? "not_performed" : "read_only_loaded_map_probe");
+    if ((nca.contentType == 0 || nca.contentType == 5) && ContentId(nca.contentIdHint)) {
+        out.Token("content_id_hint", nca.contentIdHint); out.Token("content_id_source", "entry_name_hint");
+    }
     out.Raw("issue_codes", IssueArray(nca.issues)); return out.End();
 }
-std::string Summary(const Catalog &catalog) {
+std::string Summary(const Catalog &catalog, const KeyLookups &lookups) {
     Object out;
     out.Bool("bounded_scan_complete", catalog.complete); out.Bool("all_metadata_enumerated", catalog.AllMetadataEnumerated());
+    out.Token("container_scope", "single_container"); out.Bool("includes_external_associations", false);
+    out.Token("container_size_bytes", std::to_string(catalog.containerSize));
+    out.Token("full_content_hash", catalog.options.verifyHashes ? "not_reported" : "not_performed");
     out.Number("nca_count", Count(catalog.ncas.size())); out.Number("group_count", Count(catalog.groups.size()));
     out.Number("other_entry_count", Count(catalog.otherEntries.size()));
     size_t meta{}, unknown{}, unreadable{};
@@ -112,7 +150,7 @@ std::string Summary(const Catalog &catalog) {
         groups += row; bytes += row.size() + 1; ++groupRows; ++rows;
     }
     for (size_t i{}; i < catalog.ncas.size() && rows < MaxRows; ++i) {
-        auto row = MemberRow(catalog.ncas[i], i);
+        auto row = MemberRow(catalog.ncas[i], i, catalog, lookups);
         if (bytes + row.size() + 1 > 12 * 1024) break;
         if (memberRows) members += ',';
         members += row; bytes += row.size() + 1; ++memberRows; ++rows;
@@ -155,7 +193,7 @@ void ScanReport::Fail(std::string_view code) noexcept {
 }
 bool ScanReport::Completed() const noexcept { return state == State::Completed; }
 std::string ScanReport::ReportJson(const Catalog *catalog) const {
-    Object out; out.Number("schema_version", 1); out.Token("status", Completed() ? "completed" : "failed");
+    Object out; out.Number("schema_version", 2); out.Token("status", Completed() ? "completed" : "failed");
     out.Raw("failed_stage", failedStage ? catalog::Json(std::string(StageName(*failedStage))) : "null");
     out.Raw("error_code", Completed() ? "null" : catalog::Json(std::string(errorCode)));
     out.Number("elapsed_us", Elapsed()); std::string phaseArray{"["};
@@ -166,7 +204,8 @@ std::string ScanReport::ReportJson(const Catalog *catalog) const {
         if (i) phaseArray += ',';
         phaseArray += item.End();
     }
-    out.Raw("phases", phaseArray + ']'); out.Raw("catalog_summary", catalog ? Summary(*catalog) : "null");
+    out.Raw("phases", phaseArray + ']'); out.Raw("key_state", KeyStateJson(keyState));
+    out.Raw("catalog_summary", catalog ? Summary(*catalog, keyLookups) : "null");
     auto result = out.End();
     if (result.size() > MaxReportBytes) throw Error("selected_report_limit", "bounded scan report exceeds fixed limit");
     return result;

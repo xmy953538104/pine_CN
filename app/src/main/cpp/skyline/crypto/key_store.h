@@ -25,6 +25,9 @@ namespace skyline::crypto {
         IndexedKeys128 areaKeyOcean;
         IndexedKeys128 areaKeySystem;
       private:
+        struct ObservedEmptyTag {};
+        explicit KeyStore(ObservedEmptyTag) {}
+        friend class SelectedKeyStoreFactory;
         std::map<Key128, Key128> titleKeys;
 
         std::unordered_map<std::string_view, std::optional<Key256> &> key256Names{
@@ -47,6 +50,14 @@ namespace skyline::crypto {
         void PopulateKeys(std::string_view keyName, std::string_view value);
 
       public:
+        size_t LoadedTitleKeyCount() const noexcept { return titleKeys.size(); }
+        bool ContainsTitleKey(const Key128 &title) const noexcept { return titleKeys.contains(title); }
+        size_t RecognizedProdSlotCount() const noexcept {
+            size_t count = headerKey.has_value();
+            for (const auto *slots : {&titleKek, &areaKeyApplication, &areaKeyOcean, &areaKeySystem})
+                for (const auto &slot : *slots) count += slot.has_value();
+            return count;
+        }
         std::optional<Key128> GetTitleKey(const Key128 &title) {
             auto it{titleKeys.find(title)};
             if (it == titleKeys.end())

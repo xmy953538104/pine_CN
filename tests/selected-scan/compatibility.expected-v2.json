@@ -1,0 +1,21 @@
+{
+  "baseline_commit": "ae10d4405e9904c4be0778211b544787bec67124",
+  "unchanged_sha256": {
+    "app/src/main/cpp/selected_jni.cpp": "6500c6e07a7f84d55638ef4827286b62b5c7cff2d88465065aedb7f252fc3968",
+    "app/src/main/cpp/skyline/catalog/json.cpp": "84e0944f588cd8f43b5f4882942a9ddae2baf0eee651f16423d6719cade82724",
+    "app/src/main/cpp/skyline/catalog/catalog.cpp": "0371df696c365f0f3521d4a9c63846c34e4b874b6368b7faf068bab26c79a7e5",
+    "app/src/main/cpp/skyline/loader/selected_content.cpp": "9eebe8f348162215ca1d904f5afbbbc3bfb97fa426d67490ce36a743f4a2ffd6",
+    "app/src/main/cpp/skyline/loader/selected_validation.cpp": "fe05caa2f61ed2f1d31897296b120b7cc74f355380e2fa54c85f285b66b58943",
+    "app/src/main/cpp/skyline/crypto/key_store.cpp": "549cf0c6d491ccd77f6f7f358fd0c84066d160cd3867f186a740d4573dab71cc",
+    "docs/nsp-catalog-v1.schema.json": "9a454ae3d54d2c24b3f820d4fb5957d0bd7c71d1e63d7257e2223d672db90450",
+    "app/src/main/cpp/skyline/vfs/nca.cpp": "4fc3a8fd530ee7a33555d257c35c91a175ac434fa0a11fc899db4d616346cb20",
+    "app/src/main/cpp/skyline/vfs/os_filesystem.cpp": "48adee0a8b2eef9ed0cb3e5f274a157d120e9f66aecaa84d1f6123edc3fb03c8",
+    "app/src/main/cpp/skyline/loader/nsp.cpp": "2cfd6ee3e54f9ac22f3f88c8dc65c13433f91c071250546012e9b89a05d4b3a1",
+    "tests/selected-scan/report-contract.json": "81474fa82cde05aab0c5abe7846ef2bb6fa1f16a53094baf57db40393a8a8a31"
+  },
+  "allowed_readonly_changes": [
+    "app/src/main/cpp/skyline/crypto/key_store.h",
+    "app/src/main/cpp/skyline/catalog/native_adapter.h",
+    "app/src/main/cpp/skyline/catalog/native_adapter.cpp"
+  ]
+}

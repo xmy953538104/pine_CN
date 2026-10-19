@@ -436,6 +436,7 @@ if(PINE_ENABLE_SELECTED_CONTENT)
     endif()
     target_compile_definitions(skyline PRIVATE PINE_ENABLE_SELECTED_CONTENT=1)
     target_sources(skyline PRIVATE
+        ${source_DIR}/skyline/crypto/selected_key_store.cpp
         ${source_DIR}/skyline/loader/selected_validation.cpp
         ${source_DIR}/skyline/loader/selected_launch.cpp
         ${source_DIR}/skyline/loader/selected_content.cpp

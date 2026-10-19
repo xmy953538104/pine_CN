@@ -98,9 +98,12 @@ namespace skyline::catalog {
             Options options;
             Source raw;
             std::shared_ptr<NativeInspectionBudget> budget;
+            observed::NativeKeyObserver *keyObserver{};
+            const crypto::KeyStore *probeKeys{};
           public:
-            InspectionValidator(NcaDescriptor &pResult, const Options &pOptions, Source pRaw, std::shared_ptr<NativeInspectionBudget> pBudget)
-                : result(pResult), options(pOptions), raw(std::move(pRaw)), budget(std::move(pBudget)) {}
+            InspectionValidator(NcaDescriptor &pResult, const Options &pOptions, Source pRaw, std::shared_ptr<NativeInspectionBudget> pBudget,
+                                observed::NativeKeyObserver *pObserver = nullptr, const crypto::KeyStore *pKeys = nullptr)
+                : result(pResult), options(pOptions), raw(std::move(pRaw)), budget(std::move(pBudget)), keyObserver(pObserver), probeKeys(pKeys) {}
             InspectionValidator(std::shared_ptr<NcaDescriptor> pResult, const Options &pOptions, Source pRaw, std::shared_ptr<NativeInspectionBudget> pBudget)
                 : owner(std::move(pResult)), result(*owner), options(pOptions), raw(std::move(pRaw)), budget(std::move(pBudget)) {}
             void ValidateHeader(const vfs::NCAHeader &header, size_t backingSize) const override {
@@ -133,6 +136,13 @@ namespace skyline::catalog {
                 for (size_t i{1}; i < extents.size(); ++i)
                     Require(extents[i].first >= extents[i - 1].second, "overlapping_nca_sections", "NCA sections overlap");
                 Require(populated != 0, "nca_no_sections", "NCA has no populated filesystem sections");
+                if (keyObserver && probeKeys) {
+                    // The header is transient. Export only a loaded-map probe
+                    // outcome, never the Rights ID, its hash, or a key value.
+                    const auto state = header.rightsId == crypto::KeyStore::Key128{} ? observed::TitleKeyLookup::NotRequired :
+                        probeKeys->ContainsTitleKey(header.rightsId) ? observed::TitleKeyLookup::Matched : observed::TitleKeyLookup::NotMatched;
+                    keyObserver->Observe(raw.get(), state);
+                }
             }
             void ValidateSections(const vfs::NCAHeader &header, const std::vector<vfs::NCASectionHeader> &sections) const override {
                 Require(sections.size() <= 4, "native_section_count_unsupported", "existing backend returned an unsupported section count");
@@ -248,6 +258,8 @@ namespace skyline::catalog {
     }
     NativeNcaInspector::NativeNcaInspector(std::shared_ptr<crypto::KeyStore> pKeyStore)
         : keyStore(std::move(pKeyStore)), budget(std::make_shared<NativeInspectionBudget>()) {}
+    NativeNcaInspector::NativeNcaInspector(std::shared_ptr<crypto::KeyStore> pKeyStore, observed::NativeKeyObserver &observer)
+        : keyStore(std::move(pKeyStore)), budget(std::make_shared<NativeInspectionBudget>()), keyObserver(&observer) {}
 
     NcaDescriptor NativeNcaInspector::Inspect(const PfsEntry &entry, const Options &options) const {
         NcaDescriptor result;
@@ -264,7 +276,7 @@ namespace skyline::catalog {
             if (std::memcmp(prefix.data() + 0x200, "NCA3", 4) == 0)
                 throw Error("native_plaintext_unsupported", "use the explicit plaintext inspector for synthetic plaintext NCA3; the legacy native plaintext section loop is not used");
             Require(static_cast<bool>(keyStore), "missing_key_store", "native inspection requires a caller-provided key store");
-            auto validator = std::make_shared<InspectionValidator>(result, options, entry.source, budget);
+            auto validator = std::make_shared<InspectionValidator>(result, options, entry.source, budget, keyObserver, keyStore.get());
             const vfs::NCA decoded(std::make_shared<SourceBacking>(entry.source), keyStore, false, std::move(validator));
             result.support = "metadata_readable";
             result.issues.push_back({"native_backend_inspection_only", "decryption used the existing Pine NCA backend; RSA signatures, executable capability and runtime selection are not verified"});
@@ -293,5 +305,10 @@ namespace skyline::catalog {
     Catalog ScanNative(Source container, std::shared_ptr<crypto::KeyStore> keyStore, const Options &options) {
         Require(static_cast<bool>(container), "native_null_source", "native catalog container source is absent");
         return Scan(std::move(container), options, NativeNcaInspector(std::move(keyStore)));
+    }
+    Catalog ScanNativeObserved(Source container, std::shared_ptr<crypto::KeyStore> keyStore, const Options &options,
+                               observed::NativeKeyObserver &observer) {
+        Require(static_cast<bool>(container), "native_null_source", "native catalog container source is absent");
+        return Scan(std::move(container), options, NativeNcaInspector(std::move(keyStore), observer));
     }
 }

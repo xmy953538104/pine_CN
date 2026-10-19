@@ -6,7 +6,7 @@
 #include "skyline/loader/selected_launch_jni.h"
 #include "skyline/catalog/native_adapter.h"
 #include "skyline/catalog/scan_report.h"
-#include "skyline/crypto/key_store.h"
+#include "skyline/crypto/selected_key_store.h"
 #include "skyline/diagnostics/utf16.h"
 
 namespace {
@@ -72,13 +72,13 @@ extern "C" JNIEXPORT jstring JNICALL Java_emu_skyline_loader_SelectedContentBrid
         report.Begin(observed::Stage::KeyStoreLoad);
         // Existing app-private key directory only; no new policy, search,
         // ticket import, key generation, logging or authorization decision.
-        auto keys = std::make_shared<skyline::crypto::KeyStore>(PrivatePath(env, privatePath) + "keys/");
+        auto keys = skyline::crypto::SelectedKeyStoreFactory::Load(PrivatePath(env, privatePath) + "keys/", report.Keys());
         report.Complete(observed::Stage::KeyStoreLoad);
         report.Begin(observed::Stage::FdDuplicate);
         auto source = DuplicateFd(borrowedFd);
         report.Complete(observed::Stage::FdDuplicate);
         report.Begin(observed::Stage::CatalogScan);
-        catalog = ScanNative(source, keys, InspectionOptions(selectedProfile));
+        catalog = ScanNativeObserved(source, keys, InspectionOptions(selectedProfile), report.KeyObserver());
         report.Complete(observed::Stage::CatalogScan);
         report.Begin(observed::Stage::CatalogSerialize);
         transientJson = ToJson(*catalog);

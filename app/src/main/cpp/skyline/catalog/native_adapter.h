@@ -2,6 +2,7 @@
 #pragma once
 
 #include "catalog.h"
+#include "scan_observations.h"
 
 namespace skyline::crypto { class KeyStore; }
 namespace skyline::vfs { class Backing; class NCA; }
@@ -31,10 +32,14 @@ namespace skyline::catalog {
     class NativeNcaInspector final : public NcaInspector {
         std::shared_ptr<crypto::KeyStore> keyStore;
         std::shared_ptr<NativeInspectionBudget> budget;
+        observed::NativeKeyObserver *keyObserver{};
       public:
         // One inspector instance belongs to one scan, including all NCA members.
         // Construct a new instance for a new scan to reset its metadata budget.
         explicit NativeNcaInspector(std::shared_ptr<crypto::KeyStore> keyStore);
+        // Observer lifetime must cover this synchronous scan. Only the new
+        // observed inspection entry installs it; ordinary NCA loaders do not.
+        NativeNcaInspector(std::shared_ptr<crypto::KeyStore> keyStore, observed::NativeKeyObserver &observer);
         std::string Name() const override { return "pine_existing_nca"; }
         NcaDescriptor Inspect(const PfsEntry &entry, const Options &options) const override;
     };
@@ -48,4 +53,6 @@ namespace skyline::catalog {
     // the ciphertext bytes and its opened-file snapshot/change policy together.
     Catalog ScanNative(Source container, std::shared_ptr<crypto::KeyStore> keyStore,
                        const Options &options = {});
+    Catalog ScanNativeObserved(Source container, std::shared_ptr<crypto::KeyStore> keyStore,
+                               const Options &options, observed::NativeKeyObserver &observer);
 }

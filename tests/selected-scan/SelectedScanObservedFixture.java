@@ -3,6 +3,8 @@ package emu.skyline.loader;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 
 class SelectedContentBridge {
     static native String inspectObserved(int borrowedFd, String privatePath, String profile);
@@ -34,6 +36,9 @@ public final class SelectedScanObservedFixture {
         require(at > 0 && envelope.endsWith("}"), "production envelope report");
         String report = envelope.substring(at + ",\"scan_report\":".length(), envelope.length() - 1);
         require(report.length() <= 16384 && !report.contains("PRIVATE"), "report bounds and privacy");
+        byte[] rights = new byte[16]; for (int i = 0; i < rights.length; ++i) rights[i] = (byte)(0x90 + i);
+        require(!report.contains(HexFormat.of().formatHex(rights)) &&
+                !report.contains(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(rights))), "Rights ID and its hash stay private");
         if (report.contains("\"status\":\"failed\""))
             require(envelope.startsWith("{\"selected_scan_schema\":1,\"status\":\"failed\",\"catalog\":null,"), "failed envelope has no raw Catalog");
         else
@@ -60,6 +65,12 @@ public final class SelectedScanObservedFixture {
         scan("bad-pfs", "bad-pfs.nsp", "full", "modern-40", "\"failed_stage\":\"catalog_scan\"", "unsupported_pfs_format");
         scan("entry-budget", "entry-budget.nsp", "full", "modern-40", "\"failed_stage\":\"catalog_scan\"", "\"error_code\":\"scan_budget\"");
         scan("unknown-native-error", null, "bad", "modern-40", "\"failed_stage\":\"keystore_load\"", "other_native_issue");
+        scan("title-map-matched", "title-rights.nsp", "title-full", "modern-40", "\"loaded_unique_title_key_count\":1", "\"recognized_prod_slot_count\":3", "\"title_key_lookup\":\"matched\"", "\"parsing\":\"parsed\"");
+        scan("title-map-present-not-matched", "title-rights.nsp", "title-unmatched", "modern-40", "\"loaded_unique_title_key_count\":1", "\"title_key_lookup\":\"not_matched\"", "missing_title_key");
+        scan("title-map-match-not-decryption", "title-rights.nsp", "title-no-kek", "modern-40", "\"title_key_lookup\":\"matched\"", "missing_title_kek");
+        scan("failed-title-prefix", null, "partial-title", "modern-40", "\"loaded_unique_title_key_count\":1", "\"recognized_prod_slot_count\":0", "\"counts_partial\":true", "\"failed_stage\":\"keystore_load\"");
+        scan("failed-prod-prefix", null, "partial-prod", "modern-40", "\"loaded_unique_title_key_count\":1", "\"recognized_prod_slot_count\":1", "\"counts_partial\":true");
+        scan("public-cids-version-sizes", "public-content.nsp", "full", "modern-40", "\"version\":4294967295", "\"content_id_source\":\"entry_name_hint\"", "\"full_content_hash\":\"not_performed\"");
         try { pending(); throw new AssertionError("pending exception cleared"); }
         catch (IllegalStateException expected) { require(expected.getMessage().equals("synthetic_pending_exception"), "pending exception preserved"); }
         ++passed; System.out.println("PASS host-JVM pending VM exception preserved");

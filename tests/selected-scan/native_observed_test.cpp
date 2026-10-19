@@ -2,6 +2,7 @@
 // Public synthetic inputs, independent OpenSSL encryption, production scan/JNI.
 #include "fixtures.h"
 #include <catalog/scan_report.h>
+#include <crypto/selected_key_store.h>
 #include <common/exception.h>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <jni.h>
 
 namespace skyline { std::vector<void *> exception::GetStackFrames() { return {}; } }
+void RunKeyStateTests(const std::filesystem::path &, const std::filesystem::path &);
 
 namespace {
 using namespace fixture;
@@ -25,6 +27,33 @@ void Write(const std::filesystem::path &path, const Bytes &value) {
 Bytes Container(Bytes cnmt) {
     const auto meta = Nca(1, App, {{true, Pfs({{"PRIVATE_MEMBER_NAME.cnmt", std::move(cnmt)}})}});
     return Pfs({{"PRIVATE_MEMBER_NAME.cnmt.nca", meta}});
+}
+crypto::KeyStore::Key128 Rights() { crypto::KeyStore::Key128 value{}; for (size_t i{}; i < value.size(); ++i) value[i] = 0x90 + i; return value; }
+crypto::KeyStore::Key128 Kek() { crypto::KeyStore::Key128 value{}; for (size_t i{}; i < value.size(); ++i) value[i] = 0x60 + i; return value; }
+Bytes WithRights(Bytes nca) {
+    // Independently decrypt and re-encrypt only the main-header sector. All
+    // payload encryption still comes from the existing OpenSSL fixture writer.
+    std::array<uint8_t, 16> tweak{}; tweak[15] = 1; const auto key = HeaderKey();
+    using Context = std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>;
+    Context context(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free); Check(bool(context), "fixture decrypt allocation");
+    Check(EVP_DecryptInit_ex(context.get(), EVP_aes_128_xts(), nullptr, key.data(), tweak.data()) == 1 &&
+          EVP_CIPHER_CTX_set_padding(context.get(), 0) == 1, "fixture decrypt init");
+    Bytes plain(0x210); int count{}, tail{};
+    Check(EVP_DecryptUpdate(context.get(), plain.data(), &count, nca.data() + 0x200, 0x200) == 1 &&
+          EVP_DecryptFinal_ex(context.get(), plain.data() + count, &tail) == 1 && count + tail == 0x200, "fixture decrypt");
+    const auto rights = Rights(); std::copy(rights.begin(), rights.end(), plain.begin() + 0x30);
+    const auto encoded = Encrypt(EVP_aes_128_xts(), key.data(), tweak.data(), plain.data(), 0x200);
+    std::copy(encoded.begin(), encoded.end(), nca.begin() + 0x200); return nca;
+}
+Bytes PublicContentContainer() {
+    const auto program = Nca(0, App, {{true, Pfs({{"marker", Text("synthetic-program-metadata-only")}})}});
+    const auto publicData = Nca(5, Aoc1, {{false, Romfs({{"marker", Text("synthetic-public-data")}})}});
+    auto cnmt = Cnmt(0x80, App, 0, {{1, 0, program, {}}, {2, 0, publicData, {}}});
+    Put(cnmt, 8, 0xffffffff, 4); const auto digest = Sha256(cnmt.data(), cnmt.size() - 32);
+    std::copy(digest.begin(), digest.end(), cnmt.end() - 32);
+    const auto meta = Nca(1, App, {{true, Pfs({{"PRIVATE_NAME.cnmt", cnmt}})}});
+    auto programName = Hash(program).substr(0, 32); std::transform(programName.begin(), programName.end(), programName.begin(), ::toupper);
+    return Pfs({{programName + ".nca", program}, {Hash(publicData).substr(0, 32) + ".nca", publicData}, {Hash(meta).substr(0, 32) + ".cnmt.nca", meta}});
 }
 void Roots(const std::filesystem::path &root) {
     const auto header = HeaderKey(); const auto area = AreaKey();
@@ -43,6 +72,20 @@ void Roots(const std::filesystem::path &root) {
     Write(root / "bad-pfs.nsp", Bytes(16, 0));
     auto overBudget = Pfs({}); Put(overBudget, 4, 4097, 4);
     Write(root / "entry-budget.nsp", overBudget);
+    const auto rights = Rights(), kek = Kek(), content = ContentKey();
+    const auto wrapped = Encrypt(EVP_aes_128_ecb(), kek.data(), nullptr, content.data(), content.size());
+    const auto titleLine = Hex(rights.data(), rights.size()) + '=' + Hex(wrapped.data(), wrapped.size()) + '\n';
+    const auto prod = headerLine + "key_area_key_application_00=" + Hex(area.data(), area.size()) + '\n';
+    Write(root / "title-full/keys/title.keys", titleLine); Write(root / "title-full/keys/prod.keys", prod + "titlekek_00=" + Hex(kek.data(), kek.size()) + '\n');
+    Write(root / "title-no-kek/keys/title.keys", titleLine); Write(root / "title-no-kek/keys/prod.keys", prod);
+    auto other = rights; other[0] ^= 1;
+    Write(root / "title-unmatched/keys/title.keys", Hex(other.data(), other.size()) + '=' + Hex(wrapped.data(), wrapped.size()) + '\n');
+    Write(root / "title-unmatched/keys/prod.keys", prod + "titlekek_00=" + Hex(kek.data(), kek.size()) + '\n');
+    Write(root / "partial-title/keys/title.keys", titleLine + "PRIVATE_BAD_LINE\n"); Write(root / "partial-title/keys/prod.keys", prod);
+    Write(root / "partial-prod/keys/title.keys", titleLine); Write(root / "partial-prod/keys/prod.keys", headerLine + "key_area_key_application_00=G\n");
+    const auto titleMeta = WithRights(Nca(1, App, {{true, Pfs({{"PRIVATE_TITLE_MEMBER.cnmt", cnmt}})}}));
+    Write(root / "title-rights.nsp", Pfs({{Hash(titleMeta).substr(0, 32) + ".cnmt.nca", titleMeta}}));
+    Write(root / "public-content.nsp", PublicContentContainer());
 }
 std::string Scan(const Bytes &bytes, const std::shared_ptr<crypto::KeyStore> &keys,
                  const Options &options, bool changeBeforeSerialize = false) {
@@ -54,7 +97,7 @@ std::string Scan(const Bytes &bytes, const std::shared_ptr<crypto::KeyStore> &ke
     std::optional<Catalog> catalog;
     std::string transient;
     try {
-        report.Begin(observed::Stage::CatalogScan); catalog = ScanNative(source, keys, options);
+        report.Begin(observed::Stage::CatalogScan); catalog = ScanNativeObserved(source, keys, options, report.KeyObserver());
         report.Complete(observed::Stage::CatalogScan);
         report.Begin(observed::Stage::CatalogSerialize);
         source->changed = changeBeforeSerialize;
@@ -93,6 +136,7 @@ int main(int argc, char **argv) {
         report = Scan(valid, full, options, true); Has(report, "\"error_code\":\"input_changed\"");
         Has(report, "\"failed_stage\":\"catalog_serialize\""); save("source-changed-serialize", report);
         report = Scan(Pfs({}), full, options); Has(report, "\"group_count\":0"); save("empty-container", report);
+        RunKeyStateTests(std::filesystem::path(argv[1]) / "key-state", std::filesystem::path(argv[2]).parent_path() / "key-state");
         return 0;
     } catch (const std::exception &error) { std::cerr << "synthetic assertion failed: " << error.what() << '\n'; return 1; }
 }

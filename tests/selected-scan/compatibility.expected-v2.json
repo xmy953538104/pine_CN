@@ -17,5 +17,12 @@
     "app/src/main/cpp/skyline/crypto/key_store.h",
     "app/src/main/cpp/skyline/catalog/native_adapter.h",
     "app/src/main/cpp/skyline/catalog/native_adapter.cpp"
-  ]
+  ],
+  "key_store_header_abi_baseline": {
+    "source": "app/src/main/cpp/skyline/crypto/key_store.h",
+    "fixture": "tests/selected-scan/key-store-ae10d440-baseline.base64",
+    "source_commit": "ae10d4405e9904c4be0778211b544787bec67124",
+    "sha256": "71b5faeb46aa92dcca99eb1c9e3062b9356f0d5ef15580ee99e6d09b1e4e8543",
+    "encoding": "base64"
+  }
 }

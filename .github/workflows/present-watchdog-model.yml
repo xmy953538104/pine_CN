@@ -24,8 +24,6 @@ jobs:
       fail-fast: false
       matrix:
         python: ['3.10', '3.12']
-    env:
-      EVIDENCE_DIR: ${{ runner.temp }}/present-watchdog-evidence
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,12 +34,16 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Pure synthetic state machine regressions
         id: model_tests
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/present-watchdog-evidence
         run: |
           set -o pipefail
           mkdir -p "$EVIDENCE_DIR"
           python3 tools/tests/test-present-watchdog-model.py 2>&1 | tee "$EVIDENCE_DIR/tests.txt"
       - name: Generated offline example only
         id: demo
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/present-watchdog-evidence
         run: |
           python3 tools/present_watchdog/model.py --demo > "$EVIDENCE_DIR/synthetic-demo.jsonl"
           python3 - <<'PY'
@@ -57,6 +59,7 @@ jobs:
       - name: Bind exact source and observed test outcomes
         if: always()
         env:
+          EVIDENCE_DIR: ${{ runner.temp }}/present-watchdog-evidence
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           MODEL_STATUS: ${{ steps.model_tests.outcome }}
           DEMO_STATUS: ${{ steps.demo.outcome }}

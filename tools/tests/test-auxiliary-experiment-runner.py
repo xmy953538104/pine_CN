@@ -147,7 +147,7 @@ class RunnerTest(unittest.TestCase):
 
     def test_experiment_source_mutation_during_tests_is_rejected(self):
         self.fixture("Path(__file__).write_text('# input changed during synthetic test\\n')")
-        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_input_changed_during_tests"):
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_input_differs_from_head"):
             self.qualify()
 
     def test_production_mutation_during_tests_is_rejected(self):
@@ -215,6 +215,58 @@ class RunnerTest(unittest.TestCase):
         report = self.qualify()
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["tests"]["failures"], 1)
+
+    def test_linked_helper_directory_cannot_escape_recorded_commit(self):
+        outside = Path(self.temporary.name) / "outside_helper"
+        outside.mkdir()
+        (outside / "value.py").write_text("VALUE = 1\n")
+        (self.tests / "linked_helper").symlink_to(outside, target_is_directory=True)
+        self.fixture("from linked_helper import value; self.assertEqual(value.VALUE, 1)")
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_directory_symlink"):
+            self.qualify()
+
+    def test_ignored_untracked_helper_cannot_borrow_a_clean_status(self):
+        (self.tests / "ignored_helper.py").write_text("VALUE = 1\n")
+        (self.root / ".git/info/exclude").write_text("experiments/selected_compat/ignored_helper.py\n")
+        self.fixture("import ignored_helper; self.assertEqual(ignored_helper.VALUE, 1)")
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_input_not_in_head"):
+            self.qualify()
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_input_blob_must_match_head_even_if_git_status_hides_it(self):
+        self.fixture("self.assertTrue(True)")
+        self.git("add", "experiments")
+        self.git("commit", "-qm", "controlled experiment fixture")
+        self.git("update-index", "--assume-unchanged", "experiments/selected_compat/test_auxiliary.py")
+        self.fixture("self.assertTrue(False)")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_input_differs_from_head"):
+            RUNNER.qualify(self.root, self.evidence, self.baseline)
+
+    def test_experiment_tree_root_cannot_be_a_directory_link(self):
+        self.tests.rmdir()
+        outside = Path(self.temporary.name) / "outside_tree"
+        outside.mkdir()
+        self.tests.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_directory_symlink"):
+            RUNNER.input_snapshot(self.root)
+
+    def test_experiment_parent_directory_link_is_rejected_before_walk(self):
+        self.tests.rmdir()
+        (self.root / "experiments").rmdir()
+        outside = Path(self.temporary.name) / "outside_tree"
+        (outside / "selected_compat").mkdir(parents=True)
+        (self.root / "experiments").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_directory_symlink"):
+            RUNNER.input_snapshot(self.root)
+
+    def test_ignored_python_source_in_cache_directory_still_binds_to_head(self):
+        cache = self.tests / "__pycache__"
+        cache.mkdir()
+        (cache / "hidden_source.py").write_text("VALUE = 1\n")
+        self.fixture("from __pycache__ import hidden_source; self.assertEqual(hidden_source.VALUE, 1)")
+        with self.assertRaisesRegex(RUNNER.Rejected, "experiment_input_not_in_head"):
+            self.qualify()
 
 
 if __name__ == "__main__":

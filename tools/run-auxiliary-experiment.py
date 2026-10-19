@@ -19,7 +19,6 @@ import time
 
 BASELINE = "b25e9e411dde6921b4fb1fda3c3cb7842930c2f3"
 INPUT_GLOBS = (
-    "experiments/selected_compat/**/*.py",
     "tools/run-auxiliary-experiment.py",
     "tools/tests/test-auxiliary-experiment-runner.py",
     ".github/workflows/selected-auxiliary-experiment.yml",
@@ -97,12 +96,50 @@ def production_guard(root, baseline=BASELINE):
 
 
 def input_snapshot(root):
-    files = sorted({path for pattern in INPUT_GLOBS for path in root.glob(pattern)})
+    files = {path for pattern in INPUT_GLOBS for path in root.glob(pattern)}
+    experiment = root / "experiments/selected_compat"
+    if (root / "experiments").is_symlink() or experiment.is_symlink():
+        raise Rejected("experiment_directory_symlink")
+    if experiment.exists():
+        for directory, names, entries in os.walk(experiment, followlinks=False):
+            parent = Path(directory)
+            for name in names:
+                if (parent / name).is_symlink():
+                    raise Rejected("experiment_directory_symlink")
+            for name in entries:
+                path = parent / name
+                if path.is_symlink() or not path.is_file():
+                    raise Rejected("experiment_input_not_regular")
+                # The isolated worker cannot read these original bytecode
+                # caches. All other input types, including fixture data, bind
+                # to HEAD; an ignored import must not borrow a clean status.
+                if not (path.parent.name == "__pycache__" and path.suffix == ".pyc"):
+                    files.add(path)
+    head = {}
+    for entry in git(root, "ls-tree", "-r", "-z", "HEAD").split(b"\0"):
+        if not entry:
+            continue
+        metadata, raw_path = entry.split(b"\t", 1)
+        mode, kind, oid = metadata.decode("ascii").split()
+        head[os.fsdecode(raw_path)] = (mode, kind, oid)
     result = {}
-    for path in files:
+    for path in sorted(files):
         if path.is_symlink() or not path.is_file():
             raise Rejected("experiment_input_not_regular")
-        result[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        name = path.relative_to(root).as_posix()
+        entry = head.get(name)
+        if entry is None:
+            raise Rejected("experiment_input_not_in_head")
+        mode, kind, oid = entry
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise Rejected("experiment_input_not_regular_head_blob")
+        data = path.read_bytes()
+        actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        if actual != oid:
+            raise Rejected("experiment_input_differs_from_head")
+        if bool(path.stat().st_mode & 0o111) != (mode == "100755"):
+            raise Rejected("experiment_input_mode_differs_from_head")
+        result[name] = hashlib.sha256(data).hexdigest()
     return result
 
 
@@ -192,10 +229,12 @@ def qualify(root, requested, baseline=BASELINE):
     start = time.monotonic()
     try:
         before = production_guard(root, baseline)
-        inputs = input_snapshot(root)
-        if not inputs or not (root / "experiments/selected_compat/test_auxiliary.py").is_file():
+        if not (root / "experiments/selected_compat/test_auxiliary.py").is_file():
             raise Rejected("auxiliary_tests_missing")
         clean_source(root, report["commit"])
+        inputs = input_snapshot(root)
+        if not inputs:
+            raise Rejected("auxiliary_tests_missing")
         report["input_sha256"] = inputs
         report["tests"] = run_tests(root, target)
         report["test_execution"] = "isolated_python_with_fresh_bytecode_prefix"

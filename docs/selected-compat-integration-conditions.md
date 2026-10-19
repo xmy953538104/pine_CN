@@ -125,5 +125,9 @@ production-source addition, a missing/empty suite, any skipped or expected-failu
 test, unexpected success, failure or exception cannot yield a passing
 qualification. Tests execute in a fresh isolated interpreter with an empty
 bytecode-cache prefix so same-size/same-mtime stale caches, including helper
-caches, cannot substitute old execution for the recorded source. The CI matrix runs
+caches, cannot substitute old execution for the recorded source. The experiment
+tree rejects linked files/directories and binds every non-cache input to a
+regular HEAD Git blob, so ignored helpers cannot borrow a clean Git status or
+escape the recorded commit. This checks the declared experiment input tree;
+it is not a sandbox for arbitrary hostile Python test code. The CI matrix runs
 these same commands on Python 3.11 and 3.12 and uploads host evidence only.

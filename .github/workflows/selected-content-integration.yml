@@ -11,6 +11,7 @@ on:
       - 'tests/selected-scan/**'
       - 'tools/run-selected-service-boundary.py'
       - 'tools/run-selected-scan-observed.py'
+      - 'tools/selected_key_store_compat.py'
       - 'tools/tests/test-selected*'
       - 'tools/verify-selected-content-apk.py'
       - '.github/workflows/selected-content-integration.yml'

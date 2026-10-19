@@ -1,7 +1,7 @@
 name: Selected content Android integration
 on:
   push:
-    branches: [feat/selected-content-integration-v1, feat/selected-p1-candidate-v1, feat/selected-scan-observability-v1]
+    branches: [feat/selected-content-integration-v1, feat/selected-p1-candidate-v1, feat/selected-scan-observability-v1, feat/selected-key-state-v1]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:

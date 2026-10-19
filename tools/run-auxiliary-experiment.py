@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -29,6 +30,7 @@ PRODUCTION_ROOTS = (
     "app", "gradle", ".gitmodules", "build.gradle", "settings.gradle",
     "gradle.properties", "gradlew", "gradlew.bat",
 )
+GENERATED_CACHE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\.cpython-[0-9]{2,3}(?:\.opt-[12])?\.pyc\Z", re.ASCII)
 
 
 class Rejected(ValueError):
@@ -110,11 +112,15 @@ def input_snapshot(root):
                 path = parent / name
                 if path.is_symlink() or not path.is_file():
                     raise Rejected("experiment_input_not_regular")
-                # The isolated worker cannot read these original bytecode
-                # caches. All other input types, including fixture data, bind
-                # to HEAD; an ignored import must not borrow a clean status.
-                if not (path.parent.name == "__pycache__" and path.suffix == ".pyc"):
-                    files.add(path)
+                # Tagged CPython caches cannot be addressed as ordinary
+                # sourceless imports and the fresh prefix prevents cache use.
+                # Legacy '<module>.pyc' CAN be imported even in __pycache__;
+                # reject it instead of exempting executable ignored inputs.
+                if path.parent.name == "__pycache__" and GENERATED_CACHE.fullmatch(path.name):
+                    continue
+                if path.suffix == ".pyc":
+                    raise Rejected("sourceless_bytecode_not_supported")
+                files.add(path)
     head = {}
     for entry in git(root, "ls-tree", "-r", "-z", "HEAD").split(b"\0"):
         if not entry:

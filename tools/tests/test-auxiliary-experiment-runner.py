@@ -268,6 +268,17 @@ class RunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(RUNNER.Rejected, "experiment_input_not_in_head"):
             self.qualify()
 
+    def test_legacy_sourceless_helper_in_cache_directory_cannot_escape_head(self):
+        cache = self.tests / "__pycache__"
+        cache.mkdir()
+        source = Path(self.temporary.name) / "public_synthetic_helper.py"
+        source.write_text("VALUE = 7\n")
+        py_compile.compile(str(source), cfile=str(cache / "hidden_helper.pyc"), doraise=True)
+        source.unlink()
+        self.fixture("from __pycache__ import hidden_helper; self.assertEqual(hidden_helper.VALUE, 7)")
+        with self.assertRaisesRegex(RUNNER.Rejected, "sourceless_bytecode_not_supported"):
+            self.qualify()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,89 @@
+name: Offline Present watchdog model
+on:
+  push:
+    branches: [design/present-watchdog-v1]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'docs/present-watchdog-v1.md'
+      - 'tools/present_watchdog/**'
+      - 'tools/tests/test-present-watchdog-model.py'
+      - '.github/workflows/present-watchdog-model.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: present-watchdog-model-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  model:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/present-watchdog-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Pure synthetic state machine regressions
+        id: model_tests
+        run: |
+          set -o pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          python3 tools/tests/test-present-watchdog-model.py 2>&1 | tee "$EVIDENCE_DIR/tests.txt"
+      - name: Generated offline example only
+        id: demo
+        run: |
+          python3 tools/present_watchdog/model.py --demo > "$EVIDENCE_DIR/synthetic-demo.jsonl"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          lines = (Path(os.environ['EVIDENCE_DIR']) / 'synthetic-demo.jsonl').read_text().splitlines()
+          rows = [json.loads(line) for line in lines]
+          assert [row['kind'] for row in rows] == ['no_new_present_observed', 'present_observation_resumed']
+          assert all(row['data_kind'] == 'synthetic_offline' and row['cause'] == 'undetermined' for row in rows)
+          assert all(len(line.encode('ascii')) <= 4096 for line in lines)
+          assert all(row['snapshot']['status'] == 'not_connected' for row in rows)
+          PY
+      - name: Bind exact source and observed test outcomes
+        if: always()
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          MODEL_STATUS: ${{ steps.model_tests.outcome }}
+          DEMO_STATUS: ${{ steps.demo.outcome }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, platform, subprocess
+          from pathlib import Path
+          out = Path(os.environ['EVIDENCE_DIR'])
+          out.mkdir(parents=True, exist_ok=True)
+          names = ['tools/present_watchdog/__init__.py', 'tools/present_watchdog/model.py',
+                   'tools/tests/test-present-watchdog-model.py', 'docs/present-watchdog-v1.md',
+                   '.github/workflows/present-watchdog-model.yml']
+          git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
+          head, status = git('rev-parse', 'HEAD'), git('status', '--porcelain')
+          record = {'source_commit': head, 'expected_commit': os.environ['EXPECTED_SHA'], 'source_status': status,
+                    'python': platform.python_version(), 'data_kind': 'synthetic_offline',
+                    'model_tests': os.environ['MODEL_STATUS'], 'demo': os.environ['DEMO_STATUS'],
+                    'production_connected': False, 'real_thread_capture': False, 'device_execution': False,
+                    'input_sha256': {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in names},
+                    'artifact_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in out.iterdir() if p.is_file()}}
+          (out / 'manifest.json').write_text(json.dumps(record, indent=2) + '\n')
+          assert head == os.environ['EXPECTED_SHA'] and not status
+          assert os.environ['MODEL_STATUS'] == os.environ['DEMO_STATUS'] == 'success'
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: present-watchdog-model-${{ github.event.pull_request.head.sha || github.sha }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/present-watchdog-evidence/
+          if-no-files-found: error

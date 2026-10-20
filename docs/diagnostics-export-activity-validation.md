@@ -28,7 +28,7 @@ Robolectric app sandbox and contain public synthetic input only.
 | Category selection cancel/apply | Cancel preserves settings; deselecting everything persists explicit `none`, not the empty value used for all categories |
 | Picker cancellation after Activity recreation | Retained snapshot is released through the new Activity registry and another preview works |
 | Picker success after Activity recreation | New Activity exports exactly the old prepared metadata/log bytes after source logs change |
-| Repeated clicks during preparation | One prepared snapshot and preview; no duplicate export preparation |
+| Repeated clicks during preparation | Hold the first preparation at the JNI status boundary, count live lifecycle jobs after both clicks, drain all preparation workers, then assert one snapshot/preview and cleanup |
 | RESULT_OK without a URI | Treated as cancellation; no output is opened |
 | Cache evicts a prepared snapshot | Visible failure rather than false success, cleanup and successful fresh retry |
 | Settings recreation while enabled | Preferences and live Session survive without another native configuration/start |
@@ -37,7 +37,10 @@ The AndroidX `CreateDocument` contract is exercised as supplied by the pinned
 dependency; the suite does not invent an extra intent category requirement.
 Main-looper handlers and real IO workers are allowed to complete before asserting
 results. Synthetic failure tests assert observable recovery, not only internal
-state flags.
+state flags. A temporary local negative control removed only the Activity
+preparation guard: the repeated-click case failed with two live preparations
+instead of one. That mutation was restored before commit qualification; no
+production changes from the control are part of this branch.
 
 ## Reproduction
 
@@ -45,10 +48,12 @@ Use the repository's Java 17, Gradle 8.6 and Android SDK setup. Existing CI's
 JVM-only graph check prevents building native emulation or an APK for this task.
 
 ```sh
+IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon clean
 IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon \
   -PpineNativeDebugOptimization=2 -PpineSelectedContent=false \
   testFullDebugUnitTest --tests emu.skyline.diagnostics.DiagnosticsActivityTest
 
+IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon clean
 IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon \
   -PpineNativeDebugOptimization=2 -PpineSelectedContent=true testFullDebugUnitTest
 ```
@@ -56,7 +61,10 @@ IS_BUILD_SIGNED=false SIGNING_STORE_PATH=unused.jks ./gradlew --no-daemon \
 Run the full unit task with each Selected build-gate value when qualifying a
 commit. Exact source SHA, flags, JUnit totals and input/report hashes belong in
 the accompanying qualification evidence; development runs do not qualify a
-later commit. Local verification may use the already documented pinned local
+later commit. Clean the current worktree build outputs for each qualification: a
+local incremental Kotlin run retained an older inlined `DIAGNOSTICS_COMMIT` in
+the Activity even after BuildConfig changed. The exact metadata-commit assertion
+caught that mismatch and remains required. Local verification may use the already documented pinned local
 dependency helper; GitHub CI uses the repository's ordinary dependency setup.
 
 ## Boundaries and remaining device acceptance

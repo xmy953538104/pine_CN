@@ -18,13 +18,16 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import androidx.lifecycle.lifecycleScope
 import emu.skyline.BuildConfig
 import emu.skyline.getPublicFilesDir
 import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
+import kotlinx.coroutines.Job
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -52,6 +55,10 @@ import org.robolectric.shadows.ShadowToast
 class DiagnosticsActivityTest {
     private data class Configuration(val enabled: Boolean, val verbose: Boolean,
         val files: Int, val categories: String, val session: String)
+    private class StatusGate {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+    }
 
     @Implements(value = Diagnostics::class, isInAndroidSdk = false)
     class NativeDiagnostics {
@@ -62,7 +69,13 @@ class DiagnosticsActivityTest {
                 configurations.add(Configuration(enabled, verbose, files, categories, session))
                 return enabled
             }
-            @JvmStatic @Implementation fun statusNative() = longArrayOf(if (nativeEnabled) 1 else 0, 0, 0, 0)
+            @JvmStatic @Implementation fun statusNative(): LongArray {
+                statusGate?.let { gate ->
+                    gate.entered.countDown()
+                    check(gate.release.await(5, TimeUnit.SECONDS)) { "Synthetic status gate timed out" }
+                }
+                return longArrayOf(if (nativeEnabled) 1 else 0, 0, 0, 0)
+            }
             @JvmStatic @Implementation fun setLaunchNative(id: String, title: String, newLaunch: Boolean) = Unit
             @JvmStatic @Implementation fun emitFieldsNative(category: String, event: String, level: String,
                 keys: Array<String>, values: Array<String>) = true
@@ -93,6 +106,7 @@ class DiagnosticsActivityTest {
         private val destinationModes = CopyOnWriteArrayList<String>()
         @Volatile private var nativeEnabled = false
         @Volatile private var failDestination = false
+        @Volatile private var statusGate: StatusGate? = null
         private lateinit var destination: File
         private val destinationUri = Uri.parse("content://pine.synthetic.export/diagnostics.zip")
     }
@@ -116,6 +130,8 @@ class DiagnosticsActivityTest {
     }
 
     @After fun stopActualDiagnosticsActivity() {
+        statusGate?.release?.countDown()
+        statusGate = null
         ShadowDialog.getLatestDialog()?.dismiss()
         if (::controller.isInitialized) controller.pause().stop().destroy()
         shadowOf(Looper.getMainLooper()).idle()
@@ -231,7 +247,8 @@ class DiagnosticsActivityTest {
         assertEquals(listOf("wt"), destinationModes.toList())
         val contents = contents()
         assertEquals(setOf("session-metadata.txt", "main/diagnostics-0.jsonl", "emulation.log"), contents.keys)
-        assertTrue(contents.getValue("session-metadata.txt").contains("exporter_commit=${BuildConfig.DIAGNOSTICS_COMMIT}"))
+        assertEquals(BuildConfig.DIAGNOSTICS_COMMIT, contents.getValue("session-metadata.txt")
+            .lineSequence().single { it.startsWith("exporter_commit=") }.substringAfter('='))
         assertTrue(contents.getValue("main/diagnostics-0.jsonl").contains("UI_EXPORT_CANARY"))
         assertTrue(contents.getValue("emulation.log").contains("hello 世界"))
         assertFalse(contents.values.any { it.contains("content://synthetic") })
@@ -327,10 +344,32 @@ class DiagnosticsActivityTest {
     }
 
     @Test fun repeatedClickWhilePreparingProducesOnlyOnePreview() {
+        await("initial status refresh") {
+            views().filterIsInstance<TextView>().any { it.text.startsWith("Status process:") }
+        }
         val old = ShadowDialog.getLatestDialog()
         val export = button("Preview and export")
-        export.performClick(); export.performClick()
-        await("one preview") { ShadowDialog.getLatestDialog().let { it !== old && it?.isShowing == true } }
+        val owner = requireNotNull(activity.lifecycleScope.coroutineContext[Job])
+        val existingJobs = owner.children.toSet()
+        val gate = StatusGate()
+        statusGate = gate
+        var preparations = emptyList<Job>()
+        try {
+            export.performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue("first preparation reached real IO worker", gate.entered.await(2, TimeUnit.SECONDS))
+            export.performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            preparations = owner.children.filter { it !in existingJobs }.toList()
+            // All launched jobs are registered synchronously. Holding the first IO worker
+            // prevents a duplicate preparation from completing before it can be counted.
+            assertEquals("only one live preparation after both clicks", 1, preparations.size)
+        } finally {
+            gate.release.countDown()
+            await("all preparation workers completed") { preparations.all { it.isCompleted } }
+            statusGate = null
+        }
+        assertTrue(ShadowDialog.getLatestDialog().let { it !== old && it?.isShowing == true })
         assertEquals(1, snapshots().size)
         latestDialog().getButton(DialogInterface.BUTTON_NEGATIVE).performClick()
         await("single preview cleanup") { snapshots().isEmpty() }

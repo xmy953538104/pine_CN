@@ -441,3 +441,14 @@ No old identity is written back into current native or platform state. Platform
 history may therefore remain unknown after orderly cleanup; these local failure
 records are separate evidence, not a fabricated verified exit association.
 Sink failure, admission loss or abrupt death can still prevent persistence.
+
+### Opt-in resource observer
+
+See [diagnostics-resources-v1.md](diagnostics-resources-v1.md) for exact sources,
+units, scope, availability and acceptance boundaries. New events use schema 1
+and category `resource`: `RESOURCE_CAPABILITIES`, `RESOURCE_GUEST_SAMPLE`,
+`RESOURCE_GPU_SAMPLE`, `HOST_MEMORY_SAMPLE`,
+`RESOURCE_POST_PROGRESS_NO_NEW_PRESENT`, `RESOURCE_PRESENT_RECOVERED`.
+Cohort is a user label; NVN user buffer metrics and loaded NSO BuildID remain
+explicitly unavailable/not observed. Resource window metadata has its own
+`record_kind=resource_window_metadata` and no invented sequence number.

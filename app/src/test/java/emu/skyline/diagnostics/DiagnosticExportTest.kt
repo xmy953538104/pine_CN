@@ -15,6 +15,32 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 
 class DiagnosticExportTest {
+    @Test fun resourceWindowsUseFixedScopesAndRedactBeforeZipExport() = sandbox { logs, textLog, cache, _ ->
+        listOf("main/", "emulation/", "").forEachIndexed { index, scope ->
+            log(logs, "${scope}resource-window.jsonl", """{"schema":1,"session_id":"sample-$index","seq":1,"event":"HOST_MEMORY_SAMPLE","fields":{"rss_kib":"123","path":"/data/user/0/private/memory","password":"hidden-value"}}""" + "\n")
+        }
+        log(logs, "foreign/resource-window.jsonl", "{}\n")
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            for (scope in listOf("main/", "emulation/", "")) {
+                val row = Json.parseToJsonElement(entries.getValue("${scope}resource-window.jsonl").trim()).jsonObject
+                assertEquals("123", row["fields"]!!.jsonObject["rss_kib"]!!.jsonPrimitive.content)
+            }
+            assertFalse(entries.containsKey("foreign/resource-window.jsonl"))
+            assertFalse(entries.values.joinToString().contains("hidden-value"))
+            assertFalse(entries.values.joinToString().contains("/data/user"))
+        }
+    }
+    @Test fun oversizedResourceWindowIsOmittedRatherThanTreatedAsEightMiBLog() = sandbox { logs, textLog, cache, _ ->
+        log(logs, "main/resource-window.jsonl", "x".repeat(128 * 1024 + 1))
+        assertFalse(DiagnosticExport.files(logs, textLog).any { it.name == "resource-window.jsonl" })
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            assertFalse(entries.containsKey("main/resource-window.jsonl"))
+            assertTrue(entries.getValue("session-metadata.txt").contains("main/resource-window.jsonl: exceeds 131072 bytes"))
+        }
+    }
+
     @Test fun productionGuestDfx1RawTextAndDecodedPayloadSurviveRealZipExport() = sandbox { logs, textLog, cache, _ ->
         val source = File("../tools/tests/fixtures/native-sink.jsonl").readText()
         val original = source.lineSequence().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.toList()

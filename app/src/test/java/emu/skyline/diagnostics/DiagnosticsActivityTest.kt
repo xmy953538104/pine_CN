@@ -298,6 +298,25 @@ class DiagnosticsActivityTest {
         assertEquals(8, app.getSharedPreferences("diagnostics", Context.MODE_PRIVATE).getInt("files", -1))
     }
 
+    @Test fun resourceCategoryCanBeSelectedAndPersistedThroughActualDialog() {
+        val prefs = app.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
+        prefs.edit().putString("categories", "content").commit()
+        button("Diagnostic categories").performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        val dialog = latestDialog()
+        val list = dialog.listView
+        val resource = (0 until list.count).single { list.getItemAtPosition(it) == "resource" }
+        assertFalse(list.isItemChecked(resource))
+        list.performItemClick(list.getChildAt(resource), resource, resource.toLong())
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+        await("resource category applied") { configurations.lastOrNull()?.categories == "content,resource" }
+        assertEquals("content,resource", prefs.getString("categories", ""))
+        button("Diagnostic categories").performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(latestDialog().listView.isItemChecked(resource))
+        latestDialog().getButton(DialogInterface.BUTTON_NEGATIVE).performClick()
+    }
+
     @Test fun categoryDialogCancellationDoesNotPersistAndEmptySelectionMeansNone() {
         button("Diagnostic categories").performClick()
         shadowOf(Looper.getMainLooper()).idle()

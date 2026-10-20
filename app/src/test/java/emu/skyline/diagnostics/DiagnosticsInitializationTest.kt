@@ -43,6 +43,10 @@ class DiagnosticsInitializationTest {
                 configured.countDown()
                 return enabled
             }
+            @JvmStatic @Implementation fun configureResourceNative(enabled: Boolean, cohort: String) {
+                if (resourceConfigureFails) throw UnsatisfiedLinkError("fixture JNI unavailable")
+                resourceConfigurations.add(enabled to cohort)
+            }
             @JvmStatic @Implementation fun statusNative() = longArrayOf(if (nativeEnabled) 1 else 0, 0, 0, 0)
             @JvmStatic @Implementation fun setLaunchNative(id: String, title: String, newLaunch: Boolean) = Unit
             @JvmStatic @Implementation fun emitFieldsNative(category: String, event: String, level: String,
@@ -62,11 +66,74 @@ class DiagnosticsInitializationTest {
         }
     }
     companion object {
+        private val resourceConfigurations = CopyOnWriteArrayList<Pair<Boolean, String>>()
         private val applied = CopyOnWriteArrayList<Applied>()
         private val events = CopyOnWriteArrayList<NativeEvent>()
+        @Volatile private var resourceConfigureFails = false
         @Volatile private var nativeEnabled = false
         @Volatile private var nativeSession = ""
         @Volatile private var configured = CountDownLatch(1)
+    }
+
+    @Test fun resourceOptInCannotEnableDisabledDiagnostics() {
+        Diagnostics.apply(SnapshotContext(RuntimeEnvironment.getApplication()) {
+            mapOf("enabled" to false, "resources" to true, "resource_cohort" to "official")
+        })
+        assertFalse(nativeEnabled)
+        assertEquals(false to "official", resourceConfigurations.last())
+    }
+    @Test fun resourceOptInAndCohortParticipateInConfigurationSignature() {
+        fun apply(resources: Boolean, cohort: String) = Diagnostics.apply(SnapshotContext(RuntimeEnvironment.getApplication()) {
+            mapOf("enabled" to true, "resources" to resources, "resource_cohort" to cohort)
+        })
+        apply(false, "unspecified")
+        val firstSession = nativeSession
+        assertEquals(false to "unspecified", resourceConfigurations.last())
+        apply(true, "official")
+        assertNotEquals(firstSession, nativeSession)
+        val officialSession = nativeSession
+        assertEquals(true to "official", resourceConfigurations.last())
+        apply(true, "golden_mod")
+        assertNotEquals(officialSession, nativeSession)
+        assertEquals(true to "golden_mod", resourceConfigurations.last())
+        Diagnostics.finishSession()
+        assertFalse(resourceConfigurations.last().first)
+    }
+    private fun assertResourceWorkerAbsentAndReadInactive() {
+        val worker = Diagnostics::class.java.getDeclaredField("resourceWorker").apply { isAccessible = true }
+        assertNull("No sampling thread may be created", worker.get(Diagnostics))
+        val read = Diagnostics::class.java.getDeclaredMethod("readHostResources").apply { isAccessible = true }
+        val value = read.invoke(Diagnostics) as HostResourceSampler.Reading
+        assertEquals("inactive", value.pssStatus)
+        assertEquals("inactive", value.rssStatus)
+    }
+    @Test fun resourceCategoryMustBeSelectedExactlyBeforeStartingOwnedLaunchSampler() {
+        for (categories in listOf("content,storage", "none", "resources", "guest, resource")) {
+            Diagnostics.apply(SnapshotContext(RuntimeEnvironment.getApplication()) {
+                mapOf("enabled" to true, "resources" to true, "categories" to categories)
+            })
+            Diagnostics.beginLaunch(null, 42)
+            assertEquals(false to "unspecified", resourceConfigurations.last())
+            assertResourceWorkerAbsentAndReadInactive()
+            Diagnostics.finishSession(42)
+        }
+    }
+    @Test fun unavailableResourceJniNeverStartsSamplerEvenForOwnedLaunch() {
+        resourceConfigureFails = true
+        Diagnostics.apply(SnapshotContext(RuntimeEnvironment.getApplication()) {
+            mapOf("enabled" to true, "resources" to true, "categories" to "guest,resource")
+        })
+        Diagnostics.beginLaunch(null, 42)
+        assertTrue("Other diagnostics remain usable", nativeEnabled)
+        assertResourceWorkerAbsentAndReadInactive()
+        Diagnostics.finishSession(42)
+    }
+
+    @Test fun cohortIsStrictUserEnumAndMissingOptInIsOff() {
+        Diagnostics.apply(SnapshotContext(RuntimeEnvironment.getApplication()) {
+            mapOf("enabled" to true, "resource_cohort" to "/data/user/private-label")
+        })
+        assertEquals(false to "unspecified", resourceConfigurations.last())
     }
 
     private class SnapshotContext(base: Context, values: () -> Map<String, *>) : ContextWrapper(base) {
@@ -90,6 +157,8 @@ class DiagnosticsInitializationTest {
     @Before fun reset() {
         Diagnostics.finishSession()
         applied.clear()
+        resourceConfigurations.clear()
+        resourceConfigureFails = false
         events.clear()
         configured = CountDownLatch(1)
     }

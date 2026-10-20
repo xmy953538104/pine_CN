@@ -915,6 +915,15 @@ namespace skyline::kernel::svc {
 
     void Break(const DeviceState &state, SvcContext &ctx) {
         auto reason{ctx.x0};
+        if (diagnostics::Enabled()) {
+            try {
+                diagnostics::Emit("guest", "GUEST_BREAK_REQUEST", {{"break_reason", std::to_string(reason)},
+                    {"notification_only", reason & (1ULL << 31) ? "true" : "false"},
+                    {"location", "kernel::svc::Break"},
+                    {"observation", "guest_svc_request_before_stack_formatting_not_host_signal_or_memory_diagnosis"}},
+                    reason & (1ULL << 31) ? "INFO" : "WARN");
+            } catch (...) {} // Only observation preparation; original guest flow follows.
+        }
         if (reason & (1ULL << 31)) {
             LOGD("Debugger is being engaged ({})", reason);
         } else {

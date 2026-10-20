@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iterator>
 #include <new>
+#include <sys/wait.h>
 
 static bool failAllocation{};
 [[gnu::noinline]] void *operator new(size_t size) {
@@ -26,6 +27,13 @@ using namespace skyline::diagnostics;
 namespace fs = std::filesystem;
 static fs::path root;
 static constexpr auto reason = ResourceWindowReason::Periodic;
+using Stage = ResourceWindowFailureStage;
+using FailureReason = ResourceWindowFailureReason;
+template<class Window> static void Failure(const Window &window, Stage stage, FailureReason reason, int error = 0) {
+    const auto failure = window.LastFailure();
+    CHECK(failure.stage == stage && failure.reason == reason && failure.error == error);
+}
+template<class Window> static void Cleared(const Window &window) { Failure(window, Stage::None, FailureReason::None); }
 static fs::path Directory(const char *name) { auto path = root / name; CHECK(fs::create_directories(path)); return path; }
 static std::string Read(const fs::path &path) {
     std::ifstream input(path, std::ios::binary); CHECK(input.good());
@@ -45,7 +53,9 @@ static std::string Line(size_t bytes) {
 
 static void EmptyAndFraming() {
     const auto empty = Directory("empty"); RecentResourceWindow window;
+    Cleared(window);
     CHECK(Persist(window, empty));
+    Cleared(window);
     const auto metadata = Read(empty / "resource-window.jsonl");
     CHECK(metadata.find("\"retained_records\":0") != std::string::npos && metadata.find("\"earliest_monotonic_us\":null") != std::string::npos);
     CHECK(metadata.find("not_complete_history") != std::string::npos);
@@ -108,8 +118,11 @@ static void QuotedMetadataAndInvalidSession() {
     const auto original = Read(directory / "resource-window.jsonl");
     CHECK(original.find("\\u000a") != std::string::npos && original.find("\\u0009") != std::string::npos);
     CHECK(!Persist(window, directory, "")); CHECK(!Persist(window, directory, std::string(129, 'a')));
+    Failure(window, Stage::Validate, FailureReason::SizeLimit);
     for (const auto invalid : {"\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xf0"}) CHECK(!Persist(window, directory, invalid));
+    Failure(window, Stage::Validate, FailureReason::InvalidInput);
     CHECK(!window.Persist(directory.string(), "session", static_cast<ResourceWindowReason>(255)));
+    Failure(window, Stage::Validate, FailureReason::InvalidInput);
     CHECK(Read(directory / "resource-window.jsonl") == original);
     const auto max = Directory("maximum-metadata");
     CHECK(Persist(window, max, std::string(RecentResourceWindow::MaxSessionBytes, '\1')));
@@ -129,16 +142,23 @@ static void AllocationExceptionsCannotEscapeOrReplaceTarget() {
     const auto path = directory.string();
     failAllocation = true; const auto persisted = window.Persist(path, "synthetic-session", reason); failAllocation = false;
     CHECK(!persisted && Read(directory / "resource-window.jsonl") == original);
+    Failure(window, Stage::Metadata, FailureReason::AllocationFailure);
+    CHECK(window.Add(2, "{}")); // Add must not erase the persistence diagnosis.
+    Failure(window, Stage::Metadata, FailureReason::AllocationFailure);
     CHECK(!fs::exists(directory / "resource-window.tmp"));
+    CHECK(Persist(window, directory)); Cleared(window);
 }
 
 struct FaultIo : resource_window_detail::PosixIo {
-    enum class Mode { Normal, FailWrite, ZeroWrite, InvalidWriteCount, FailSync, FailClose, FailRename, ShortAndInterrupt, AlwaysInterrupt };
+    enum class Mode { Normal, FailWrite, FailRecordWrite, ZeroWrite, InvalidWriteCount,
+        SkipRecordWrite, FailSync, FailClose, FailRename, ThrowUnknown, ShortAndInterrupt, AlwaysInterrupt };
     static inline Mode mode{};
     static inline unsigned calls{};
     static ssize_t Write(int fd, const void *data, size_t size) noexcept {
         ++calls;
         if (mode == Mode::FailWrite) { errno = ENOSPC; return -1; }
+        if (mode == Mode::FailRecordWrite && calls == 2) { errno = EIO; return -1; }
+        if (mode == Mode::SkipRecordWrite && calls == 2) return static_cast<ssize_t>(size);
         if (mode == Mode::ZeroWrite) return 0;
         if (mode == Mode::InvalidWriteCount) return static_cast<ssize_t>(size + 1);
         if (mode == Mode::AlwaysInterrupt || (mode == Mode::ShortAndInterrupt && calls == 1)) { errno = EINTR; return -1; }
@@ -146,25 +166,42 @@ struct FaultIo : resource_window_detail::PosixIo {
     }
     static int Sync(int fd) noexcept { if (mode == Mode::FailSync) { errno = EIO; return -1; } return ::fsync(fd); }
     static int Close(int fd) noexcept { const auto closed = ::close(fd); if (mode == Mode::FailClose) { errno = EIO; return -1; } return closed; }
-    static int Rename(int directory, const char *from, const char *to) noexcept {
+    static int Rename(int directory, const char *from, const char *to) {
         if (mode == Mode::FailRename) { errno = EACCES; return -1; }
+        if (mode == Mode::ThrowUnknown) throw 1;
         return ::renameat(directory, from, directory, to);
     }
 };
 static void IoFailuresPreserveExistingTarget() {
     using Window = BasicRecentResourceWindow<FaultIo>;
     unsigned index{};
-    for (auto mode : {FaultIo::Mode::FailWrite, FaultIo::Mode::ZeroWrite, FaultIo::Mode::InvalidWriteCount,
-        FaultIo::Mode::FailSync, FaultIo::Mode::FailClose, FaultIo::Mode::FailRename, FaultIo::Mode::AlwaysInterrupt}) {
+    struct Fault { FaultIo::Mode mode; Stage stage; FailureReason reason; int error; };
+    constexpr Fault faults[]{
+        {FaultIo::Mode::FailWrite, Stage::WriteMetadata, FailureReason::SyscallError, ENOSPC},
+        {FaultIo::Mode::FailRecordWrite, Stage::WriteRecords, FailureReason::SyscallError, EIO},
+        {FaultIo::Mode::ZeroWrite, Stage::WriteMetadata, FailureReason::ZeroWrite, 0},
+        {FaultIo::Mode::InvalidWriteCount, Stage::WriteMetadata, FailureReason::InvalidWriteCount, 0},
+        {FaultIo::Mode::SkipRecordWrite, Stage::VerifySize, FailureReason::ChangedFile, 0},
+        {FaultIo::Mode::FailSync, Stage::Sync, FailureReason::SyscallError, EIO},
+        {FaultIo::Mode::FailClose, Stage::Close, FailureReason::SyscallError, EIO},
+        {FaultIo::Mode::FailRename, Stage::Rename, FailureReason::SyscallError, EACCES},
+        {FaultIo::Mode::ThrowUnknown, Stage::Exception, FailureReason::UnknownException, 0},
+        {FaultIo::Mode::AlwaysInterrupt, Stage::WriteMetadata, FailureReason::SyscallError, EINTR},
+    };
+    for (const auto fault : faults) {
         const auto name = "io-failure-" + std::to_string(index++); const auto directory = Directory(name.c_str());
         const auto target = directory / "resource-window.jsonl"; Write(target, "{\"old_target\":true}\n");
         const auto old = Read(target);
-        Window window; CHECK(window.Add(1, "{\"replacement\":true}")); FaultIo::mode = mode; FaultIo::calls = 0;
+        Window window; CHECK(window.Add(1, "{\"replacement\":true}")); FaultIo::mode = fault.mode; FaultIo::calls = 0;
         CHECK(!window.Persist(directory.string(), "synthetic", reason));
         CHECK(Read(target) == old && !fs::exists(directory / "resource-window.tmp"));
-        if (mode == FaultIo::Mode::AlwaysInterrupt) CHECK(FaultIo::calls == 33);
+        // Cleanup and subsequent syscalls may change errno, never this POD.
+        errno = ERANGE;
+        Failure(window, fault.stage, fault.reason, fault.error);
+        if (fault.mode == FaultIo::Mode::AlwaysInterrupt) CHECK(FaultIo::calls == 33);
         FaultIo::mode = FaultIo::Mode::Normal;
         CHECK(window.Persist(directory.string(), "synthetic", reason)); CHECK(Read(target).find("replacement") != std::string::npos);
+        Cleared(window);
     }
     Window partial; const auto directory = Directory("partial-writes"); CHECK(partial.Add(1, "{}"));
     FaultIo::mode = FaultIo::Mode::ShortAndInterrupt; FaultIo::calls = 0;
@@ -177,22 +214,198 @@ static void LinksSpecialFilesAndAnchoredDirectory() {
     const auto directory = Directory("links"); const auto outside = root / "outside-data";
     Write(outside, "PUBLIC_SYNTHETIC_OUTSIDE"); const auto target = directory / "resource-window.jsonl";
     const auto temporary = directory / "resource-window.tmp";
-    fs::create_symlink(outside, target); CHECK(!Persist(window, directory)); CHECK(fs::is_symlink(target)); fs::remove(target);
-    fs::create_hard_link(outside, target); CHECK(!Persist(window, directory)); fs::remove(target);
+    fs::create_symlink(outside, target); CHECK(!Persist(window, directory)); CHECK(fs::is_symlink(target));
+    Failure(window, Stage::InspectTarget, FailureReason::PolicyRejected); fs::remove(target);
+    fs::create_hard_link(outside, target); CHECK(!Persist(window, directory));
+    Failure(window, Stage::InspectTarget, FailureReason::PolicyRejected); fs::remove(target);
     Write(target, "old-target");
-    fs::create_symlink(outside, temporary); CHECK(!Persist(window, directory)); fs::remove(temporary);
-    fs::create_hard_link(outside, temporary); CHECK(!Persist(window, directory)); fs::remove(temporary);
-    CHECK(!::mkfifo(temporary.c_str(), 0600)); CHECK(!Persist(window, directory)); fs::remove(temporary);
+    fs::create_symlink(outside, temporary); CHECK(!Persist(window, directory));
+    Failure(window, Stage::InspectTemporary, FailureReason::PolicyRejected); fs::remove(temporary);
+    fs::create_hard_link(outside, temporary); CHECK(!Persist(window, directory));
+    Failure(window, Stage::InspectTemporary, FailureReason::PolicyRejected); fs::remove(temporary);
+    CHECK(!::mkfifo(temporary.c_str(), 0600)); CHECK(!Persist(window, directory));
+    Failure(window, Stage::InspectTemporary, FailureReason::PolicyRejected); fs::remove(temporary);
     CHECK(Read(target) == "old-target" && Read(outside) == "PUBLIC_SYNTHETIC_OUTSIDE");
     fs::remove(target); CHECK(!::mkfifo(target.c_str(), 0600)); CHECK(!Persist(window, directory)); fs::remove(target);
     fs::create_directory(target); CHECK(!Persist(window, directory)); fs::remove(target);
     const auto real = Directory("real-directory"); fs::create_directory(real / "child"); const auto link = root / "directory-link";
     fs::create_directory_symlink(real, link); CHECK(!Persist(window, link)); CHECK(!Persist(window, link / "child"));
+    CHECK(window.LastFailure().stage == Stage::OpenDirectory && window.LastFailure().reason == FailureReason::SyscallError);
     CHECK(!fs::exists(real / "resource-window.jsonl") && !fs::exists(real / "child/resource-window.jsonl"));
     CHECK(!window.Persist((directory / "../real-directory").string(), "synthetic", reason));
+    Failure(window, Stage::Validate, FailureReason::InvalidInput);
     CHECK(!Persist(window, root / "missing-directory"));
+    Failure(window, Stage::OpenDirectory, FailureReason::SyscallError, ENOENT);
     const auto pathWithNul = directory.string() + std::string("\0hidden", 7);
     CHECK(!window.Persist(pathWithNul, "synthetic", reason));
+    Failure(window, Stage::Validate, FailureReason::InvalidInput);
+}
+
+// Root can bypass read/search permission checks. When invoked as root, run
+// these actual POSIX permission regressions in a child that drops privileges;
+// no test silently claims success from root's DAC override.
+template<class Test> static void Unprivileged(Test test) {
+    if (::geteuid()) { test(); return; }
+    std::fflush(nullptr);
+    const auto child = ::fork(); CHECK(child >= 0);
+    if (!child) {
+        CHECK(!::setgid(65534)); CHECK(!::setuid(65534)); CHECK(::geteuid());
+        test(); std::_Exit(0);
+    }
+    int status{}; CHECK(::waitpid(child, &status, 0) == child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+static void SearchOnlyAncestorCanPersist() {
+    Unprivileged([] {
+        char pattern[] = "/tmp/pine-resource-search-only-XXXXXX";
+        const auto created = ::mkdtemp(pattern); CHECK(created);
+        const fs::path base(created), ancestor = base / "search-only", leaf = ancestor / "private";
+        CHECK(fs::create_directories(leaf));
+        CHECK(!::chmod(ancestor.c_str(), 0111));
+        errno = 0;
+        const auto ancestorRead = ::open(ancestor.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        CHECK(ancestorRead < 0 && errno == EACCES); // Proves this is not a root bypass.
+        const auto directLeaf = ::open(leaf.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        CHECK(directLeaf >= 0); CHECK(!::close(directLeaf));
+        RecentResourceWindow window; CHECK(window.Add(1, "{\"search_only\":true}"));
+        CHECK(Persist(window, leaf)); Cleared(window);
+        CHECK(Read(leaf / "resource-window.jsonl").ends_with("{\"search_only\":true}\n"));
+        CHECK(!::chmod(ancestor.c_str(), 0700));
+        CHECK(fs::remove_all(base) >= 4);
+    });
+}
+
+static void RealPermissionFailuresAndRecovery() {
+    Unprivileged([] {
+        char pattern[] = "/tmp/pine-resource-permission-XXXXXX";
+        const auto created = ::mkdtemp(pattern); CHECK(created);
+        const fs::path base(created), ancestor = base / "ancestor", leaf = ancestor / "private";
+        CHECK(fs::create_directories(leaf));
+        const auto target = leaf / "resource-window.jsonl", temporary = leaf / "resource-window.tmp";
+        RecentResourceWindow window; CHECK(window.Add(1, "{\"new\":true}"));
+        constexpr std::string_view old = "{\"complete_old_target\":true}\n";
+        const auto verifyAndRecover = [&] {
+            CHECK(Read(target) == old);
+            CHECK(Persist(window, leaf)); Cleared(window);
+            CHECK(Read(target).ends_with("{\"new\":true}\n"));
+            Write(target, old);
+        };
+        Write(target, old);
+        CHECK(!::chmod(ancestor.c_str(), 0000)); CHECK(!Persist(window, leaf));
+        CHECK(!::chmod(ancestor.c_str(), 0700));
+        Failure(window, Stage::OpenDirectory, FailureReason::SyscallError, EACCES); verifyAndRecover();
+        CHECK(!::chmod(leaf.c_str(), 0000)); CHECK(!Persist(window, leaf));
+        CHECK(!::chmod(leaf.c_str(), 0700));
+        Failure(window, Stage::InspectTarget, FailureReason::SyscallError, EACCES); verifyAndRecover();
+        CHECK(!::chmod(leaf.c_str(), 0500)); CHECK(!Persist(window, leaf));
+        CHECK(!::chmod(leaf.c_str(), 0700));
+        Failure(window, Stage::OpenTemporary, FailureReason::SyscallError, EACCES); verifyAndRecover();
+        Write(temporary, "owned-stale-temporary");
+        CHECK(!::chmod(leaf.c_str(), 0500)); CHECK(!Persist(window, leaf));
+        CHECK(!::chmod(leaf.c_str(), 0700));
+        Failure(window, Stage::RemoveTemporary, FailureReason::SyscallError, EACCES);
+        CHECK(Read(temporary) == "owned-stale-temporary"); verifyAndRecover();
+        CHECK(!fs::exists(temporary)); CHECK(fs::remove_all(base) >= 4);
+    });
+}
+
+struct MutationIo : resource_window_detail::PosixIo {
+    enum class Mode { Normal, RemoveTemporary, SwapTemporary, SwapTarget, RemoveTarget, SymlinkTarget };
+    static inline Mode mode{};
+    static inline fs::path directory;
+    static int Sync(int fd) {
+        if (::fsync(fd)) return -1;
+        if (mode == Mode::Normal) return 0;
+        const auto temporary = directory / "resource-window.tmp", target = directory / "resource-window.jsonl", held = directory / "held-complete-file";
+        if (mode == Mode::RemoveTemporary) CHECK(!::unlink(temporary.c_str()));
+        else if (mode == Mode::SwapTemporary) {
+            CHECK(!::rename(temporary.c_str(), held.c_str()));
+            ::Write(temporary, "{\"another_temporary\":true}\n");
+        } else {
+            CHECK(!::rename(target.c_str(), held.c_str()));
+            if (mode == Mode::SwapTarget) ::Write(target, "{\"another_complete_target\":true}\n");
+            else if (mode == Mode::SymlinkTarget) fs::create_symlink(held, target);
+        }
+        return 0;
+    }
+};
+static void ChangedFilesFailWithoutReplacingAnotherFile() {
+    unsigned index{};
+    for (const auto mode : {MutationIo::Mode::RemoveTemporary, MutationIo::Mode::SwapTemporary,
+        MutationIo::Mode::SwapTarget, MutationIo::Mode::RemoveTarget, MutationIo::Mode::SymlinkTarget}) {
+        const auto name = "changed-file-" + std::to_string(index++); const auto directory = Directory(name.c_str());
+        const auto target = directory / "resource-window.jsonl", temporary = directory / "resource-window.tmp", held = directory / "held-complete-file";
+        constexpr std::string_view old = "{\"old_complete_target\":true}\n";
+        Write(target, old);
+        BasicRecentResourceWindow<MutationIo> window; CHECK(window.Add(1, "{\"new\":true}"));
+        MutationIo::directory = directory; MutationIo::mode = mode;
+        CHECK(!window.Persist(directory.string(), "synthetic", reason));
+        if (mode == MutationIo::Mode::RemoveTemporary) {
+            Failure(window, Stage::RecheckTemporary, FailureReason::SyscallError, ENOENT);
+            CHECK(Read(target) == old && !fs::exists(temporary));
+        } else if (mode == MutationIo::Mode::SwapTemporary) {
+            Failure(window, Stage::RecheckTemporary, FailureReason::ChangedFile);
+            CHECK(Read(target) == old && Read(temporary) == "{\"another_temporary\":true}\n");
+        } else {
+            CHECK(Read(held) == old && !fs::exists(temporary));
+            if (mode == MutationIo::Mode::SymlinkTarget) {
+                Failure(window, Stage::RecheckTarget, FailureReason::PolicyRejected); CHECK(fs::is_symlink(target));
+            } else {
+                Failure(window, Stage::RecheckTarget, FailureReason::ChangedFile);
+                if (mode == MutationIo::Mode::SwapTarget) CHECK(Read(target) == "{\"another_complete_target\":true}\n");
+                else CHECK(!fs::exists(target));
+            }
+        }
+        // Restore the fixture, then retry on this instance with real POSIX IO.
+        fs::remove(temporary); fs::remove(target); Write(target, old);
+        MutationIo::mode = MutationIo::Mode::Normal;
+        CHECK(window.Add(2, "{\"recovered\":true}"));
+        CHECK(window.Persist(directory.string(), "synthetic", reason)); Cleared(window);
+        CHECK(Read(target).ends_with("{\"recovered\":true}\n"));
+    }
+}
+
+static void FixedFailureNamesAndPersistentReset() {
+    struct StageName { Stage value; const char *name; };
+    constexpr StageName stages[]{
+        {Stage::None,"none"}, {Stage::Validate,"validate"}, {Stage::Metadata,"metadata"},
+        {Stage::OpenDirectory,"open_directory"}, {Stage::InspectTarget,"inspect_target"},
+        {Stage::InspectTemporary,"inspect_temporary"}, {Stage::RemoveTemporary,"remove_temporary"},
+        {Stage::OpenTemporary,"open_temporary"}, {Stage::ValidateTemporary,"validate_temporary"},
+        {Stage::SetPermissions,"set_permissions"}, {Stage::WriteMetadata,"write_metadata"},
+        {Stage::WriteRecords,"write_records"}, {Stage::VerifySize,"verify_size"}, {Stage::Sync,"sync"},
+        {Stage::Close,"close"}, {Stage::RecheckTemporary,"recheck_temporary"},
+        {Stage::RecheckTarget,"recheck_target"}, {Stage::Rename,"rename"}, {Stage::Exception,"exception"},
+    };
+    struct ReasonName { FailureReason value; const char *name; };
+    constexpr ReasonName reasons[]{
+        {FailureReason::None,"none"}, {FailureReason::InvalidInput,"invalid_input"},
+        {FailureReason::PolicyRejected,"policy_rejected"}, {FailureReason::SizeLimit,"size_limit"},
+        {FailureReason::SyscallError,"syscall_error"}, {FailureReason::ZeroWrite,"zero_write"},
+        {FailureReason::InvalidWriteCount,"invalid_write_count"}, {FailureReason::ChangedFile,"changed_file"},
+        {FailureReason::AllocationFailure,"allocation_failure"}, {FailureReason::UnknownException,"unknown_exception"},
+    };
+    failAllocation = true;
+    for (const auto pair : stages) CHECK(std::string_view(ResourceWindowFailureStageName(pair.value)) == pair.name);
+    for (const auto pair : reasons) CHECK(std::string_view(ResourceWindowFailureReasonName(pair.value)) == pair.name);
+    CHECK(std::string_view(ResourceWindowFailureStageName(static_cast<Stage>(255))) == "unknown_stage");
+    CHECK(std::string_view(ResourceWindowFailureReasonName(static_cast<FailureReason>(255))) == "unknown_reason");
+    CHECK(std::string_view(ResourceWindowErrnoName(0)) == "none");
+    CHECK(std::string_view(ResourceWindowErrnoName(EACCES)) == "EACCES");
+    CHECK(std::string_view(ResourceWindowErrnoName(ENOSPC)) == "ENOSPC");
+    CHECK(std::string_view(ResourceWindowErrnoName(EIO)) == "EIO");
+    CHECK(std::string_view(ResourceWindowErrnoName(-1)) == "other_errno");
+    CHECK(std::string_view(ResourceWindowErrnoName(std::numeric_limits<int>::max())) == "other_errno");
+    failAllocation = false;
+    RecentResourceWindow window; Cleared(window);
+    CHECK(!window.Persist("private-path-canary", "", reason));
+    Failure(window, Stage::Validate, FailureReason::InvalidInput);
+    CHECK(window.Add(1, "{}")); CHECK(!window.Add(2, "not-an-object"));
+    Failure(window, Stage::Validate, FailureReason::InvalidInput);
+    window.Reset(); Cleared(window);
+    CHECK(!window.Persist(std::string(4097, 'x'), "synthetic", reason));
+    Failure(window, Stage::Validate, FailureReason::SizeLimit);
 }
 
 static void StaleOwnedTemporaryCanRecover() {
@@ -233,6 +446,10 @@ int main(int argc, char **argv) {
         {"allocation exceptions preserve old target", AllocationExceptionsCannotEscapeOrReplaceTarget},
         {"disk/write/sync/close/rename faults preserve old target", IoFailuresPreserveExistingTarget},
         {"symlink/hardlink/FIFO/non-directory rejection", LinksSpecialFilesAndAnchoredDirectory},
+        {"real unprivileged search-only ancestor supports private leaf persistence", SearchOnlyAncestorCanPersist},
+        {"real POSIX permission failures retain exact stage/errno and recover", RealPermissionFailuresAndRecovery},
+        {"changed temporary/target identities fail without replacing another file", ChangedFilesFailWithoutReplacingAnotherFile},
+        {"fixed allocation-free detail names and persistent failure/reset", FixedFailureNamesAndPersistentReset},
         {"safe stale owned temporary recovery", StaleOwnedTemporaryCanRecover},
         {"explicit exception reason preserves caller-observed record", ExceptionReasonPreservesObservedRecord},
         {"ingestion-time window preserves out-of-order original event timestamps", IngestionTimeDoesNotReinterpretEventOrder},

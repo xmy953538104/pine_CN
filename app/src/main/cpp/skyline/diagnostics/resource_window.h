@@ -9,15 +9,105 @@
 #include <deque>
 #include <fcntl.h>
 #include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 
 namespace skyline::diagnostics {
 enum class ResourceWindowReason : uint8_t { Periodic, PostProgressNoNewPresent, Recovered, LaunchEnd, SessionEnd, Shutdown, ExceptionObserved };
+
+enum class ResourceWindowFailureStage : uint8_t {
+    None, Validate, Metadata, OpenDirectory, InspectTarget, InspectTemporary,
+    RemoveTemporary, OpenTemporary, ValidateTemporary, SetPermissions,
+    WriteMetadata, WriteRecords, VerifySize, Sync, Close, RecheckTemporary,
+    RecheckTarget, Rename, Exception,
+};
+enum class ResourceWindowFailureReason : uint8_t {
+    None, InvalidInput, PolicyRejected, SizeLimit, SyscallError, ZeroWrite,
+    InvalidWriteCount, ChangedFile, AllocationFailure, UnknownException,
+};
+// No path, session text, exception message, or dynamically allocated detail.
+struct ResourceWindowFailure {
+    ResourceWindowFailureStage stage;
+    ResourceWindowFailureReason reason;
+    int error; // Captured syscall errno, or zero for a non-syscall rejection.
+};
+static_assert(std::is_trivial_v<ResourceWindowFailure> && std::is_standard_layout_v<ResourceWindowFailure>);
+
+inline const char *ResourceWindowFailureStageName(ResourceWindowFailureStage stage) noexcept {
+    switch (stage) {
+        case ResourceWindowFailureStage::None: return "none";
+        case ResourceWindowFailureStage::Validate: return "validate";
+        case ResourceWindowFailureStage::Metadata: return "metadata";
+        case ResourceWindowFailureStage::OpenDirectory: return "open_directory";
+        case ResourceWindowFailureStage::InspectTarget: return "inspect_target";
+        case ResourceWindowFailureStage::InspectTemporary: return "inspect_temporary";
+        case ResourceWindowFailureStage::RemoveTemporary: return "remove_temporary";
+        case ResourceWindowFailureStage::OpenTemporary: return "open_temporary";
+        case ResourceWindowFailureStage::ValidateTemporary: return "validate_temporary";
+        case ResourceWindowFailureStage::SetPermissions: return "set_permissions";
+        case ResourceWindowFailureStage::WriteMetadata: return "write_metadata";
+        case ResourceWindowFailureStage::WriteRecords: return "write_records";
+        case ResourceWindowFailureStage::VerifySize: return "verify_size";
+        case ResourceWindowFailureStage::Sync: return "sync";
+        case ResourceWindowFailureStage::Close: return "close";
+        case ResourceWindowFailureStage::RecheckTemporary: return "recheck_temporary";
+        case ResourceWindowFailureStage::RecheckTarget: return "recheck_target";
+        case ResourceWindowFailureStage::Rename: return "rename";
+        case ResourceWindowFailureStage::Exception: return "exception";
+    }
+    return "unknown_stage";
+}
+inline const char *ResourceWindowFailureReasonName(ResourceWindowFailureReason reason) noexcept {
+    switch (reason) {
+        case ResourceWindowFailureReason::None: return "none";
+        case ResourceWindowFailureReason::InvalidInput: return "invalid_input";
+        case ResourceWindowFailureReason::PolicyRejected: return "policy_rejected";
+        case ResourceWindowFailureReason::SizeLimit: return "size_limit";
+        case ResourceWindowFailureReason::SyscallError: return "syscall_error";
+        case ResourceWindowFailureReason::ZeroWrite: return "zero_write";
+        case ResourceWindowFailureReason::InvalidWriteCount: return "invalid_write_count";
+        case ResourceWindowFailureReason::ChangedFile: return "changed_file";
+        case ResourceWindowFailureReason::AllocationFailure: return "allocation_failure";
+        case ResourceWindowFailureReason::UnknownException: return "unknown_exception";
+    }
+    return "unknown_reason";
+}
+inline const char *ResourceWindowErrnoName(int error) noexcept {
+    switch (error) {
+        case 0: return "none";
+        case EACCES: return "EACCES";
+        case EPERM: return "EPERM";
+        case ENOENT: return "ENOENT";
+        case ENOTDIR: return "ENOTDIR";
+        case ELOOP: return "ELOOP";
+        case EEXIST: return "EEXIST";
+        case ENAMETOOLONG: return "ENAMETOOLONG";
+        case ENOSPC: return "ENOSPC";
+        case EDQUOT: return "EDQUOT";
+        case EROFS: return "EROFS";
+        case EIO: return "EIO";
+        case EBADF: return "EBADF";
+        case EINVAL: return "EINVAL";
+        case EINTR: return "EINTR";
+        case EAGAIN: return "EAGAIN";
+        case EMFILE: return "EMFILE";
+        case ENFILE: return "ENFILE";
+        case ENOMEM: return "ENOMEM";
+        case EFBIG: return "EFBIG";
+        case EOVERFLOW: return "EOVERFLOW";
+        case EBUSY: return "EBUSY";
+        case EXDEV: return "EXDEV";
+        case ENOSYS: return "ENOSYS";
+        case ENOTEMPTY: return "ENOTEMPTY";
+    }
+    return "other_errno";
+}
 
 namespace resource_window_detail {
 // The default performs real POSIX operations. Test instantiations can inject a
@@ -40,27 +130,48 @@ inline bool OwnedRegular(const struct stat &value) noexcept {
     return S_ISREG(value.st_mode) && value.st_nlink == 1 && value.st_uid == ::geteuid();
 }
 inline bool SameFile(const struct stat &a, const struct stat &b) noexcept { return a.st_dev == b.st_dev && a.st_ino == b.st_ino; }
-inline int OpenDirectory(std::string_view path) {
-    if (path.empty() || path.size() > 4096 || path.find('\0') != path.npos) return -1;
-    const int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+inline int OpenDirectory(std::string_view path, ResourceWindowFailure &failure) {
+    const auto reject = [&](ResourceWindowFailureStage stage, ResourceWindowFailureReason reason, int error = 0) {
+        failure = {stage, reason, error}; return -1;
+    };
+    if (path.size() > 4096) return reject(ResourceWindowFailureStage::Validate, ResourceWindowFailureReason::SizeLimit);
+    if (path.empty() || path.find('\0') != path.npos) return reject(ResourceWindowFailureStage::Validate, ResourceWindowFailureReason::InvalidInput);
+    for (size_t position{}; position < path.size();) {
+        const auto end = path.find('/', position);
+        if (path.substr(position, end == path.npos ? path.size() - position : end - position) == "..")
+            return reject(ResourceWindowFailureStage::Validate, ResourceWindowFailureReason::InvalidInput);
+        if (end == path.npos) break;
+        position = end + 1;
+    }
+    // Traversal needs search permission, not permission to list every ancestor.
+    // O_NOFOLLOW|O_DIRECTORY still rejects symlink components with O_PATH.
+#if defined(O_PATH)
+    const int flags = O_PATH | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+#elif defined(O_SEARCH)
+    const int flags = O_SEARCH | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+#else
+    return reject(ResourceWindowFailureStage::OpenDirectory, ResourceWindowFailureReason::PolicyRejected);
+    const int flags = 0;
+#endif
     Descriptor directory(::open(path.front() == '/' ? "/" : ".", flags));
-    if (directory.value < 0) return -1;
+    if (directory.value < 0) return reject(ResourceWindowFailureStage::OpenDirectory, ResourceWindowFailureReason::SyscallError, errno);
     size_t position{};
     while (position < path.size()) {
         const auto end = path.find('/', position);
         const auto part = path.substr(position, end == path.npos ? path.size() - position : end - position);
-        if (part == "..") return -1;
         if (!part.empty() && part != ".") {
             const std::string component(part);
             const int next = ::openat(directory.value, component.c_str(), flags);
-            if (next < 0) return -1;
+            if (next < 0) return reject(ResourceWindowFailureStage::OpenDirectory, ResourceWindowFailureReason::SyscallError, errno);
             ::close(directory.value); directory.value = next;
         }
         if (end == path.npos) break;
         position = end + 1;
     }
     struct stat identity{};
-    if (::fstat(directory.value, &identity) || !S_ISDIR(identity.st_mode) || identity.st_uid != ::geteuid()) return -1;
+    if (::fstat(directory.value, &identity)) return reject(ResourceWindowFailureStage::OpenDirectory, ResourceWindowFailureReason::SyscallError, errno);
+    if (!S_ISDIR(identity.st_mode) || identity.st_uid != ::geteuid())
+        return reject(ResourceWindowFailureStage::OpenDirectory, ResourceWindowFailureReason::PolicyRejected);
     const int result = directory.value; directory.value = -1; return result;
 }
 inline bool Utf8(std::string_view value) noexcept {
@@ -122,6 +233,10 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     std::array<char, MaxSessionBytes> sessionBytes{};
     size_t sessionLength{};
     Statistics statistics{};
+    ResourceWindowFailure lastFailure{};
+    bool Fail(ResourceWindowFailureStage stage, ResourceWindowFailureReason reason, int error = 0) noexcept {
+        lastFailure = {stage, reason, error}; return false;
+    }
     static void AddCounter(uint64_t &value, uint64_t amount = 1) noexcept {
         constexpr auto max = std::numeric_limits<uint64_t>::max();
         value = amount > max - value ? max : value + amount;
@@ -171,21 +286,29 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
         number("omitted_allocation", statistics.omittedAllocation); number("clock_resets", statistics.clockResets);
         return result + "}\n";
     }
-    static bool WriteAll(int fd, std::string_view value) noexcept {
+    bool WriteAll(int fd, std::string_view value, ResourceWindowFailureStage stage) noexcept {
         unsigned interrupts{};
         while (!value.empty()) {
             const auto count = Io::Write(fd, value.data(), value.size());
-            if (count < 0) { if (errno == EINTR && ++interrupts <= 32) continue; return false; }
-            if (!count || static_cast<size_t>(count) > value.size()) return false;
+            if (count < 0) {
+                const int error = errno;
+                if (error == EINTR && ++interrupts <= 32) continue;
+                return Fail(stage, ResourceWindowFailureReason::SyscallError, error);
+            }
+            if (!count) return Fail(stage, ResourceWindowFailureReason::ZeroWrite);
+            if (static_cast<size_t>(count) > value.size()) return Fail(stage, ResourceWindowFailureReason::InvalidWriteCount);
             interrupts = 0; value.remove_prefix(static_cast<size_t>(count));
         }
         return true;
     }
-    static bool Target(int directory, struct stat &identity, bool &exists) noexcept {
+    bool Target(int directory, struct stat &identity, bool &exists, ResourceWindowFailureStage stage) noexcept {
         if (!::fstatat(directory, "resource-window.jsonl", &identity, AT_SYMLINK_NOFOLLOW)) {
-            exists = true; return resource_window_detail::OwnedRegular(identity);
+            exists = true;
+            return resource_window_detail::OwnedRegular(identity) || Fail(stage, ResourceWindowFailureReason::PolicyRejected);
         }
-        exists = false; return errno == ENOENT;
+        const int error = errno;
+        exists = false;
+        return error == ENOENT || Fail(stage, ResourceWindowFailureReason::SyscallError, error);
     }
     struct Temporary {
         int directory, fd{-1};
@@ -205,6 +328,9 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     size_t Count() const noexcept { return Size(); }
     size_t Bytes() const noexcept { return bytes; }
     Statistics Stats() const noexcept { return statistics; }
+    // Last Persist result only. Add omission counters are separate; later
+    // samples do not erase an outstanding persistence failure. Reset clears it.
+    ResourceWindowFailure LastFailure() const noexcept { return lastFailure; }
     uint64_t Evictions() const noexcept {
         uint64_t total{};
         AddCounter(total, statistics.evictedAge); AddCounter(total, statistics.evictedBytes);
@@ -218,7 +344,7 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     }
     void Reset() noexcept {
         entries.reset(); bytes = 0; lastObservedUs = 0; haveTime = sessionBound = false;
-        sessionBytes = {}; sessionLength = 0; statistics = {};
+        sessionBytes = {}; sessionLength = 0; statistics = {}; lastFailure = {};
     }
     // nowUs is writer-ingestion time, not the record's potentially out-of-order
     // event timestamp. Original serialized fields/timestamps remain untouched.
@@ -249,42 +375,62 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     // succeeds; no assertion of crash durability of the containing directory.
     bool Persist(std::string_view directory, std::string_view session, ResourceWindowReason reason) noexcept {
         using namespace resource_window_detail;
+        using Stage = ResourceWindowFailureStage;
+        using FailureReason = ResourceWindowFailureReason;
+        auto activeStage = Stage::Validate;
         try {
             const auto name = ReasonName(reason);
-            if (!name || session.empty() || session.size() > MaxSessionBytes || !Utf8(session)) return false;
+            if (session.size() > MaxSessionBytes) return Fail(Stage::Validate, FailureReason::SizeLimit);
+            if (!name || session.empty() || !Utf8(session)) return Fail(Stage::Validate, FailureReason::InvalidInput);
             if (sessionBound && std::string_view(sessionBytes.data(), sessionLength) != session) Reset();
             if (!sessionBound) {
                 std::memcpy(sessionBytes.data(), session.data(), session.size()); sessionLength = session.size(); sessionBound = true;
             }
+            activeStage = Stage::Metadata;
             const auto metadata = Metadata(session, name);
-            if (metadata.size() > MetadataReserveBytes || metadata.size() + bytes > MaxFileBytes) return false;
-            Descriptor folder(OpenDirectory(directory));
+            if (metadata.size() > MetadataReserveBytes || metadata.size() + bytes > MaxFileBytes) return Fail(Stage::Metadata, FailureReason::SizeLimit);
+            activeStage = Stage::OpenDirectory;
+            Descriptor folder(OpenDirectory(directory, lastFailure));
             if (folder.value < 0) return false;
             struct stat prior{}; bool priorExists{};
-            if (!Target(folder.value, prior, priorExists)) return false;
+            if (!Target(folder.value, prior, priorExists, Stage::InspectTarget)) return false;
             struct stat stale{};
             if (!::fstatat(folder.value, "resource-window.tmp", &stale, AT_SYMLINK_NOFOLLOW)) {
-                if (!OwnedRegular(stale) || ::unlinkat(folder.value, "resource-window.tmp", 0)) return false;
-            } else if (errno != ENOENT) return false;
+                if (!OwnedRegular(stale)) return Fail(Stage::InspectTemporary, FailureReason::PolicyRejected);
+                if (::unlinkat(folder.value, "resource-window.tmp", 0)) return Fail(Stage::RemoveTemporary, FailureReason::SyscallError, errno);
+            } else {
+                const int error = errno;
+                if (error != ENOENT) return Fail(Stage::InspectTemporary, FailureReason::SyscallError, error);
+            }
             Temporary temporary{folder.value};
             temporary.fd = ::openat(folder.value, "resource-window.tmp", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0600);
-            if (temporary.fd < 0 || ::fstat(temporary.fd, &temporary.identity)) return false;
+            if (temporary.fd < 0) return Fail(Stage::OpenTemporary, FailureReason::SyscallError, errno);
+            if (::fstat(temporary.fd, &temporary.identity)) return Fail(Stage::ValidateTemporary, FailureReason::SyscallError, errno);
             temporary.identified = true;
-            if (!OwnedRegular(temporary.identity) || ::fchmod(temporary.fd, 0600) || !WriteAll(temporary.fd, metadata)) return false;
-            if (entries) for (const auto &entry : *entries) if (!WriteAll(temporary.fd, entry.line)) return false;
+            if (!OwnedRegular(temporary.identity)) return Fail(Stage::ValidateTemporary, FailureReason::PolicyRejected);
+            if (::fchmod(temporary.fd, 0600)) return Fail(Stage::SetPermissions, FailureReason::SyscallError, errno);
+            if (!WriteAll(temporary.fd, metadata, Stage::WriteMetadata)) return false;
+            if (entries) for (const auto &entry : *entries) if (!WriteAll(temporary.fd, entry.line, Stage::WriteRecords)) return false;
             struct stat complete{};
-            if (::fstat(temporary.fd, &complete) || !OwnedRegular(complete) || !SameFile(complete, temporary.identity)
-                || complete.st_size < 0 || static_cast<uint64_t>(complete.st_size) != metadata.size() + bytes || Io::Sync(temporary.fd)) return false;
+            if (::fstat(temporary.fd, &complete)) return Fail(Stage::VerifySize, FailureReason::SyscallError, errno);
+            if (!OwnedRegular(complete)) return Fail(Stage::VerifySize, FailureReason::PolicyRejected);
+            if (!SameFile(complete, temporary.identity) || complete.st_size < 0 || static_cast<uint64_t>(complete.st_size) != metadata.size() + bytes)
+                return Fail(Stage::VerifySize, FailureReason::ChangedFile);
+            if (Io::Sync(temporary.fd)) return Fail(Stage::Sync, FailureReason::SyscallError, errno);
             const auto closed = Io::Close(temporary.fd); temporary.fd = -1;
-            if (closed) return false;
+            if (closed) return Fail(Stage::Close, FailureReason::SyscallError, errno);
             struct stat currentTemporary{}, currentTarget{}; bool targetExists{};
-            if (::fstatat(folder.value, "resource-window.tmp", &currentTemporary, AT_SYMLINK_NOFOLLOW)
-                || !OwnedRegular(currentTemporary) || !SameFile(currentTemporary, temporary.identity)
-                || !Target(folder.value, currentTarget, targetExists) || targetExists != priorExists
-                || (priorExists && !SameFile(prior, currentTarget))) return false;
-            if (Io::Rename(folder.value, "resource-window.tmp", "resource-window.jsonl")) return false;
-            temporary.committed = true; return true;
-        } catch (...) { return false; }
+            if (::fstatat(folder.value, "resource-window.tmp", &currentTemporary, AT_SYMLINK_NOFOLLOW))
+                return Fail(Stage::RecheckTemporary, FailureReason::SyscallError, errno);
+            if (!OwnedRegular(currentTemporary)) return Fail(Stage::RecheckTemporary, FailureReason::PolicyRejected);
+            if (!SameFile(currentTemporary, temporary.identity)) return Fail(Stage::RecheckTemporary, FailureReason::ChangedFile);
+            if (!Target(folder.value, currentTarget, targetExists, Stage::RecheckTarget)) return false;
+            if (targetExists != priorExists || (priorExists && !SameFile(prior, currentTarget))) return Fail(Stage::RecheckTarget, FailureReason::ChangedFile);
+            activeStage = Stage::Rename;
+            if (Io::Rename(folder.value, "resource-window.tmp", "resource-window.jsonl")) return Fail(Stage::Rename, FailureReason::SyscallError, errno);
+            temporary.committed = true; lastFailure = {}; return true;
+        } catch (const std::bad_alloc &) { return Fail(activeStage, FailureReason::AllocationFailure); }
+        catch (...) { return Fail(Stage::Exception, FailureReason::UnknownException); }
     }
 };
 using RecentResourceWindow = BasicRecentResourceWindow<>;

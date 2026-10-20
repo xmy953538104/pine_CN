@@ -6,4 +6,4 @@ case "$(uname -s)" in Linux) jni_platform=linux ;; Darwin) jni_platform=darwin ;
 mkdir -p "$(dirname "$output")"
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -shared -fPIC \
     -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/$jni_platform" -Iapp/src/main/cpp/skyline \
-    tests/diagnostics/metadata_jni_fixture.cpp -o "$output"
+    tests/diagnostics/metadata_jni_fixture.cpp tests/diagnostics/resource_window_jni_fixture.cpp -o "$output"

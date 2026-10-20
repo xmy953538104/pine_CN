@@ -308,7 +308,22 @@ struct ResourceRuntime {
     uint64_t generation{}, previousCostUs{}, overBudget{}, windowPersistErrors{}, samplingErrors{};
     bool capabilities{};
     Clock::time_point next{};
+    ResourceWindowFailure lastWindowFailure{};
+    bool windowFailureActive{};
+    Clock::time_point nextWindowFailureReport{};
 };
+const char *WindowCheckpointName(ResourceWindowReason reason) noexcept {
+    switch (reason) {
+        case ResourceWindowReason::Periodic: return "periodic";
+        case ResourceWindowReason::PostProgressNoNewPresent: return "post_progress_no_new_present";
+        case ResourceWindowReason::Recovered: return "recovered";
+        case ResourceWindowReason::LaunchEnd: return "launch_end";
+        case ResourceWindowReason::SessionEnd: return "session_end";
+        case ResourceWindowReason::Shutdown: return "shutdown";
+        case ResourceWindowReason::ExceptionObserved: return "exception_observed";
+    }
+    return "unknown";
+}
 Clock::time_point ResourceSamplingNow() {
 #ifdef PINE_DIAG_TEST_HOOKS
     const auto time = testing::resourceClockMs.load();
@@ -426,8 +441,36 @@ void Run(Sink &s) noexcept {
         RecentResourceWindow resourceWindow;
         auto nextWindowPersist = Clock::now();
         const auto persistWindow = [&](ResourceWindowReason reason) {
-            if (resourceWindow.Count() && !resourceWindow.Persist(c.directory, c.sessionId, reason)) {
-                ++s.snapshotErrors; ++resources.windowPersistErrors;
+            if (resourceWindow.Count()) {
+                const auto now = Clock::now();
+                if (!resourceWindow.Persist(c.directory, c.sessionId, reason)) {
+                    ++s.snapshotErrors; ++resources.windowPersistErrors;
+                    resources.lastWindowFailure = resourceWindow.LastFailure();
+                    if (!resources.windowFailureActive || now >= resources.nextWindowFailureReport) {
+                        const auto failure = resources.lastWindowFailure;
+                        // Writer only: first failure and at most once/minute
+                        // while failures persist. No paths or strerror text.
+                        Emit("resource", "RESOURCE_WINDOW_PERSIST_FAILED", {
+                            {"failure_stage", ResourceWindowFailureStageName(failure.stage)},
+                            {"failure_reason", ResourceWindowFailureReasonName(failure.reason)},
+                            {"error_code", ResourceWindowErrnoName(failure.error)}, {"errno", std::to_string(failure.error)},
+                            {"window_persist_errors", std::to_string(resources.windowPersistErrors)},
+                            {"checkpoint_trigger", WindowCheckpointName(reason)},
+                            {"failure_scope", "current_writer_diagnostic_checkpoint_not_guest_storage"}}, "WARN");
+                        resources.nextWindowFailureReport = now + std::chrono::seconds(60);
+                    }
+                    resources.windowFailureActive = true;
+                } else if (resources.windowFailureActive) {
+                    const auto failure = resources.lastWindowFailure;
+                    Emit("resource", "RESOURCE_WINDOW_PERSIST_RECOVERED", {
+                        {"previous_failure_stage", ResourceWindowFailureStageName(failure.stage)},
+                        {"previous_failure_reason", ResourceWindowFailureReasonName(failure.reason)},
+                        {"previous_error_code", ResourceWindowErrnoName(failure.error)},
+                        {"window_persist_errors", std::to_string(resources.windowPersistErrors)},
+                        {"checkpoint_trigger", WindowCheckpointName(reason)},
+                        {"recovery_scope", "completed_checkpoint_not_game_io_or_power_loss_guarantee"}});
+                    resources.windowFailureActive = false;
+                }
             }
             nextWindowPersist = Clock::now() + std::chrono::seconds(5);
         };

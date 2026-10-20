@@ -143,4 +143,49 @@ class SignaledProcessExitTest {
         assertEquals("ok", rows.single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["trace_status"])
     }
 
+    @Test fun nativeCandidateWinsOneReadWithoutReorderingExitEventsOrMergingIdentity() = fixture { store ->
+        val exits = listOf(record(time = 2000), record(reason = 5, status = 0, time = 1000))
+        val rows = observe(store, exits, stream = { exit ->
+            assertEquals(5, exit.reason); NativeTraceSummaryTest().controlledTrace().inputStream()
+        })
+        assertEquals(listOf("PREVIOUS_PROCESS_FATAL_SIGNAL", "PREVIOUS_PROCESS_CRASH"),
+            rows.filter { it.name == "PREVIOUS_PROCESS_FATAL_SIGNAL" || it.name == "PREVIOUS_PROCESS_CRASH" }.map { it.name })
+        val exitIds = rows.filter { it.name == "PREVIOUS_PROCESS_FATAL_SIGNAL" || it.name == "PREVIOUS_PROCESS_CRASH" }
+            .map { it.fields["exit_record_id"] }
+        assertEquals(2, exitIds.distinct().size)
+        assertEquals("5", rows.single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["reason_code"])
+        store.locked { seen ->
+            val signaledId = ExitRecordIdentity.id(2000, 2, 11, 123, "emulation")
+            assertFalse(seen.any { it.startsWith("r1:$signaledId:") })
+        }
+        val later = observe(store, exits, stream = { exit -> assertEquals(2, exit.reason); null })
+        assertEquals("2", later.single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["reason_code"])
+    }
+    @Test fun nativeTransientExhaustionThenFallsBackWithinUnchangedBudget() = fixture { store ->
+        val exits = listOf(record(time = 2000), record(reason = 5, status = 0, time = 1000))
+        repeat(3) {
+            assertEquals("5", observe(store, exits, stream = { exit -> assertEquals(5, exit.reason); null })
+                .single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["reason_code"])
+        }
+        assertEquals("2", observe(store, exits, stream = { exit -> assertEquals(2, exit.reason); null })
+            .single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["reason_code"])
+    }
+    @Test fun migratedLegacyNativeTerminalAndExhaustionDoNotBlockSignaledFallback() {
+        for (marker in listOf("s1", "p1", "r1")) fixture { store ->
+            val legacy = ExitRecordIdentity.legacyId(1000, 5, 0, 123, "emulation")
+            store.locked { seen -> seen.add(if (marker == "r1") "r1:$legacy:3" else "$marker:$legacy") }
+            val rows = observe(store, listOf(record(time = 2000), record(reason = 5, status = 0)),
+                stream = { exit -> assertEquals(2, exit.reason); null })
+            assertEquals("2", rows.single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["reason_code"])
+            store.locked { seen -> assertFalse(seen.any { it.contains(legacy) }) }
+        }
+    }
+    @Test fun priorityKeepsFourRecordLimitOwnershipAndNewestNativeWithinGroup() = fixture { store ->
+        val rows = observe(store, listOf(record(time = 5000), record(reason = 5, time = 4000, uid = 10002),
+            record(reason = 5, time = 2000), record(reason = 5, time = 3000), record(reason = 5, time = 9000)),
+            stream = { exit -> assertEquals(3000L, exit.timestamp); null })
+        assertEquals("3", rows.single { it.name == "PROCESS_EXIT_HISTORY_QUERIED" }.fields["records"])
+        assertEquals("3000", rows.single { it.name == "PREVIOUS_NATIVE_TRACE" }.fields["exit_wall_clock_ms"])
+    }
+
 }

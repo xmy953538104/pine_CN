@@ -75,10 +75,20 @@ internal object PreviousProcessExit {
             .sortedByDescending { it.timestamp }
         event("PROCESS_EXIT_HISTORY_QUERIED") { mapOf("source" to "Android_ApplicationExitInfo", "records" to exits.size.toString(), "scope" to "own_package_and_uid") }
         store.locked { seen ->
-            var traceAttempted = false
-            exits.forEach { exit ->
+            // Migrate before eligibility: legacy terminal/retry markers must participate
+            // in selection. Native-crash records have the documented tombstone contract;
+            // optional signaled candidates must not displace those within our one-read budget.
+            val candidates = exits.map { exit ->
                 val scope = if (exit.processName.endsWith(":emulationProcess")) "emulation" else "main"
-                val id = ExitRecordIdentity.migrate(seen, exit.timestamp, exit.reason, exit.status, exit.pid, scope)
+                Triple(exit, scope, ExitRecordIdentity.migrate(seen, exit.timestamp, exit.reason, exit.status, exit.pid, scope))
+            }
+            val eligible = candidates.filter { (exit, _, id) ->
+                traceCandidate(exit.reason, exit.status) && NativeTraceImport.eligible(seen, id)
+            }
+            val selected = eligible.firstOrNull { it.first.reason == ApplicationExitInfo.REASON_CRASH_NATIVE }
+                ?: eligible.firstOrNull()
+            var traceAttempted = false
+            candidates.forEach { (exit, scope, id) ->
                 val association = ProcessAssociationCodec.forScope(exit.processStateSummary, scope)
                 val relation = if (association != null) "verified" else "unknown"
                 fun previous() = mapOf("previous_session_id" to association?.session.orEmpty(), "previous_launch_id" to association?.launch.orEmpty(),
@@ -97,7 +107,7 @@ internal object PreviousProcessExit {
                     }
                     if (accepted && flush()) ExitRecordIdentity.markObserved(seen, id, exit.status)
                 }
-                if (traceCandidate(exit.reason, exit.status) && !traceAttempted && NativeTraceImport.eligible(seen, id)) {
+                if (id == selected?.third && !traceAttempted && NativeTraceImport.eligible(seen, id)) {
                     traceAttempted = true
                     NativeTraceImport.attempt(seen, id, {
                         if (apiLevel < 31) NativeTraceSummary.Result("android_api_below_31")

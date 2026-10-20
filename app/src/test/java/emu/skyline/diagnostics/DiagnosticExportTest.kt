@@ -150,7 +150,7 @@ class DiagnosticExportTest {
         }
     }
 
-    @Test fun realNativeSixteenFieldTraceSnapshotRetainsStackAfterRotationAndExport() = sandbox { logs, textLog, cache, _ ->
+    @Test fun realNativeTwentyTwoFieldTraceSnapshotRetainsStackAfterRotationAndExport() = sandbox { logs, textLog, cache, _ ->
         val fixture = File("../tools/tests/fixtures/native-trace-snapshot.jsonl").readText()
         log(logs, "main/critical-state.jsonl", fixture)
         // Native fixture generator asserts the original trace is gone from both ordinary files.
@@ -161,6 +161,10 @@ class DiagnosticExportTest {
             val fields = state.getValue("fields").jsonObject
             assertEquals(16, fields.getValue("frames").jsonPrimitive.content.split(";").size)
             assertEquals("16", fields.getValue("frames_seen").jsonPrimitive.content)
+            assertEquals("true", fields.getValue("trace_complete").jsonPrimitive.content)
+            assertEquals("393216", fields.getValue("trace_bytes_read").jsonPrimitive.content)
+            assertEquals("complete", fields.getValue("trace_capture_status").jsonPrimitive.content)
+            assertEquals("3", fields.getValue("trace_attempt_limit").jsonPrimitive.content)
             assertTrue(fields.getValue("frames").jsonPrimitive.content.contains("libskyline.so+0x1234@" + "a".repeat(40)))
             assertEquals(0, state.getValue("snapshot_metadata").jsonObject.getValue("fields_omitted").jsonPrimitive.int)
             assertTrue(exported.getValue("session-metadata.txt").contains("exported_critical_state_records=1"))

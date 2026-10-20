@@ -67,6 +67,33 @@ int main(int argc, char **argv) {
         Require(Read(directory / "resource-window.jsonl").find("CONTROLLED_CHECKPOINT_RECOVERY") != std::string::npos, "Recovered real checkpoint missing trigger");
         Stop();
 
+        const auto root = directory;
+        for (const bool recoverAtStop : {false, true}) {
+            directory = root / (recoverAtStop ? "terminal-recovery" : "terminal-failure");
+            config.directory = directory.string();
+            config.sessionId = recoverAtStop ? "terminal-recovery-session" : "terminal-failure-session";
+            Require(Start(config), "Terminal Start failed");
+            SetLaunchId("terminal-launch", true);
+            ConfigureResourceObservation(true, "official");
+            Until([] { return LogContains("\"event\":\"RESOURCE_GPU_SAMPLE\""); }, "Terminal initial resource sample missing");
+            Require(Flush(1000), "Terminal initial flush failed");
+            const auto completed = Read(directory / "resource-window.jsonl");
+            Require(!completed.empty(), "Terminal baseline window missing");
+            Require(::chmod(directory.c_str(), 0500) == 0, "Cannot deny terminal checkpoint");
+            if (recoverAtStop) {
+                Emit("exception", "CONTROLLED_TERMINAL_RECOVERY_DENIAL");
+                Until([] { return LogContains("\"event\":\"RESOURCE_WINDOW_PERSIST_FAILED\""); }, "Terminal recovery baseline failure missing");
+                Require(Flush(1000), "Terminal recovery baseline flush failed");
+                Require(::chmod(directory.c_str(), 0700) == 0, "Cannot restore before terminal recovery");
+            }
+            // No more producer events: the only new checkpoint is SessionEnd,
+            // after producer admission closes. Its details must be in summary.
+            Stop();
+            Require(::chmod(directory.c_str(), 0700) == 0, "Cannot restore after terminal failure");
+            if (!recoverAtStop) Require(Read(directory / "resource-window.jsonl") == completed, "Terminal failure changed old checkpoint");
+        }
+        directory = root;
+
         // The default-off resource path creates no checkpoint or failure report.
         config.directory = (directory / "resource-off").string();
         config.sessionId = "persist-off-session";
@@ -76,7 +103,7 @@ int main(int argc, char **argv) {
         Require(Flush(1000), "Default-off flush failed");
         Stop();
         Require(!std::filesystem::exists(std::filesystem::path(config.directory) / "resource-window.jsonl"), "Resource-off created a window");
-        std::cout << "PASS actual writer: eight denied checkpoints preserve old file, one rate-limited report, recovery; default-off no window\n";
+        std::cout << "PASS actual writer: eight denied checkpoints preserve old file, one rate-limited report, recovery; terminal-only failure/recovery summaries; default-off no window\n";
         return 0;
     } catch (const std::exception &error) {
         ::chmod(directory.c_str(), 0700);

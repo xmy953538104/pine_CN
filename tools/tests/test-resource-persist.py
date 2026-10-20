@@ -45,6 +45,8 @@ with tempfile.TemporaryDirectory(prefix='pine-resource-persist-') as tmp:
     assert all('/' not in value and 'pine-resource-persist-' not in value for r in failed + recovered for value in r['fields'].values())
     summary = next(r for r in rows if r['event'] == 'SESSION_SUMMARY')['fields']
     assert summary['disk_errors'] == '0' and int(summary['snapshot_errors']) >= 8
+    assert summary['resource_window_checkpoint_status'] == 'ok' and summary['resource_window_persist_errors'] == '8'
+    assert summary['resource_window_last_failure_stage'] == 'open_temporary' and summary['resource_window_last_error_code'] == 'EACCES'
     window = (logs / 'resource-window.jsonl').read_bytes()
     assert len(window) <= 131072 and window.endswith(b'\n')
     records = [json.loads(line) for line in window.splitlines()]
@@ -54,4 +56,21 @@ with tempfile.TemporaryDirectory(prefix='pine-resource-persist-') as tmp:
     off = [json.loads(line) for path in (logs / 'resource-off').glob('diagnostics-*.jsonl') for line in path.read_text().splitlines()]
     assert not any(r['event'].startswith('RESOURCE_WINDOW_') for r in off)
     assert not (logs / 'resource-off/resource-window.jsonl').exists()
-print('PASS fixed stage/reason/error, first failure rate limit, exact counter, real recovery, independent summary counters and resource-off')
+    assert next(r for r in off if r['event'] == 'SESSION_SUMMARY')['fields']['resource_window_checkpoint_status'] == 'not_observed'
+    for name, status, failures in [('terminal-failure', 'failed', 0), ('terminal-recovery', 'ok', 1)]:
+        terminal = [json.loads(line) for path in (logs / name).glob('diagnostics-*.jsonl') for line in path.read_text().splitlines()]
+        assert len([r for r in terminal if r['event'] == 'RESOURCE_WINDOW_PERSIST_FAILED']) == failures
+        assert not any(r['event'] == 'RESOURCE_WINDOW_PERSIST_RECOVERED' for r in terminal), 'Do not reopen closed producers to emit terminal events'
+        detail = next(r for r in terminal if r['event'] == 'SESSION_SUMMARY')['fields']
+        assert detail['resource_window_checkpoint_status'] == status and detail['resource_window_persist_errors'] == '1', detail
+        assert detail['resource_window_last_failure_stage'] == 'open_temporary' and detail['resource_window_last_failure_reason'] == 'syscall_error'
+        assert detail['resource_window_last_error_code'] == 'EACCES' and detail['resource_window_last_errno'] == '13'
+        assert detail['disk_errors'] == '0' and int(detail['snapshot_errors']) >= 1
+        assert not (logs / name / 'resource-window.tmp').exists()
+        checkpoint = [json.loads(line) for line in (logs / name / 'resource-window.jsonl').read_text().splitlines()]
+        if name == 'terminal-recovery':
+            assert checkpoint[0]['reason'] == 'session_end'
+            assert any(r.get('event') == 'CONTROLLED_TERMINAL_RECOVERY_DENIAL' for r in checkpoint[1:])
+        else:
+            assert checkpoint[0]['reason'] == 'periodic', 'Terminal-only failure must retain original complete checkpoint'
+print('PASS fixed failure codes, first-report rate limit, exact counters, actual active/terminal recovery, summary details and resource-off')

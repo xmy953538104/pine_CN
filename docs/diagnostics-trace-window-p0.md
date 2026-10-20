@@ -38,6 +38,10 @@ writer emits the first failure and at most one per minute until recovery. Old
 completed files survive write/sync/close/rename failures, stale own temporary
 files can recover, and one successful later checkpoint emits a recovery record.
 There is no new file sampling or producer/signal-handler I/O.
+At normal drain, producers have already closed; final checkpoint status and fixed
+last-failure codes are written directly into the existing Session summary. A
+terminal-only failure or recovery therefore does not depend on admitting a new
+event into the closed queue. Sudden death can still prevent that summary.
 
 The old trace reader rejected the whole stream above 256 KiB before parsing any
 summary. The new parser streams past bounded unknown fields. It preserves only
@@ -85,7 +89,10 @@ The window tests use actual files, search-only and denied permissions,
 short writes/EINTR, ENOSPC, sync/close/rename errors, inode substitution and
 recovery. The real `diagnostics.cpp` integration verifies eight failed
 checkpoints, one rate-limited privacy-safe report, preservation, exact per-writer
-counter, successful recovery and resource-off absence. The SVC test compiles
+counter, successful recovery, terminal-only failure/recovery details and
+resource-off absence. Eight quick failures verify suppression within the first
+minute; this test does not claim a real-time 60-second re-report observation.
+The SVC test compiles
 the production Break function against controlled state and compares its unchanged
 flow with the fixed baseline, including real `setjmp`/`longjmp` and unchanged
 formatter exceptions.

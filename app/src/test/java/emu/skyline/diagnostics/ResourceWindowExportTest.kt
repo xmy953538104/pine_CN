@@ -3,6 +3,8 @@ package emu.skyline.diagnostics
 
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -16,6 +18,9 @@ internal object ResourceWindowNativeBridge {
 }
 
 class ResourceWindowExportTest {
+    @Before fun hostJni() {
+        assumeTrue("Host JNI fixture supported on Linux/macOS", System.getProperty("pine.diagnostics.metadataFixture") != null)
+    }
     private fun sandbox(action: (File, File, File, File) -> Unit) {
         val root = Files.createTempDirectory("pine-native-window-zip").toFile()
         val ancestor = File(root, "search-only").apply { mkdirs() }

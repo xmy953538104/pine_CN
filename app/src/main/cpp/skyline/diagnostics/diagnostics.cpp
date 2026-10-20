@@ -601,6 +601,15 @@ void Run(Sink &s) noexcept {
             {"disk_errors", std::to_string(s.diskErrors.load())}, {"snapshot_errors", std::to_string(s.snapshotErrors.load())},
             {"snapshot_evictions", std::to_string(s.snapshotEvictions.load())}, {"legacy_error_rate_suppressed", std::to_string(s.legacySuppressed.load())},
             {"guest_protocol_rate_suppressed", std::to_string(s.guestProtocolSuppressed.load())},
+            // Producers are closed during the final checkpoint, so its Emit
+            // cannot be admitted. Preserve fixed terminal details in the
+            // existing writer-owned summary instead of reopening admission.
+            {"resource_window_checkpoint_status", !resourceWindow.Count() ? "not_observed" : resources.windowFailureActive ? "failed" : "ok"},
+            {"resource_window_persist_errors", std::to_string(resources.windowPersistErrors)},
+            {"resource_window_last_failure_stage", ResourceWindowFailureStageName(resources.lastWindowFailure.stage)},
+            {"resource_window_last_failure_reason", ResourceWindowFailureReasonName(resources.lastWindowFailure.reason)},
+            {"resource_window_last_error_code", ResourceWindowErrnoName(resources.lastWindowFailure.error)},
+            {"resource_window_last_errno", std::to_string(resources.lastWindowFailure.error)},
             {"admission_policy", "bounded_mpsc_64_cas_and_64_context_attempts_no_mutex_wait"}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();

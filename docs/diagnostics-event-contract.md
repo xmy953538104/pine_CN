@@ -490,6 +490,13 @@ JSONL `disk_errors` and aggregate `snapshot_errors`. A successful subsequent
 checkpoint emits one recovery event with the previous failure codes. It proves
 that diagnostic checkpoint completed, not guest storage success or durability
 across power loss. Checkpoint cadence and resource sampling rates are unchanged.
+After producer admission closes, the final checkpoint cannot emit a new queued
+failure/recovery event. The existing writer-owned `SESSION_SUMMARY` therefore
+retains `resource_window_checkpoint_status` (`not_observed`/`failed`/`ok`),
+`resource_window_persist_errors` and fixed `resource_window_last_failure_*`,
+`resource_window_last_error_code`/`resource_window_last_errno`. This also covers
+failure or recovery first observed only at SessionEnd without reopening producers.
+As with all final summaries, abrupt death or main-file failure may prevent it.
 
 ### Guest Break request classification
 

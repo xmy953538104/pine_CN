@@ -68,6 +68,98 @@ class NativeTraceImportTest {
         try { PreviousProcessExit.queryBounded(20) { Thread.sleep(500); NativeTraceSummary.Result("unreachable") }; error("Expected deadline") }
         catch (_: TimeoutException) { NativeTraceSummary.Result("observer_deadline") }
     }
+    @Test fun statusRefinementUsesOneExitAndOneRetryBudgetAcrossPersistedStarts() {
+        val root = Files.createTempDirectory("pine-exit-refinement").toFile()
+        try {
+            val store = ExitRecordStore(root)
+            val emitted = mutableListOf<String>()
+            val ids = mutableListOf<String>()
+            for (status in listOf(0, 6, 6)) store.locked { seen ->
+                val stable = ExitRecordIdentity.migrate(seen, 1234567, 5, status, 123, "emulation")
+                ids.add(stable)
+                val first = "e:$stable" !in seen
+                if (first || ExitRecordIdentity.previousStatus(seen, stable) != status) {
+                    emitted.add(PreviousProcessExit.eventName(5, !first))
+                    ExitRecordIdentity.markObserved(seen, stable, status)
+                }
+                if (NativeTraceImport.eligible(seen, stable)) NativeTraceImport.attempt(seen, stable, {
+                    if (status == 0) NativeTraceSummary.Result("truncated_byte_limit") else NativeTraceSummary.read(NativeTraceSummaryTest().controlledTrace().inputStream(), 123, 10001)
+                }) { result, attempt ->
+                    assertEquals(if (status == 0) 1 else 2, attempt)
+                    assertEquals(if (status == 0) "truncated_byte_limit" else "ok", result.status)
+                    true
+                }
+            }
+            assertEquals(1, ids.distinct().size)
+            assertEquals(listOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT_REFINED"), emitted)
+        } finally { root.deleteRecursively() }
+    }
+    @Test fun legacyZeroAndRefinedStatusMarkersMigrateWithoutThirdCrashOrFreshRetryBudget() {
+        val initial = ExitRecordIdentity.legacyId(1234567, 5, 0, 123, "emulation")
+        val refined = ExitRecordIdentity.legacyId(1234567, 5, 6, 123, "emulation")
+        val seen = linkedSetOf("e:$initial", "r1:$initial:1", "e:$refined", "r1:$refined:1")
+        val stable = ExitRecordIdentity.migrate(seen, 1234567, 5, 6, 123, "emulation")
+        assertTrue("e:$stable" in seen); assertEquals(6, ExitRecordIdentity.previousStatus(seen, stable))
+        assertFalse("e:$initial" in seen); assertFalse("e:$refined" in seen)
+        assertTrue(NativeTraceImport.attempt(seen, stable, { NativeTraceSummary.Result("read_unavailable") }) { _, attempt -> assertEquals(3, attempt); true })
+        ExitRecordIdentity.migrate(seen, 1234567, 5, 6, 123, "emulation")
+        assertFalse(NativeTraceImport.eligible(seen, stable))
+        val success = linkedSetOf("e:$initial", "s1:$initial")
+        val migrated = ExitRecordIdentity.migrate(success, 1234567, 5, 6, 123, "emulation")
+        assertEquals(0, ExitRecordIdentity.previousStatus(success, migrated))
+        assertFalse(NativeTraceImport.eligible(success, migrated))
+        assertNotEquals(migrated, ExitRecordIdentity.id(1234568, 5, 6, 123, "emulation"))
+        assertNotEquals(migrated, ExitRecordIdentity.id(1234567, 5, 6, 124, "emulation"))
+    }
+
+    @Test fun alreadyRefinedLegacyExitPublishesOneBridgeAndRetriesFailedPublicationAcrossStarts() {
+        val root = Files.createTempDirectory("pine-exit-bridge").toFile()
+        try {
+            val store = ExitRecordStore(File(root, "private"))
+            val initial = ExitRecordIdentity.legacyId(1234567, 5, 0, 123, "emulation")
+            val refined = ExitRecordIdentity.legacyId(1234567, 5, 6, 123, "emulation")
+            store.locked { seen -> seen.addAll(listOf("e:$initial", "e:$refined", "r1:$initial:1", "r1:$refined:1")) }
+            val published = File(root, "accepted.jsonl")
+            // First start's rejected admission/failed flush leaves the pending
+            // bridge in the real private store, although old keys are removed.
+            store.locked { seen ->
+                val stable = ExitRecordIdentity.migrate(seen, 1234567, 5, 6, 123, "emulation")
+                assertEquals(6, ExitRecordIdentity.previousStatus(seen, stable))
+                assertTrue(ExitRecordIdentity.needsObservation(seen, stable, 6))
+                assertFalse("e:$initial" in seen); assertFalse("e:$refined" in seen)
+                val fields = ExitRecordIdentity.observationFields(seen, stable, 1234567, 5, 6, 123, "emulation")
+                assertEquals(stable, fields["exit_record_id"])
+                assertEquals(initial, fields["legacy_initial_exit_record_id"])
+                assertEquals(refined, fields["legacy_exit_record_id"])
+                assertEquals("legacy_status_identity_v1_to_v2", fields["migration_reason"])
+                // Deliberately do not markObserved: no accepted+flushed event.
+            }
+            store.locked { seen ->
+                val stable = ExitRecordIdentity.migrate(seen, 1234567, 5, 6, 123, "emulation")
+                assertTrue(ExitRecordIdentity.needsObservation(seen, stable, 6))
+                val event = PreviousProcessExit.eventName(5, "e:$stable" in seen)
+                assertEquals("PREVIOUS_PROCESS_EXIT_REFINED", event)
+                val fields = ExitRecordIdentity.observationFields(seen, stable, 1234567, 5, 6, 123, "emulation")
+                published.writeText(buildJsonObject {
+                    put("event", event); put("fields", JsonObject(fields.mapValues { JsonPrimitive(it.value) }))
+                }.toString() + "\n") // Closed before marking publication complete.
+                ExitRecordIdentity.markObserved(seen, stable, 6)
+                assertTrue(NativeTraceImport.attempt(seen, stable, { NativeTraceSummary.Result("read_unavailable") }) { _, attempt -> assertEquals(3, attempt); true })
+            }
+            repeat(2) { store.locked { seen ->
+                val stable = ExitRecordIdentity.migrate(seen, 1234567, 5, 6, 123, "emulation")
+                assertFalse(ExitRecordIdentity.needsObservation(seen, stable, 6))
+                assertFalse(NativeTraceImport.eligible(seen, stable))
+            } }
+            val rows = published.readLines().filter(String::isNotBlank).map { Json.parseToJsonElement(it).jsonObject }
+            assertEquals(1, rows.size)
+            assertEquals("PREVIOUS_PROCESS_EXIT_REFINED", rows.single()["event"]!!.jsonPrimitive.content)
+            val fields = rows.single()["fields"]!!.jsonObject
+            assertEquals(initial, fields["legacy_initial_exit_record_id"]!!.jsonPrimitive.content)
+            assertEquals(refined, fields["legacy_exit_record_id"]!!.jsonPrimitive.content)
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun transientFailuresAreBoundedAcrossStartsAndFailedWritesNeverBecomeSuccess() {
         val seen = linkedSetOf<String>()
         repeat(3) { attempt ->

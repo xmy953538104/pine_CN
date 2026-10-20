@@ -23,7 +23,7 @@ internal object PreviousProcessExit {
             executor.shutdownNow()
         }
     }
-    internal fun eventName(reason: Int): String = when (reason) {
+    internal fun eventName(reason: Int, previouslyObserved: Boolean = false): String = if (previouslyObserved) "PREVIOUS_PROCESS_EXIT_REFINED" else when (reason) {
         ApplicationExitInfo.REASON_CRASH, ApplicationExitInfo.REASON_CRASH_NATIVE,
         ApplicationExitInfo.REASON_ANR -> "PREVIOUS_PROCESS_CRASH"
         else -> "PREVIOUS_PROCESS_EXIT"
@@ -54,20 +54,23 @@ internal object PreviousProcessExit {
                 var traceAttempted = false
                 exits.forEach { exit ->
                     val scope = if (exit.processName.endsWith(":emulationProcess")) "emulation" else "main"
-                    val id = ExitRecordIdentity.id(exit.timestamp, exit.reason, exit.status, exit.pid, scope)
+                    val id = ExitRecordIdentity.migrate(seen, exit.timestamp, exit.reason, exit.status, exit.pid, scope)
                     val association = ProcessAssociationCodec.forScope(exit.processStateSummary, scope)
                     val relation = if (association != null) "verified" else "unknown"
                     fun previous() = mapOf("previous_session_id" to association?.session.orEmpty(), "previous_launch_id" to association?.launch.orEmpty(),
                         "previous_process_run_id" to association?.process.orEmpty(), "previous_commit" to association?.commit.orEmpty())
-                    if ("e:$id" !in seen) {
-                        val accepted = event(eventName(exit.reason), if (eventName(exit.reason) == "PREVIOUS_PROCESS_CRASH") "ERROR" else "INFO") {
-                            mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true", "exit_record_id" to id,
+                    val firstObservation = "e:$id" !in seen
+                    if (ExitRecordIdentity.needsObservation(seen, id, exit.status)) {
+                        val name = eventName(exit.reason, !firstObservation)
+                        val accepted = event(name, if (name == "PREVIOUS_PROCESS_CRASH") "ERROR" else "INFO") {
+                            mapOf("source" to "Android_ApplicationExitInfo", "historical_record" to "true",
                                 "process_scope" to scope, "reason_code" to exit.reason.toString(), "status" to exit.status.toString(),
                                 "exit_wall_clock_ms" to exit.timestamp.toString(), "association_status" to relation,
                                 "previous_application_title_id" to association?.title.orEmpty(), "previous_application_identity_source" to (association?.titleSource ?: "unknown"), "previous_diagnostics_enabled" to (association?.enabled?.toString() ?: "unknown"),
-                                "previous_launch_start_observed" to (association?.startObserved?.toString() ?: "unknown")) + previous()
+                                "previous_launch_start_observed" to (association?.startObserved?.toString() ?: "unknown")) +
+                                ExitRecordIdentity.observationFields(seen, id, exit.timestamp, exit.reason, exit.status, exit.pid, scope) + previous()
                         }
-                        if (accepted && Diagnostics.flushForSession(session)) seen.add("e:$id")
+                        if (accepted && Diagnostics.flushForSession(session)) ExitRecordIdentity.markObserved(seen, id, exit.status)
                     }
                     if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && !traceAttempted && NativeTraceImport.eligible(seen, id)) {
                         traceAttempted = true

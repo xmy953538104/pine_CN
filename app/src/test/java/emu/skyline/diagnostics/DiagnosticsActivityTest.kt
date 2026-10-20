@@ -58,6 +58,7 @@ class DiagnosticsActivityTest {
     private class StatusGate {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
+        @Volatile var timedOut = false
     }
 
     @Implements(value = Diagnostics::class, isInAndroidSdk = false)
@@ -72,7 +73,10 @@ class DiagnosticsActivityTest {
             @JvmStatic @Implementation fun statusNative(): LongArray {
                 statusGate?.let { gate ->
                     gate.entered.countDown()
-                    check(gate.release.await(5, TimeUnit.SECONDS)) { "Synthetic status gate timed out" }
+                    if (!gate.release.await(5, TimeUnit.SECONDS)) {
+                        gate.timedOut = true
+                        error("Synthetic status gate timed out")
+                    }
                 }
                 return longArrayOf(if (nativeEnabled) 1 else 0, 0, 0, 0)
             }
@@ -365,10 +369,12 @@ class DiagnosticsActivityTest {
             // prevents a duplicate preparation from completing before it can be counted.
             assertEquals("only one live preparation after both clicks", 1, preparations.size)
         } finally {
+            preparations = owner.children.filter { it !in existingJobs }.toList()
             gate.release.countDown()
             await("all preparation workers completed") { preparations.all { it.isCompleted } }
             statusGate = null
         }
+        assertFalse("preparation barrier must not time out", gate.timedOut)
         assertTrue(ShadowDialog.getLatestDialog().let { it !== old && it?.isShowing == true })
         assertEquals(1, snapshots().size)
         latestDialog().getButton(DialogInterface.BUTTON_NEGATIVE).performClick()

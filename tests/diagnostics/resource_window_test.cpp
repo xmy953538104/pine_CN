@@ -9,6 +9,7 @@
 #include <iterator>
 #include <new>
 #include <sys/wait.h>
+#include <vector>
 
 static bool failAllocation{};
 [[gnu::noinline]] void *operator new(size_t size) {
@@ -49,6 +50,26 @@ static std::string Line(size_t bytes) {
     const std::string prefix = "{\"payload\":\"";
     CHECK(bytes >= prefix.size() + 3);
     return prefix + std::string(bytes - prefix.size() - 3, 'x') + "\"}\n";
+}
+using Retention = ResourceWindowRetention;
+static void Bounds(const RecentResourceWindow &window) {
+    CHECK(window.Count() <= window.MaxRecords && window.Bytes() <= window.MaxDataBytes);
+    CHECK(window.CriticalCount() <= window.MaxCriticalRecords && window.CriticalBytes() <= window.MaxCriticalBytes);
+    CHECK(window.RecentCount() + window.CriticalCount() == window.Count());
+    CHECK(window.RecentBytes() + window.CriticalBytes() == window.Bytes());
+    CHECK(window.Stats().evictedRecent + window.Stats().evictedCritical == window.Evictions());
+}
+static std::string Record(uint64_t sequence, const char *event, size_t bytes = 0) {
+    auto line = "{\"schema\":1,\"session_id\":\"synthetic-session\",\"process_run_id\":\"synthetic-process\",\"sequence\":"
+        + std::to_string(sequence) + ",\"monotonic_us\":" + std::to_string(1000000 - sequence)
+        + ",\"event\":\"" + event + "\",\"fields\":{\"payload\":\"";
+    constexpr std::string_view ending = "\"}}\n";
+    if (bytes) { CHECK(bytes >= line.size() + ending.size()); line.append(bytes - line.size() - ending.size(), 'x'); }
+    return line + std::string(ending);
+}
+static std::string RecordsOnly(const fs::path &directory) {
+    const auto file = Read(directory / "resource-window.jsonl");
+    const auto end = file.find('\n'); CHECK(end != std::string::npos); return file.substr(end + 1);
 }
 
 static void EmptyAndFraming() {
@@ -435,6 +456,167 @@ static void IngestionTimeDoesNotReinterpretEventOrder() {
     CHECK(text.find("\"retained_span_us\":1") != std::string::npos);
 }
 
+static void CriticalSurvivesDenseRecentAndPreservesRawOrder() {
+    RecentResourceWindow window;
+    struct Item { std::string line; bool critical; unsigned recentOrdinal; };
+    std::vector<Item> admitted;
+    uint64_t sequence{};
+    const auto critical = [&](uint64_t now, const char *event) {
+        auto line = Record(++sequence, event);
+        CHECK(window.Add(now, line, Retention::Critical)); admitted.push_back({std::move(line), true, 0}); Bounds(window);
+    };
+    critical(0, "GUEST_BREAK_REQUEST");
+    for (unsigned index = 1; index <= 100; ++index) {
+        auto line = Record(++sequence, "RESOURCE_GPU_SAMPLE", 2000);
+        CHECK(window.Add(index * 400000ULL, line)); admitted.push_back({std::move(line), false, index});
+        if (index == 20) critical(index * 400000ULL, "GUEST_SIGNAL");
+        if (index == 80) critical(index * 400000ULL, "GUEST_RUNTIME_ERROR");
+        Bounds(window);
+    }
+    CHECK(window.CriticalCount() == 3 && window.RecentCount() > 0 && window.RecentCount() < 100);
+    CHECK(window.Stats().evictedCritical == 0 && window.Stats().evictedRecent == 100 - window.RecentCount());
+    CHECK(window.Stats().evictedRecentBytes == 2000 * window.Stats().evictedRecent);
+    const auto directory = Directory("layered-dense");
+    static_assert(static_cast<uint8_t>(ResourceWindowReason::GuestBreakObserved) == 7);
+    CHECK(window.Persist(directory.string(), "synthetic-session", ResourceWindowReason::GuestBreakObserved));
+    std::string expected;
+    for (const auto &entry : admitted)
+        if (entry.critical || entry.recentOrdinal > 100 - window.RecentCount()) expected += entry.line;
+    CHECK(RecordsOnly(directory) == expected); // Every timestamp/ID/sequence byte unchanged.
+    CHECK(Read(directory / "resource-window.jsonl").find("guest_break_observed") != std::string::npos);
+}
+
+static void CriticalCountCeilingAndEqualTimeAdmissionOrder() {
+    RecentResourceWindow window;
+    for (uint64_t sequence = 1; sequence <= 16; ++sequence) CHECK(window.Add(1, Record(sequence, "CRITICAL"), Retention::Critical));
+    for (uint64_t sequence = 17; sequence <= 256; ++sequence) CHECK(window.Add(1, Record(sequence, "RECENT")));
+    CHECK(window.CriticalCount() == 16 && window.RecentCount() == 224 && window.Count() == 240);
+    CHECK(window.Add(1, Record(257, "CRITICAL"), Retention::Critical)); Bounds(window);
+    CHECK(window.Stats().evictedCritical == 1 && window.Stats().evictedRecent == 16 && window.Stats().evictedCount == 17);
+    std::string expected;
+    for (uint64_t sequence = 2; sequence <= 16; ++sequence) expected += Record(sequence, "CRITICAL");
+    for (uint64_t sequence = 33; sequence <= 256; ++sequence) expected += Record(sequence, "RECENT");
+    expected += Record(257, "CRITICAL");
+    const auto directory = Directory("layered-count"); CHECK(Persist(window, directory));
+    CHECK(RecordsOnly(directory) == expected); // Equal ingestion timestamps are not sorted by class.
+}
+
+static void CriticalByteCeilingAndBorrowingUnusedReserve() {
+    RecentResourceWindow window;
+    const auto full = Line(window.MaxLineBytes);
+    CHECK(window.Add(1, full, Retention::Critical));
+    CHECK(window.Add(1, full)); CHECK(window.Add(1, full));
+    CHECK(window.Add(1, Line(window.MaxDataBytes - 3 * full.size())));
+    CHECK(window.Bytes() == window.MaxDataBytes && window.CriticalBytes() == window.MaxCriticalBytes);
+    const auto before = Directory("layered-full-budget");
+    CHECK(Persist(window, before, std::string(window.MaxSessionBytes, '\1')));
+    CHECK(window.Add(1, "{}")); Bounds(window);
+    CHECK(window.Stats().evictedRecent == 1 && window.Stats().evictedCritical == 0);
+    CHECK(window.CriticalBytes() == full.size());
+    CHECK(window.Add(1, Line(1024), Retention::Critical)); Bounds(window);
+    CHECK(window.Stats().evictedCritical == 1 && window.Stats().evictedCriticalBytes == full.size());
+    CHECK(window.CriticalCount() == 1 && window.CriticalBytes() == 1024);
+    CHECK(window.Add(1, full)); Bounds(window);
+    CHECK(window.RecentBytes() > window.MaxDataBytes - window.MaxCriticalBytes); // Borrowed unused reserve.
+    CHECK(!window.Add(1, Line(window.MaxLineBytes + 1), Retention::Critical));
+    CHECK(window.Stats().omittedOversize == 1 && window.CriticalBytes() == 1024);
+    CHECK(Persist(window, Directory("layered-bytes"), std::string(window.MaxSessionBytes, '\1')));
+}
+
+static void BothClassesExpireResetAndHandleUint64ClockBounds() {
+    RecentResourceWindow window;
+    CHECK(window.Add(0, Record(1, "CRITICAL"), Retention::Critical));
+    CHECK(window.Add(1, Record(2, "RECENT")));
+    CHECK(window.Add(2, Record(3, "CRITICAL"), Retention::Critical));
+    CHECK(window.Add(window.MaxAgeUs - 1, Record(4, "RECENT")));
+    CHECK(window.Add(window.MaxAgeUs, Record(5, "RECENT"))); Bounds(window);
+    CHECK(window.CriticalCount() == 1 && window.RecentCount() == 3 && window.Stats().evictedAge == 1);
+    CHECK(window.Stats().evictedCritical == 1 && window.Stats().evictedRecent == 0);
+    CHECK(Persist(window, Directory("layered-age")));
+    CHECK(window.Add(10, Record(6, "CRITICAL"), Retention::Critical)); Bounds(window);
+    CHECK(window.Count() == 1 && window.CriticalCount() == 1 && window.Stats().evictedClock == 4);
+    CHECK(Persist(window, Directory("layered-clock")));
+    window.Reset(); Bounds(window);
+    CHECK(window.CriticalCount() == 0 && window.CriticalBytes() == 0 && window.Evictions() == 0);
+    constexpr auto maximum = std::numeric_limits<uint64_t>::max();
+    CHECK(window.Add(maximum - window.MaxAgeUs, Record(7, "CRITICAL"), Retention::Critical));
+    CHECK(window.Add(maximum - window.MaxAgeUs + 1, Record(8, "CRITICAL"), Retention::Critical));
+    CHECK(window.Add(maximum, Record(9, "RECENT"))); Bounds(window);
+    CHECK(window.CriticalCount() == 1 && window.RecentCount() == 1 && window.Stats().evictedAge == 1);
+    CHECK(Persist(window, Directory("layered-max-time")));
+    const auto changed = Directory("layered-session");
+    CHECK(Persist(window, changed, "new-session")); Bounds(window);
+    CHECK(window.Count() == 0 && window.CriticalCount() == 0 && window.Bytes() == 0 && window.Evictions() == 0);
+}
+
+static void CriticalAdmissionFailureKeepsClassAccountingAndOriginalFile() {
+    RecentResourceWindow window;
+    CHECK(window.Add(1, Record(1, "CRITICAL"), Retention::Critical));
+    CHECK(window.Add(2, Record(2, "RECENT")));
+    const auto directory = Directory("layered-allocation"); CHECK(Persist(window, directory));
+    const auto original = Read(directory / "resource-window.jsonl");
+    const auto count = window.CriticalCount(), bytes = window.CriticalBytes(), total = window.Bytes();
+    const auto line = Record(3, "CRITICAL", 4000);
+    failAllocation = true;
+    const auto added = window.Add(3, line, Retention::Critical);
+    failAllocation = false;
+    CHECK(!added && window.Stats().omittedAllocation == 1);
+    CHECK(window.CriticalCount() == count && window.CriticalBytes() == bytes && window.Bytes() == total); Bounds(window);
+    CHECK(!window.Add(4, "{}", static_cast<Retention>(255)) && window.Stats().omittedInvalid == 1); Bounds(window);
+    const auto path = directory.string();
+    failAllocation = true; const auto saved = window.Persist(path, "synthetic-session", reason); failAllocation = false;
+    CHECK(!saved && Read(directory / "resource-window.jsonl") == original);
+    Failure(window, Stage::Metadata, FailureReason::AllocationFailure);
+    CHECK(Persist(window, directory)); Cleared(window); Bounds(window);
+    RecentResourceWindow defaultClass;
+    CHECK(defaultClass.Add(1, Record(1, "GUEST_BREAK_REQUEST")));
+    CHECK(defaultClass.CriticalCount() == 0 && defaultClass.RecentCount() == 1); // No event-name inference.
+}
+
+static void LayeredReferenceModelAndPersistence() {
+    struct Entry { uint64_t now; std::string line; bool critical; };
+    std::vector<Entry> expected;
+    RecentResourceWindow window;
+    uint64_t seed = 19, now{}, recentEvictions{}, criticalEvictions{}, recentBytes{}, criticalBytes{};
+    const auto evict = [&](size_t index) {
+        const auto &entry = expected[index];
+        if (entry.critical) { ++criticalEvictions; criticalBytes += entry.line.size(); }
+        else { ++recentEvictions; recentBytes += entry.line.size(); }
+        expected.erase(expected.begin() + static_cast<std::ptrdiff_t>(index));
+    };
+    const auto totalBytes = [&] { size_t bytes{}; for (const auto &entry : expected) bytes += entry.line.size(); return bytes; };
+    const auto classCount = [&] { size_t count{}; for (const auto &entry : expected) count += entry.critical; return count; };
+    const auto classBytes = [&] { size_t bytes{}; for (const auto &entry : expected) if (entry.critical) bytes += entry.line.size(); return bytes; };
+    const auto firstClass = [&](bool critical) {
+        const auto found = std::find_if(expected.begin(), expected.end(), [&](const auto &entry) { return entry.critical == critical; });
+        CHECK(found != expected.end()); return static_cast<size_t>(found - expected.begin());
+    };
+    for (uint64_t sequence = 1; sequence <= 1000; ++sequence) {
+        seed = seed * 6364136223846793005ULL + 1; // Defined unsigned wrap; deterministic synthetic admissions.
+        if (sequence == 333) { while (!expected.empty()) evict(0); now = 7; }
+        else now += 100000;
+        while (!expected.empty() && now - expected.front().now >= window.MaxAgeUs) evict(0);
+        const bool critical = (seed >> 32) % 7 == 0;
+        const auto line = Record(sequence, critical ? "CRITICAL" : "RECENT", sequence % 31 == 0 ? window.MaxLineBytes : 512 + seed % 3500);
+        expected.push_back({now, line, critical});
+        while (classCount() > window.MaxCriticalRecords) evict(firstClass(true));
+        while (classBytes() > window.MaxCriticalBytes) evict(firstClass(true));
+        while (expected.size() > window.MaxRecords) evict(firstClass(false));
+        while (totalBytes() > window.MaxDataBytes) evict(firstClass(false));
+        CHECK(window.Add(now, line, critical ? Retention::Critical : Retention::Recent)); Bounds(window);
+        CHECK(window.Count() == expected.size() && window.Bytes() == totalBytes());
+        CHECK(window.CriticalCount() == classCount() && window.CriticalBytes() == classBytes());
+        CHECK(window.Stats().evictedCritical == criticalEvictions && window.Stats().evictedRecent == recentEvictions);
+        CHECK(window.Stats().evictedCriticalBytes == criticalBytes && window.Stats().evictedRecentBytes == recentBytes);
+        if (sequence == 100 || sequence == 200 || sequence == 400 || sequence == 1000) {
+            const auto name = "layered-model-" + std::to_string(sequence); const auto directory = Directory(name.c_str());
+            CHECK(Persist(window, directory));
+            std::string rows; for (const auto &entry : expected) rows += entry.line;
+            CHECK(RecordsOnly(directory) == rows);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     CHECK(argc == 2); root = argv[1]; CHECK(fs::create_directories(root));
     struct Case { const char *name; void (*run)(); };
@@ -453,6 +635,12 @@ int main(int argc, char **argv) {
         {"safe stale owned temporary recovery", StaleOwnedTemporaryCanRecover},
         {"explicit exception reason preserves caller-observed record", ExceptionReasonPreservesObservedRecord},
         {"ingestion-time window preserves out-of-order original event timestamps", IngestionTimeDoesNotReinterpretEventOrder},
+        {"critical rows survive dense Recent without raw-row or admission-order changes", CriticalSurvivesDenseRecentAndPreservesRawOrder},
+        {"16-critical count ceiling and equal-time admission order", CriticalCountCeilingAndEqualTimeAdmissionOrder},
+        {"32KiB critical ceiling and unused reserve borrowing", CriticalByteCeilingAndBorrowingUnusedReserve},
+        {"both classes share 60s age/reset and uint64 clock boundaries", BothClassesExpireResetAndHandleUint64ClockBounds},
+        {"critical admission allocation failure keeps original file/accounting", CriticalAdmissionFailureKeepsClassAccountingAndOriginalFile},
+        {"1000-admission independent reference model and exact persisted rows", LayeredReferenceModelAndPersistence},
     };
     for (const auto &test : cases) { test.run(); std::printf("PASS: %s\n", test.name); }
     std::printf("PASS: %zu synthetic resource-window cases; object_bytes=%zu payload_cap=%zu metadata_reserve=%zu; no sink/Guest integration\n",

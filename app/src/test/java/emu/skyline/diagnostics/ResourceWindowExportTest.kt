@@ -54,6 +54,10 @@ class ResourceWindowExportTest {
             val entries = archive(snapshot)
             val values = rows(entries, "main/resource-window.jsonl")
             assertEquals("resource_window_metadata", values.first().getValue("record_kind").jsonPrimitive.content)
+            val retention = values.first().getValue("retention").jsonObject
+            assertEquals("critical_reserve_recent_borrows_unused", retention.getValue("policy").jsonPrimitive.content)
+            assertEquals(16, retention.getValue("critical").jsonObject.getValue("record_limit").jsonPrimitive.int)
+            assertEquals(32768, retention.getValue("critical").jsonObject.getValue("byte_limit").jsonPrimitive.int)
             assertEquals("7", values.last().getValue("fields").jsonObject.getValue("present_accepted").jsonPrimitive.content)
             assertFalse(entries.values.any { it.contains("CONTROLLED_OMIT") || it.contains("/data/user") })
         }

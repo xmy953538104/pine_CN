@@ -321,6 +321,7 @@ const char *WindowCheckpointName(ResourceWindowReason reason) noexcept {
         case ResourceWindowReason::SessionEnd: return "session_end";
         case ResourceWindowReason::Shutdown: return "shutdown";
         case ResourceWindowReason::ExceptionObserved: return "exception_observed";
+        case ResourceWindowReason::GuestBreakObserved: return "guest_break_observed";
     }
     return "unknown";
 }
@@ -555,16 +556,28 @@ void Run(Sink &s) noexcept {
             const bool resourceRecord = record.category == "resource";
             const bool exceptionObserved = record.category == "exception" ||
                 (record.category == "guest" && (record.event == "GUEST_RUNTIME_ERROR" || record.event == "DFX_LUA_ERROR"));
+            const bool guestBreak = record.category == "guest" && record.event == "GUEST_BREAK_REQUEST" &&
+                std::any_of(record.fields.begin(), record.fields.end(), [](const auto &field) {
+                    return field.first == "notification_only" && field.second == "false";
+                });
             const bool launchEnded = record.event == "LAUNCH_ENDED";
-            if (resourceRecord || (resourceWindow.Count() && (exceptionObserved || launchEnded))) {
-                resourceWindow.Add(MonotonicUs(), line);
-                if (exceptionObserved) persistWindow(ResourceWindowReason::ExceptionObserved);
+            if (resourceRecord || ((resourceWindow.Count() || ResourceObservationEnabled()) && (exceptionObserved || guestBreak || launchEnded))) {
+                resourceWindow.Add(MonotonicUs(), line, (record.critical || exceptionObserved || guestBreak || launchEnded) ?
+                    ResourceWindowRetention::Critical : ResourceWindowRetention::Recent);
+                if (guestBreak) persistWindow(ResourceWindowReason::GuestBreakObserved);
+                else if (exceptionObserved) persistWindow(ResourceWindowReason::ExceptionObserved);
                 else if (record.event == "RESOURCE_POST_PROGRESS_NO_NEW_PRESENT") persistWindow(ResourceWindowReason::PostProgressNoNewPresent);
                 else if (record.event == "RESOURCE_PRESENT_RECOVERED") persistWindow(ResourceWindowReason::Recovered);
                 else if (launchEnded) persistWindow(ResourceWindowReason::LaunchEnd);
                 else if (Clock::now() >= nextWindowPersist) persistWindow(ResourceWindowReason::Periodic);
             }
             snapshot.Observe(record);
+            // An admitted, actual non-notification SvcBreak is the asynchronous
+            // request. Only this ordinary writer checkpoints; the guest never
+            // waits and its existing stack/kill/longjmp path is unchanged.
+            // Queue loss, termination before consumption, and separate file
+            // commits remain possible: this is not a crash-atomic transaction.
+            if (guestBreak) snapshot.Persist(true);
 #ifdef __ANDROID__
             // Android log entries have a small payload limit: never emit broken JSON.
             const auto priority = record.level == "ERROR" ? ANDROID_LOG_ERROR : record.level == "WARN" ? ANDROID_LOG_WARN : record.level == "DEBUG" ? ANDROID_LOG_DEBUG : ANDROID_LOG_INFO;

@@ -19,7 +19,8 @@
 #include <utility>
 
 namespace skyline::diagnostics {
-enum class ResourceWindowReason : uint8_t { Periodic, PostProgressNoNewPresent, Recovered, LaunchEnd, SessionEnd, Shutdown, ExceptionObserved };
+enum class ResourceWindowReason : uint8_t { Periodic, PostProgressNoNewPresent, Recovered, LaunchEnd, SessionEnd, Shutdown, ExceptionObserved, GuestBreakObserved };
+enum class ResourceWindowRetention : uint8_t { Recent, Critical };
 
 enum class ResourceWindowFailureStage : uint8_t {
     None, Validate, Metadata, OpenDirectory, InspectTarget, InspectTemporary,
@@ -216,18 +217,24 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     static constexpr size_t MetadataReserveBytes = 2048;
     static constexpr size_t MaxDataBytes = MaxFileBytes - MetadataReserveBytes;
     static constexpr size_t MaxLineBytes = 32 * 1024; // Includes one terminating LF.
+    static constexpr size_t MaxCriticalRecords = 16;
+    static constexpr size_t MaxCriticalBytes = 32 * 1024;
     static constexpr uint64_t MaxAgeUs = 60 * 1000000ULL;
     static constexpr size_t MaxSessionBytes = 128;
     struct Statistics {
         uint64_t evictedAge{}, evictedBytes{}, evictedCount{}, evictedClock{};
         uint64_t ageBytes{}, budgetBytes{}, countBytes{}, clockBytes{};
         uint64_t omittedOversize{}, omittedInvalid{}, omittedAllocation{}, clockResets{};
+        uint64_t evictedRecent{}, evictedCritical{}, evictedRecentBytes{}, evictedCriticalBytes{};
     };
 
   private:
-    struct Entry { uint64_t observedUs; std::string line; };
+    struct Entry { uint64_t observedUs; std::string line; ResourceWindowRetention retention; };
+    static_assert(std::is_nothrow_move_assignable_v<Entry>);
+    static_assert(MaxCriticalRecords < MaxRecords && MaxCriticalBytes < MaxDataBytes && MaxLineBytes <= MaxCriticalBytes);
     std::optional<std::deque<Entry>> entries;
     size_t bytes{};
+    size_t criticalCount{}, criticalBytes{};
     uint64_t lastObservedUs{};
     bool haveTime{}, sessionBound{};
     std::array<char, MaxSessionBytes> sessionBytes{};
@@ -241,9 +248,22 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
         constexpr auto max = std::numeric_limits<uint64_t>::max();
         value = amount > max - value ? max : value + amount;
     }
-    void Evict(uint64_t &records, uint64_t &evictedBytes) noexcept {
-        const auto size = entries->front().line.size();
-        bytes -= size; entries->pop_front(); AddCounter(records); AddCounter(evictedBytes, size);
+    void Evict(uint64_t &records, uint64_t &evictedBytes, size_t index = 0) noexcept {
+        const auto &entry = (*entries)[index];
+        const auto size = entry.line.size();
+        if (entry.retention == ResourceWindowRetention::Critical) {
+            --criticalCount; criticalBytes -= size;
+            AddCounter(statistics.evictedCritical); AddCounter(statistics.evictedCriticalBytes, size);
+        } else {
+            AddCounter(statistics.evictedRecent); AddCounter(statistics.evictedRecentBytes, size);
+        }
+        bytes -= size;
+        entries->erase(entries->begin() + static_cast<std::ptrdiff_t>(index));
+        AddCounter(records); AddCounter(evictedBytes, size);
+    }
+    size_t Oldest(ResourceWindowRetention retention) const noexcept {
+        for (size_t index{}; index < Size(); ++index) if ((*entries)[index].retention == retention) return index;
+        return Size();
     }
     void Advance(uint64_t now) noexcept {
         if (haveTime && now < lastObservedUs) {
@@ -262,6 +282,7 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
             case ResourceWindowReason::SessionEnd: return "session_end";
             case ResourceWindowReason::Shutdown: return "shutdown";
             case ResourceWindowReason::ExceptionObserved: return "exception_observed";
+            case ResourceWindowReason::GuestBreakObserved: return "guest_break_observed";
         }
         return nullptr;
     }
@@ -284,6 +305,13 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
         number("evicted_count_bytes", statistics.countBytes); number("evicted_clock_bytes", statistics.clockBytes);
         number("omitted_oversize", statistics.omittedOversize); number("omitted_invalid", statistics.omittedInvalid);
         number("omitted_allocation", statistics.omittedAllocation); number("clock_resets", statistics.clockResets);
+        result += ",\"retention\":{\"policy\":\"critical_reserve_recent_borrows_unused\",\"age_scope\":\"both_ingestion\",\"eviction_scope\":\"age_clock_global_and_class_limits\",\"critical\":{\"records\":"
+            + std::to_string(criticalCount) + ",\"bytes\":" + std::to_string(criticalBytes)
+            + ",\"record_limit\":" + std::to_string(MaxCriticalRecords) + ",\"byte_limit\":" + std::to_string(MaxCriticalBytes)
+            + ",\"evicted_records\":" + std::to_string(statistics.evictedCritical) + ",\"evicted_bytes\":" + std::to_string(statistics.evictedCriticalBytes)
+            + "},\"recent\":{\"records\":" + std::to_string(RecentCount()) + ",\"bytes\":" + std::to_string(RecentBytes())
+            + ",\"record_capacity\":" + std::to_string(MaxRecords - criticalCount) + ",\"byte_capacity\":" + std::to_string(MaxDataBytes - criticalBytes)
+            + ",\"evicted_records\":" + std::to_string(statistics.evictedRecent) + ",\"evicted_bytes\":" + std::to_string(statistics.evictedRecentBytes) + "}}";
         return result + "}\n";
     }
     bool WriteAll(int fd, std::string_view value, ResourceWindowFailureStage stage) noexcept {
@@ -327,6 +355,10 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     size_t Size() const noexcept { return entries ? entries->size() : 0; }
     size_t Count() const noexcept { return Size(); }
     size_t Bytes() const noexcept { return bytes; }
+    size_t CriticalCount() const noexcept { return criticalCount; }
+    size_t CriticalBytes() const noexcept { return criticalBytes; }
+    size_t RecentCount() const noexcept { return Size() - criticalCount; }
+    size_t RecentBytes() const noexcept { return bytes - criticalBytes; }
     Statistics Stats() const noexcept { return statistics; }
     // Last Persist result only. Add omission counters are separate; later
     // samples do not erase an outstanding persistence failure. Reset clears it.
@@ -343,7 +375,7 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
         AddCounter(total, statistics.omittedAllocation); return total;
     }
     void Reset() noexcept {
-        entries.reset(); bytes = 0; lastObservedUs = 0; haveTime = sessionBound = false;
+        entries.reset(); bytes = criticalCount = criticalBytes = 0; lastObservedUs = 0; haveTime = sessionBound = false;
         sessionBytes = {}; sessionLength = 0; statistics = {}; lastFailure = {};
     }
     // nowUs is writer-ingestion time, not the record's potentially out-of-order
@@ -351,8 +383,14 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
     // Precondition: one already-sanitized object from the sink Serialize path.
     // This checks physical framing, not JSON semantics; it never edits/truncates
     // the object. Exactly one optional trailing LF is normalized to one LF.
-    bool Add(uint64_t nowUs, std::string_view line) noexcept {
+    // Critical has its own bounded ceiling; Recent borrows unused reserve. The
+    // single deque preserves admission order, including equal ingestion times.
+    // Only the writer owns these bounded allocations/linear <=241-entry erases.
+    bool Add(uint64_t nowUs, std::string_view line, ResourceWindowRetention retention = ResourceWindowRetention::Recent) noexcept {
         Advance(nowUs);
+        if (retention != ResourceWindowRetention::Recent && retention != ResourceWindowRetention::Critical) {
+            AddCounter(statistics.omittedInvalid); return false;
+        }
         if (line.size() > MaxLineBytes) { AddCounter(statistics.omittedOversize); return false; }
         if (!line.empty() && line.back() == '\n') line.remove_suffix(1);
         if (line.size() >= MaxLineBytes) { AddCounter(statistics.omittedOversize); return false; }
@@ -364,9 +402,16 @@ template<class Io = resource_window_detail::PosixIo> class BasicRecentResourceWi
             std::memcpy(owned.data(), line.data(), line.size()); owned.back() = '\n';
             if (!entries) entries.emplace();
             const auto added = owned.size();
-            entries->push_back({nowUs, std::move(owned)}); bytes += added;
-            while (Size() > MaxRecords) Evict(statistics.evictedCount, statistics.countBytes);
-            while (bytes > MaxDataBytes) Evict(statistics.evictedBytes, statistics.budgetBytes);
+            entries->push_back({nowUs, std::move(owned), retention}); bytes += added;
+            if (retention == ResourceWindowRetention::Critical) { ++criticalCount; criticalBytes += added; }
+            while (criticalCount > MaxCriticalRecords)
+                Evict(statistics.evictedCount, statistics.countBytes, Oldest(ResourceWindowRetention::Critical));
+            while (criticalBytes > MaxCriticalBytes)
+                Evict(statistics.evictedBytes, statistics.budgetBytes, Oldest(ResourceWindowRetention::Critical));
+            while (Size() > MaxRecords)
+                Evict(statistics.evictedCount, statistics.countBytes, Oldest(ResourceWindowRetention::Recent));
+            while (bytes > MaxDataBytes)
+                Evict(statistics.evictedBytes, statistics.budgetBytes, Oldest(ResourceWindowRetention::Recent));
             return true;
         } catch (...) { AddCounter(statistics.omittedAllocation); return false; }
     }

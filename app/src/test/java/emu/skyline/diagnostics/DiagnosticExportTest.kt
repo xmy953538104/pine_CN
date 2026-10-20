@@ -150,7 +150,46 @@ class DiagnosticExportTest {
         }
     }
 
-    @Test fun realNativeTwentyTwoFieldTraceSnapshotRetainsStackAfterRotationAndExport() = sandbox { logs, textLog, cache, _ ->
+    @Test fun oldAndRefinedSignaledExitsCountOnceSeparatelyFromGuestBreakAndImportedTrace() = sandbox { logs, textLog, cache, _ ->
+        fun exit(event: String, sequence: Int, status: JsonElement = JsonPrimitive("11")) = buildJsonObject {
+            put("session_id", "observer"); put("sequence", sequence); put("category", "lifecycle")
+            put("event", event); put("level", "ERROR")
+            putJsonObject("fields") {
+                put("exit_record_id", "b".repeat(64)); put("reason_code", "2"); put("status", status)
+                put("exit_wall_clock_ms", "1000"); put("previous_session_id", "previous-session")
+                put("previous_process_run_id", "previous-process"); put("previous_launch_id", "previous-launch")
+            }
+        }.toString() + "\n"
+        log(logs, "main/diagnostics-0.jsonl", exit("PREVIOUS_PROCESS_EXIT", 1) +
+            exit("PREVIOUS_PROCESS_FATAL_SIGNAL", 2) + exit("PREVIOUS_PROCESS_EXIT_REFINED", 3) +
+            exit("PREVIOUS_NATIVE_TRACE", 4) + record("current-guest", 1, "guest", "GUEST_BREAK_REQUEST", "WARN"))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            val metadata = entries.getValue("session-metadata.txt")
+            assertTrue(metadata.contains("historical_crash_observations=0"))
+            assertTrue(metadata.contains("historical_fatal_signal_observations=1"))
+            assertTrue(metadata.contains("observed_error_count=0"))
+            val old = entries.getValue("main/diagnostics-0.jsonl").lineSequence().filter { it.isNotBlank() }
+                .map { Json.parseToJsonElement(it).jsonObject }.first()
+            assertEquals("1000", old.getValue("fields").jsonObject.getValue("exit_wall_clock_ms").jsonPrimitive.content)
+            assertEquals("previous-process", old.getValue("fields").jsonObject.getValue("previous_process_run_id").jsonPrimitive.content)
+        }
+    }
+
+    @Test fun malformedAndNormalExitStatusesNeverInventFatalSignals() = sandbox { logs, textLog, cache, _ ->
+        val statuses = listOf<JsonElement>(JsonPrimitive(0), JsonPrimitive(2), JsonPrimitive(9), JsonPrimitive(15), JsonPrimitive("11x"), JsonArray(listOf(JsonPrimitive(11))), JsonNull)
+        log(logs, "main/diagnostics-0.jsonl", statuses.mapIndexed { sequence, status -> buildJsonObject {
+            put("session_id", "observer"); put("sequence", sequence); put("event", "PREVIOUS_PROCESS_EXIT"); put("level", "ERROR")
+            putJsonObject("fields") { put("reason_code", 2); put("status", status) }
+        }.toString() }.joinToString("\n", postfix = "\n"))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val metadata = archive(snapshot).getValue("session-metadata.txt")
+            assertTrue(metadata.contains("historical_fatal_signal_observations=0"))
+            assertTrue(metadata.contains("observed_error_count=0"))
+        }
+    }
+
+    @Test fun realNativeTwentyFourFieldTraceSnapshotRetainsHostScopeAndStackAfterRotationAndExport() = sandbox { logs, textLog, cache, _ ->
         val fixture = File("../tools/tests/fixtures/native-trace-snapshot.jsonl").readText()
         log(logs, "main/critical-state.jsonl", fixture)
         // Native fixture generator asserts the original trace is gone from both ordinary files.
@@ -164,7 +203,11 @@ class DiagnosticExportTest {
             assertEquals("true", fields.getValue("trace_complete").jsonPrimitive.content)
             assertEquals("393216", fields.getValue("trace_bytes_read").jsonPrimitive.content)
             assertEquals("complete", fields.getValue("trace_capture_status").jsonPrimitive.content)
-            assertEquals("3", fields.getValue("trace_attempt_limit").jsonPrimitive.content)
+            assertEquals("1", fields.getValue("trace_attempt").jsonPrimitive.content)
+            assertEquals("2", fields.getValue("reason_code").jsonPrimitive.content)
+            assertEquals("11", fields.getValue("status").jsonPrimitive.content)
+            assertEquals("1792166400000", fields.getValue("exit_wall_clock_ms").jsonPrimitive.content)
+            assertEquals("host_process_candidate_not_guest", fields.getValue("trace_scope").jsonPrimitive.content)
             assertTrue(fields.getValue("frames").jsonPrimitive.content.contains("libskyline.so+0x1234@" + "a".repeat(40)))
             assertEquals(0, state.getValue("snapshot_metadata").jsonObject.getValue("fields_omitted").jsonPrimitive.int)
             assertTrue(exported.getValue("session-metadata.txt").contains("exported_critical_state_records=1"))

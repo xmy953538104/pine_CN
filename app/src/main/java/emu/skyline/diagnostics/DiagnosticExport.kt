@@ -337,6 +337,10 @@ object DiagnosticExport {
         private val historicalIdentities = hashSetOf<String>()
         private var historicalDuplicates = 0L
         private var historicalCrashes = 0L
+        private var historicalFatalSignals = 0L
+        private val fatalSignalIdentities = hashSetOf<String>()
+        private val historicalEvents = setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_FATAL_SIGNAL",
+            "PREVIOUS_PROCESS_EXIT", "PREVIOUS_PROCESS_EXIT_REFINED", "PREVIOUS_NATIVE_TRACE")
         private val criticalRows = ArrayDeque<String>()
         private val dropReasons = linkedMapOf<String, MutableMap<String, Long>>()
         private var dedupLimit = false
@@ -351,10 +355,11 @@ object DiagnosticExport {
         private val observations = linkedMapOf<String, SessionObservation>()
         private fun historicalIdentity(record: JsonObject): String? {
             val event = (record["event"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            if (event !in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE")) return null
+            if (event !in historicalEvents) return null
             val fields = record["fields"] as? JsonObject ?: return null
             val id = (fields["exit_record_id"] as? JsonPrimitive)?.contentOrNull ?: return null
             if (!Regex("[0-9a-f]{64}").matches(id)) return null
+            if (event == "PREVIOUS_PROCESS_EXIT_REFINED") return "$event:$id:${(fields["status"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(16)}"
             if (event != "PREVIOUS_NATIVE_TRACE") return "$event:$id"
             val status = (fields["trace_status"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(64)
             val attempt = (fields["trace_attempt"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(8)
@@ -409,9 +414,22 @@ object DiagnosticExport {
                 return // State rows are not new error/content/lifecycle events or crash counts.
             }
             records++
-            val historical = event in setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_EXIT", "PREVIOUS_NATIVE_TRACE")
+            val historical = event in historicalEvents
             if (historicalIdentities.size < MAX_IDENTITIES) historicalIdentity(record)?.let(historicalIdentities::add)
             if (event == "PREVIOUS_PROCESS_CRASH") historicalCrashes++
+            // Also understand older PREVIOUS_PROCESS_EXIT rows: those versions
+            // observed reason=2/status=11 but did not name it a fatal signal.
+            // Trace and snapshot rows never manufacture another host exit.
+            val fields = record["fields"] as? JsonObject
+            if (historical && event != "PREVIOUS_NATIVE_TRACE" &&
+                (fields?.get("reason_code") as? JsonPrimitive)?.intOrNull == 2 &&
+                (fields?.get("status") as? JsonPrimitive)?.intOrNull in setOf(4, 6, 7, 8, 11)) {
+                val id = (fields?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull?.takeIf { Regex("[0-9a-f]{64}").matches(it) }
+                if (id == null || (id !in fatalSignalIdentities && fatalSignalIdentities.size < MAX_IDENTITIES)) {
+                    historicalFatalSignals++
+                    if (id != null) fatalSignalIdentities.add(id)
+                } else if (id !in fatalSignalIdentities) dedupLimit = true
+            }
             observation?.let {
                 val dropped = (record["dropped_count"] as? JsonPrimitive)?.longOrNull
                 if (dropped != null && dropped >= 0) it.dropped = maxOf(it.dropped, dropped)
@@ -493,8 +511,11 @@ object DiagnosticExport {
             appendLine("observed_content_summary=up to 64 most recently captured content events, in snapshot read order")
             content.forEach(::appendLine)
             appendLine("historical_crash_observations=$historicalCrashes")
+            appendLine("historical_fatal_signal_observations=$historicalFatalSignals")
             appendLine("omitted_duplicate_historical_records=$historicalDuplicates")
             appendLine("historical_crash_scope=system history imports, not new crashes in the exporting session; known exit_record_id deduplicated across sessions")
+            appendLine("historical_fatal_signal_scope=Android reason 2 with fatal status 4,6,7,8,11; includes older exit rows, deduplicated by valid exit_record_id; separate from Guest Break and native-crash classification")
+            appendLine("historical_zero_scope=zero crash or fatal-signal observations does not prove no host fatal signal; history and trace may be unavailable")
             appendLine("observed_error_count=$errorCount")
             appendLine("observed_error_count_scope=exported records only; zero does not imply no crash or successful initialization")
             appendLine("observed_error_summary=up to 32 most recently captured errors, in snapshot read order")

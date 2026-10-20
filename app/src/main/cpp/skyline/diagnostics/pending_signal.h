@@ -20,7 +20,8 @@ namespace skyline::diagnostics {
             char text[16]{};
             const auto converted{std::to_chars(text, text + sizeof(text), number)};
             Emit("exception", "GUEST_SIGNAL", {{"signal", std::string_view(text, converted.ptr - text)},
-                 {"location", "NCE::SignalHandler"}}, "ERROR");
+                 {"location", "NCE::SignalHandler"}, {"signal_scope", "handled_guest_thread_signal_not_final_host_exit"},
+                 {"event_time_scope", "normal_thread_drain_after_longjmp_not_fault_time"}}, "ERROR");
         }
     };
 }

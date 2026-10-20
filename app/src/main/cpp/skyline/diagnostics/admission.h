@@ -15,7 +15,7 @@ inline bool CriticalEvent(std::string_view category, std::string_view event, std
         event == "LAUNCH_ENDED" || event == "LAUNCH_STOP_REQUESTED" || event == "LAUNCH_PROGRESS" || event == "FIRST_PRESENT_OBSERVED" ||
         event == "LAUNCH_HOST_EXIT_REQUESTED" || event == "HOST_EXIT_REQUEST_ACCEPTED" ||
         event == "SESSION_METADATA" || event == "LAUNCH_BEGIN" || event == "LAUNCH_CONTEXT_OBSERVED" ||
-        event == "PREVIOUS_PROCESS_CRASH" || event == "PREVIOUS_PROCESS_EXIT" || event == "PREVIOUS_NATIVE_TRACE" || event == "PREVIOUS_PROCESS_EXIT_REFINED";
+        event == "PREVIOUS_PROCESS_CRASH" || event == "PREVIOUS_PROCESS_FATAL_SIGNAL" || event == "PREVIOUS_PROCESS_EXIT" || event == "PREVIOUS_NATIVE_TRACE" || event == "PREVIOUS_PROCESS_EXIT_REFINED";
     if ((category == "content" || category == "storage" || category == "audio" || category == "gpu") && level == "ERROR") return true;
     return event == "CONTENT_ROLE_OBSERVED" || event == "BASE_SELECTED" || event == "PATCH_SELECTED" || event == "NCA_FINAL_SELECTION" ||
         event == "DLC_REGISTERED" || event == "DLC_STORAGE_OPENED" || event == "PATCH_EXEFS_SELECTED";

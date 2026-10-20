@@ -8,6 +8,7 @@ static skyline::diagnostics::PendingGuestSignal pending;
 static bool enabled = true;
 static int events{};
 static std::string event, number;
+static std::string signalScope, eventTimeScope;
 namespace skyline::diagnostics {
     bool Enabled() noexcept { return enabled; }
     void Emit(std::string_view, std::string_view name,
@@ -15,8 +16,11 @@ namespace skyline::diagnostics {
               std::string_view level) noexcept {
         assert(level == "ERROR");
         ++events; event = name;
-        for (const auto &[key, value] : fields)
+        for (const auto &[key, value] : fields) {
             if (key == "signal") number = value;
+            if (key == "signal_scope") signalScope = value;
+            if (key == "event_time_scope") eventTimeScope = value;
+        }
     }
 }
 static void Handler(int value) { pending.Capture(value); }
@@ -27,6 +31,8 @@ int main() {
     assert(events == 0 && pending.value == SIGUSR1);
     pending.Drain();
     assert(events == 1 && event == "GUEST_SIGNAL" && number == std::to_string(SIGUSR1));
+    assert(signalScope == "handled_guest_thread_signal_not_final_host_exit");
+    assert(eventTimeScope == "normal_thread_drain_after_longjmp_not_fault_time");
     pending.Drain(); assert(events == 1);
     pending.Capture(SIGINT); pending.Drain(); assert(events == 1);
     enabled = false;

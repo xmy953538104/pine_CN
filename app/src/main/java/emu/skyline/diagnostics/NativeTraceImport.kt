@@ -4,8 +4,8 @@ package emu.skyline.diagnostics
 /** One observer call per process (enforced by caller), at most three persisted reads per exit. */
 internal object NativeTraceImport {
     const val MAX_ATTEMPTS = 3
-    fun fields(common: Map<String, String>, trace: NativeTraceSummary.Result, attempt: Int) = common + trace.fields() +
-        mapOf("trace_attempt" to attempt.toString(), "trace_attempt_limit" to MAX_ATTEMPTS.toString())
+    fun fields(common: Map<String, String>, trace: NativeTraceSummary.Result, attempt: Int) = common + (trace.fields() - "raw_trace_exported") +
+        mapOf("trace_attempt" to attempt.toString()) // Fixed policy: raw never exported; MAX_ATTEMPTS is three.
     private fun attempts(seen: Set<String>, id: String): Int = (1..MAX_ATTEMPTS).lastOrNull { "r1:$id:$it" in seen } ?: 0
     fun eligible(seen: Set<String>, id: String): Boolean = "s1:$id" !in seen && "p1:$id" !in seen && attempts(seen, id) < MAX_ATTEMPTS
     fun attempt(seen: MutableSet<String>, id: String, read: () -> NativeTraceSummary.Result,

@@ -203,6 +203,16 @@ class ContractTests(unittest.TestCase):
         for data in (b'{"module":{},"module":{}}', b'{"registers":{"x8":NaN}}', b'\xff', b' ' * 16385, b'{}{}'):
             with self.assertRaises(decoder.InputError): decoder.parse(data)
 
+    def test_parser_digit_limit_and_deep_nesting_have_bounded_cli_errors(self):
+        for data in (b"9" * 5000, b"[" * 1500 + b"0" + b"]" * 1500):
+            with self.assertRaises(decoder.InputError): decoder.parse(data)
+            process = subprocess.run([sys.executable, str(ROOT / "tools/nvn_abort_contract.py")],
+                                     input=data, capture_output=True, timeout=5)
+            self.assertEqual(process.returncode, 2)
+            self.assertEqual(json.loads(process.stderr)["error"], "STOP_INPUT_INVALID")
+            self.assertNotIn(b"Traceback", process.stderr)
+            self.assertLess(len(process.stderr), 1024)
+
     def test_cli_is_bounded_and_marks_success_as_offline_only(self):
         process = subprocess.run([sys.executable, str(ROOT / "tools/nvn_abort_contract.py")],
                                  input=json.dumps(sample()).encode(), capture_output=True, timeout=5)

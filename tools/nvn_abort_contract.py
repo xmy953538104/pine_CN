@@ -154,7 +154,9 @@ def parse(data):
     try:
         document = json.loads(data.decode("utf-8"), object_pairs_hook=_pairs,
                               parse_constant=lambda _: (_ for _ in ()).throw(InputError("nonfinite_json_number")))
-    except (UnicodeError, json.JSONDecodeError, RecursionError):
+    except InputError:
+        raise
+    except (UnicodeError, ValueError, RecursionError):
         raise InputError("invalid_utf8_or_json") from None
     return decode(document)
 

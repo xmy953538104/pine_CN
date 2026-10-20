@@ -507,3 +507,25 @@ Android host signal nor diagnoses NVN/RAM exhaustion. A formatter exception can
 prevent the original guest termination code from being reached; the existing
 exception propagation, Kill/longjmp and Loader implementation are preserved.
 See [P0 trace/window evidence](diagnostics-trace-window-p0.md).
+
+### Signaled host exits and Break checkpoints
+
+`PREVIOUS_PROCESS_FATAL_SIGNAL` is historical Android reason 2 with status
+4/6/7/8/11, scoped to `host_process`, separately counted from native-crash
+classification and current-session guest events. Eligible signaled exits now
+attempt the existing bounded platform trace reader. The platform does not
+promise a native trace for reason 2. `PREVIOUS_NATIVE_TRACE` preserves the
+original exit time/reason/status, historical Title and association, and marks
+`trace_scope=host_process_candidate_not_guest`; null/non-protobuf/error never
+creates a stack. Its 24 fields omit the fixed raw-export=false and attempt-limit=3
+constants, not historical identity, frames or capture completeness.
+
+An admitted real non-notification `GUEST_BREAK_REQUEST` asks the existing writer
+for a resource/critical-state checkpoint. It never waits on the guest thread and
+does not establish Kill/longjmp/cleanup completion. Resource metadata reason is
+`guest_break_observed`. Critical resource rows have a 16-row/32-KiB priority
+budget within the unchanged 240-row/128-KiB/60-second ceilings, with per-class
+evictions; the ceiling is not a complete-history guarantee. This is best effort,
+not crash-atomic. `GUEST_SIGNAL` separately labels normal-thread drain time after
+longjmp; it is not the timestamp or stack of the final host signal.
+See [signal trace and checkpoint boundaries](diagnostics-signaled-host-trace.md).

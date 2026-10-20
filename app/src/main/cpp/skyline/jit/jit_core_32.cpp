@@ -5,6 +5,7 @@
 #include <common/settings.h>
 #include <kernel/types/KProcess.h>
 #include <kernel/svc.h>
+#include <diagnostics/resource_observer.h>
 #include "jit_core_32.h"
 #include "exception.h"
 
@@ -133,11 +134,17 @@ namespace skyline::jit {
 
     void JitCore32::SvcHandler(u32 swi) {
         auto svc{kernel::svc::SvcTable[swi]};
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceSet(diagnostics::ResourceMetric::GuestLastSvc, swi);
+            diagnostics::ResourceSet(diagnostics::ResourceMetric::GuestLastThread, state.thread->id);
+            diagnostics::ResourceAdd(diagnostics::SvcEnteredMetric(state.thread->id));
+        }
         if (svc) [[likely]] {
             TRACE_EVENT("kernel", perfetto::StaticString{svc.name});
             auto svcContext = MakeSvcContext();
             (svc.function)(state, svcContext);
             ApplySvcContext(svcContext);
+            diagnostics::ResourceAdd(diagnostics::SvcReturnedMetric(state.thread->id));
         } else {
             throw exception("Unimplemented SVC 0x{:X}", swi);
         }

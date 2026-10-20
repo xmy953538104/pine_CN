@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <diagnostics/exception.h>
+#include <diagnostics/resource_observer.h>
 #include <cxxabi.h>
 #include <linux/elf.h>
 #include "common/signal.h"
@@ -27,11 +28,17 @@ namespace skyline::nce {
 
         const auto &state{*ctx->state};
         auto svc{kernel::svc::SvcTable[svcId]};
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceSet(diagnostics::ResourceMetric::GuestLastSvc, svcId);
+            diagnostics::ResourceSet(diagnostics::ResourceMetric::GuestLastThread, state.thread->id);
+            diagnostics::ResourceAdd(diagnostics::SvcEnteredMetric(state.thread->id));
+        }
         try {
             if (svc) [[likely]] {
                 TRACE_EVENT("kernel", perfetto::StaticString{svc.name});
                 auto &svcContext{*reinterpret_cast<kernel::svc::SvcContext *>(ctx)};
                 (svc.function)(state, svcContext);
+                diagnostics::ResourceAdd(diagnostics::SvcReturnedMetric(state.thread->id));
             } else {
                 throw exception("Unimplemented SVC 0x{:X}", svcId);
             }
@@ -43,6 +50,7 @@ namespace skyline::nce {
             }
         } catch (const signal::SignalException &e) {
             if (e.signal != SIGINT) {
+                diagnostics::ResourceAdd(diagnostics::ResourceMetric::GuestSvcExceptions);
                 diagnostics::SignalException(e.signal, "NCE::SvcHandler", svc ? svc.name : "unimplemented");
                 LOGENF("{} (SVC: {})\nStack Trace:{}", e.what(), svc.name, state.loader->GetStackTrace(e.frames));
 
@@ -63,6 +71,7 @@ namespace skyline::nce {
             abi::__cxa_end_catch();
             std::longjmp(state.thread->originalCtx, true);
         } catch (const exception &e) {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::GuestSvcExceptions);
             diagnostics::Emit("exception", "SVC_EXCEPTION", {{"message", e.what()}, {"location", "NCE::SvcHandler"}, {"svc", svc ? svc.name : "unimplemented"}}, "ERROR");
             LOGENF("{}\nStack Trace:{}", e.what(), state.loader->GetStackTrace(e.frames));
 
@@ -74,6 +83,8 @@ namespace skyline::nce {
             abi::__cxa_end_catch();
             std::longjmp(state.thread->originalCtx, true);
         } catch (const std::exception &e) {
+            if (!dynamic_cast<const ExitException *>(&e))
+                diagnostics::ResourceAdd(diagnostics::ResourceMetric::GuestSvcExceptions);
             if (!dynamic_cast<const ExitException *>(&e))
                 diagnostics::Emit("exception", "CPP_EXCEPTION", {{"message", e.what()}, {"location", "NCE::SvcHandler"}, {"svc", svc ? svc.name : "unimplemented"}}, "ERROR");
             if (svc)

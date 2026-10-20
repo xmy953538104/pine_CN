@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #include "diagnostics.h"
+#include "resource_observer.h"
+#include "resource_model.h"
+#include "resource_window.h"
 #include "admission.h"
 #include "bounded_queue.h"
 #include "read_snapshot.h"
@@ -31,6 +34,13 @@
 namespace skyline::diagnostics {
 namespace {
 using Clock = std::chrono::steady_clock;
+// Process-lifetime cumulative observations; no reset races with in-flight producers.
+// Gauges mean last observed API value, not independently polled guest state.
+std::atomic<bool> resourceEnabled{};
+std::array<std::atomic<uint64_t>, static_cast<size_t>(ResourceMetric::Count)> resourceValues{};
+std::atomic<uint64_t> resourceGaugesSeen{};
+std::atomic<unsigned> resourcePauseState{}; // 0 unknown, 1 presenting/resumed, 2 explicit presentation pause
+std::atomic<bool> resourceNormalExit{};
 constexpr uint64_t ProducersClosed = uint64_t{1} << 63;
 constexpr uint64_t ProducerCountMask = (uint64_t{1} << 32) - 1;
 constexpr uint64_t ProducerGenerationMask = ~(ProducerCountMask | ProducersClosed);
@@ -61,6 +71,7 @@ struct Sink {
     BoundedQueue<Record> queue;
     ReadSnapshot<Context> context;
     Config config;
+    std::string resourceCohort{"unspecified"};
     std::string stage;
     std::string guestStage{"unknown"};
     // Game identity outlives a logging session; only true game boundaries clear it.
@@ -243,7 +254,7 @@ uint64_t MonotonicUs() {
 }
 bool Enqueue(Sink &, std::string_view, std::string_view,
     std::span<const std::pair<std::string_view, std::string_view>>, std::string_view,
-    const std::string_view *, std::string_view) noexcept;
+    const std::string_view *, std::string_view, std::string_view = {}) noexcept;
 bool EmitProgress(Sink &s, std::string_view event, std::string_view expectedLaunch = {}) {
     const auto epoch = s.observationEpoch.load();
     if (epoch & 1) return false;
@@ -290,12 +301,136 @@ void RotateCriticalState(const Config &c) {
         if (std::filesystem::exists(status)) std::filesystem::rename(path(i - 1), path(i));
     }
 }
+struct ResourceRuntime {
+    resource::Model model;
+    std::string launch;
+    resource::State state{resource::State::Unavailable};
+    uint64_t generation{}, previousCostUs{}, overBudget{}, windowPersistErrors{}, samplingErrors{};
+    bool capabilities{};
+    Clock::time_point next{};
+};
+Clock::time_point ResourceSamplingNow() {
+#ifdef PINE_DIAG_TEST_HOOKS
+    const auto time = testing::resourceClockMs.load();
+    if (time != std::numeric_limits<uint64_t>::max()) return Clock::time_point{std::chrono::milliseconds(time)};
+#endif
+    return Clock::now();
+}
+std::string ResourceNumber(ResourceMetric metric) {
+    return std::to_string(resourceValues[static_cast<size_t>(metric)].load(std::memory_order_relaxed));
+}
+std::string ResourceGauge(ResourceMetric metric) {
+    const auto mask = uint64_t{1} << static_cast<size_t>(metric);
+    return resourceGaugesSeen.load(std::memory_order_acquire) & mask ? ResourceNumber(metric) : "unavailable_not_observed";
+}
+const char *ResourceStateName(resource::State state) {
+    constexpr const char *names[]{"unavailable", "pause_unknown", "stop_unknown", "presentation_paused", "stop_requested",
+        "guest_exit_process_requested", "awaiting_observed_progress", "observing", "post_progress_no_new_present"};
+    const auto index = static_cast<size_t>(state);
+    return index < std::size(names) ? names[index] : "unavailable";
+}
+void ResourceEvent(Sink &s, const Context &context, std::string_view event,
+    std::initializer_list<std::pair<std::string_view, std::string>> values, std::string_view level = "INFO") {
+    if (!ResourceObservationEnabled()) return;
+    std::array<std::pair<std::string_view, std::string_view>, 24> fields{};
+    size_t count{};
+    for (const auto &value : values) { if (count == fields.size()) break; fields[count++] = {value.first, value.second}; }
+    Enqueue(s, "resource", event, {fields.data(), count}, level, nullptr, context.launchId);
+}
+void ResourceTick(Sink &s, ResourceRuntime &runtime) {
+    if (!ResourceObservationEnabled()) {
+        if (!runtime.launch.empty()) { runtime.model.Reset(); runtime.launch.clear(); runtime.capabilities = false; }
+        return;
+    }
+    const auto now = ResourceSamplingNow();
+    if (now < runtime.next) return;
+    const auto workStarted = Clock::now();
+    runtime.next = now + std::chrono::seconds(1);
+    const auto epoch = s.observationEpoch.load();
+    Context context;
+    if ((epoch & 1) || !s.context.Read(context) || context.launchId.empty()) return;
+    if (runtime.launch != context.launchId) {
+        runtime.model.Reset(); runtime.launch = context.launchId; ++runtime.generation; runtime.capabilities = false;
+    }
+    resource::Snapshot input{};
+    input.launch = runtime.generation;
+    input.monotonicMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    input.presentAccepted = s.presentAccepted.load(std::memory_order_relaxed);
+    input.presentReturns = s.presentReturns.load(std::memory_order_relaxed);
+    input.observerAvailable = true;
+    const auto pause = resourcePauseState.load(std::memory_order_relaxed);
+    input.pauseKnown = pause != 0; input.paused = pause == 2;
+    input.stopKnown = true; input.stopRequested = s.stopRequested.load() || s.hostExitRequested.load();
+    input.normalExit = resourceNormalExit.load(std::memory_order_relaxed);
+    if (s.observationEpoch.load() != epoch) return;
+    const auto update = runtime.model.Observe(input);
+    std::string cohort;
+    { std::lock_guard lock{s.mutex}; cohort = s.resourceCohort; }
+    if (!runtime.capabilities) {
+        ResourceEvent(s, context, "RESOURCE_CAPABILITIES", {
+            {"comparison_cohort", cohort}, {"cohort_source", "user_label_not_content_validation"},
+            {"guest_program_build_id", "not_observed"}, {"guest_program_build_id_reason", "existing_loader_does_not_retain_header"},
+            {"nvn_command_capacity", "unavailable_no_user_api_hook"}, {"nvn_control_capacity", "unavailable_no_user_api_hook"},
+            {"nvn_remaining", "unavailable_no_user_api_hook"}, {"nvn_growth_request", "unavailable_no_user_api_hook"},
+            {"nvn_growth_callback", "unavailable_no_user_api_hook"}, {"vulkan_budget", "unavailable_not_queried"},
+            {"guest_resource_limit_handle", "unavailable_getinfo_9_unimplemented"},
+            {"svc_progress_scope", "owning_nce_or_jit32_handler_entry_normal_return"}, {"svc_exception_scope", "existing_nce_handler_non_normal_catches_only"},
+            {"last_value_scope", "process_lifetime_may_predate_current_launch"},
+            {"host_vma_scope", "successful_allocation_info_size_sum_excludes_imports_not_live_driver_usage"},
+            {"memory_semantics", "guest_reported_limits_are_not_android_ram_or_nvn_buffer_capacity"}});
+        runtime.capabilities = true;
+    }
+    ResourceEvent(s, context, "RESOURCE_GUEST_SAMPLE", {
+        {"counter_scope", "enabled_observations_cumulative_per_process"}, {"gauge_scope", "process_last_observed_svc_value_may_predate_launch"},
+        {"getinfo_policy_cap_bytes", "4160749568"}, {"policy_source", "static_existing_policy_not_measured_return"},
+        {"guest_virtual_heap_bytes", ResourceGauge(ResourceMetric::GuestVirtualHeapBytes)},
+        {"guest_heap_requested_bytes", ResourceGauge(ResourceMetric::GuestHeapRequestedBytes)}, {"guest_heap_logical_bytes", ResourceGauge(ResourceMetric::GuestHeapLogicalBytes)},
+        {"guest_heap_errors", ResourceNumber(ResourceMetric::GuestHeapErrors)}, {"guest_reported_available_bytes", ResourceGauge(ResourceMetric::GuestReportedAvailableBytes)},
+        {"guest_reported_used_bytes", ResourceGauge(ResourceMetric::GuestReportedUsedBytes)}, {"guest_system_resource_limit_bytes", ResourceGauge(ResourceMetric::GuestSystemResourceLimitBytes)},
+        {"guest_system_resource_used_bytes", ResourceGauge(ResourceMetric::GuestSystemResourceUsedBytes)},
+        {"main_svc_entered", ResourceNumber(ResourceMetric::GuestMainSvcEntered)}, {"main_svc_returned", ResourceNumber(ResourceMetric::GuestMainSvcReturned)},
+        {"other_svc_entered", ResourceNumber(ResourceMetric::GuestOtherSvcEntered)}, {"other_svc_returned", ResourceNumber(ResourceMetric::GuestOtherSvcReturned)},
+        {"svc_exceptions", ResourceNumber(ResourceMetric::GuestSvcExceptions)}, {"last_svc_id", ResourceGauge(ResourceMetric::GuestLastSvc)},
+        {"last_guest_thread_id", ResourceGauge(ResourceMetric::GuestLastThread)}, {"thread_scope", "owning_svc_call_only_no_thread_enumeration"},
+        {"sampling_errors", std::to_string(runtime.samplingErrors)}});
+    ResourceEvent(s, context, "RESOURCE_GPU_SAMPLE", {
+        {"non_present_counter_scope", "enabled_observations_cumulative_per_process_independent_atomics"}, {"comparison_cohort", cohort},
+        {"driver_fifo_capacity_entries", ResourceGauge(ResourceMetric::DriverFifoCapacityEntries)}, {"driver_fifo_allocations", ResourceNumber(ResourceMetric::DriverFifoAllocations)},
+        {"driver_fifo_submitted_entries", ResourceNumber(ResourceMetric::DriverFifoSubmittedEntries)}, {"driver_fifo_submissions", ResourceNumber(ResourceMetric::DriverFifoSubmissions)},
+        {"driver_fifo_processed_words", ResourceNumber(ResourceMetric::DriverFifoProcessedWords)},
+        {"host_submit_accepted", ResourceNumber(ResourceMetric::HostSubmitAccepted)}, {"host_submit_errors", ResourceNumber(ResourceMetric::HostSubmitErrors)},
+        {"host_cycle_wait_entered", ResourceNumber(ResourceMetric::HostFenceWaitEntered)},
+        {"host_cycle_wait_completed", ResourceNumber(ResourceMetric::HostFenceWaits)}, {"host_fence_wait_wall_us", ResourceNumber(ResourceMetric::HostFenceWaitUs)},
+        {"host_fence_errors", ResourceNumber(ResourceMetric::HostFenceErrors)}, {"host_command_buffer_allocations", ResourceNumber(ResourceMetric::HostCommandBufferAllocations)},
+        {"host_vma_allocation_bytes_cumulative", ResourceNumber(ResourceMetric::HostVmaAllocationBytes)}, {"host_vma_allocations", ResourceNumber(ResourceMetric::HostVmaAllocations)},
+        {"present_accepted", std::to_string(input.presentAccepted)}, {"present_returns", std::to_string(input.presentReturns)},
+        {"present_scope", "diagnostics_enabled_per_launch_not_resource_toggle_not_pixels_or_world_progress"}, {"observation_state", ResourceStateName(update.state)},
+        {"observed_quiet_ms", std::to_string(update.quietMs)}, {"previous_sampling_cost_us", std::to_string(runtime.previousCostUs)},
+        {"sampling_over_budget", std::to_string(runtime.overBudget)}, {"window_persist_errors", std::to_string(runtime.windowPersistErrors)}});
+    if (update.state == resource::State::PostProgressNoNewPresent && runtime.state != update.state)
+        ResourceEvent(s, context, "RESOURCE_POST_PROGRESS_NO_NEW_PRESENT", {{"observed_quiet_ms", std::to_string(update.quietMs)},
+            {"observed_accepted_delta", std::to_string(update.observedAccepted)}, {"interpretation", "observation_only_not_hang_oom_or_nvn_exhaustion"}}, "WARN");
+    if (update.recovered) ResourceEvent(s, context, "RESOURCE_PRESENT_RECOVERED", {{"source", "new_accepted_present_counter_increment"}});
+    runtime.state = update.state;
+    runtime.previousCostUs = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - workStarted).count();
+    if (runtime.previousCostUs > 2000) { ++runtime.overBudget; runtime.next = ResourceSamplingNow() + std::chrono::seconds(5); }
+}
+
 void Run(Sink &s) noexcept {
     bool pendingRecord{}, pendingCritical{};
     try {
         const Config c = s.config;
         CriticalSnapshot snapshot(s, c);
         auto nextProgress = Clock::now() + std::chrono::seconds(5);
+        ResourceRuntime resources;
+        RecentResourceWindow resourceWindow;
+        auto nextWindowPersist = Clock::now();
+        const auto persistWindow = [&](ResourceWindowReason reason) {
+            if (resourceWindow.Count() && !resourceWindow.Persist(c.directory, c.sessionId, reason)) {
+                ++s.snapshotErrors; ++resources.windowPersistErrors;
+            }
+            nextWindowPersist = Clock::now() + std::chrono::seconds(5);
+        };
         auto path = [&](size_t i) { return std::filesystem::path(c.directory) / ("diagnostics-" + std::to_string(i) + ".jsonl"); };
         std::ofstream file;
         size_t bytes{};
@@ -330,6 +465,19 @@ void Run(Sink &s) noexcept {
         rotate();
         while (true) {
             if (!s.stopping && IsEnabled(s)) {
+                // Resource sampling may allocate on this background thread.
+                // Failure must not stop the existing diagnostic sink.
+                try {
+#ifdef PINE_DIAG_TEST_HOOKS
+                    if (ResourceObservationEnabled()) testing::Notify(testing::Point::BeforeResourceSample);
+#endif
+                    ResourceTick(s, resources);
+                }
+                catch (...) {
+                    ++resources.samplingErrors; ++s.snapshotErrors;
+                    resources.model.Reset(); resources.launch.clear(); resources.capabilities = false;
+                    resources.next = ResourceSamplingNow() + std::chrono::seconds(5);
+                }
                 Context context;
                 if (s.context.Read(context) && !context.launchId.empty()) {
                     if (s.firstPresentUs.load(std::memory_order_relaxed)) EmitFirstPresent(s, context.launchId);
@@ -358,6 +506,21 @@ void Run(Sink &s) noexcept {
             }
             CopyDropCounts(record, s); // Writer-observed cumulative counters follow stream order.
             auto line = Serialize(record, c);
+            // Only the existing ordinary writer owns this window and does IO.
+            // Event timestamps may be out of admission order across producers;
+            // retention uses writer ingestion time and preserves original timestamps.
+            const bool resourceRecord = record.category == "resource";
+            const bool exceptionObserved = record.category == "exception" ||
+                (record.category == "guest" && (record.event == "GUEST_RUNTIME_ERROR" || record.event == "DFX_LUA_ERROR"));
+            const bool launchEnded = record.event == "LAUNCH_ENDED";
+            if (resourceRecord || (resourceWindow.Count() && (exceptionObserved || launchEnded))) {
+                resourceWindow.Add(MonotonicUs(), line);
+                if (exceptionObserved) persistWindow(ResourceWindowReason::ExceptionObserved);
+                else if (record.event == "RESOURCE_POST_PROGRESS_NO_NEW_PRESENT") persistWindow(ResourceWindowReason::PostProgressNoNewPresent);
+                else if (record.event == "RESOURCE_PRESENT_RECOVERED") persistWindow(ResourceWindowReason::Recovered);
+                else if (launchEnded) persistWindow(ResourceWindowReason::LaunchEnd);
+                else if (Clock::now() >= nextWindowPersist) persistWindow(ResourceWindowReason::Periodic);
+            }
             snapshot.Observe(record);
 #ifdef __ANDROID__
             // Android log entries have a small payload limit: never emit broken JSON.
@@ -380,6 +543,7 @@ void Run(Sink &s) noexcept {
             { std::lock_guard lock(s.progressMutex); ++s.written; s.completedTicket = record.sequence; }
             s.progress.notify_all(); pendingRecord = false;
         }
+        persistWindow(ResourceWindowReason::SessionEnd);
         Record summary;
         summary.sequence = s.accepted.load() + 1;
         summary.wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -416,6 +580,7 @@ void Run(Sink &s) noexcept {
     }
 }
 void StopLocked(Sink &s) {
+    resourceEnabled.store(false, std::memory_order_relaxed);
     // Emit is bounded and never waits for the writer. Only this ordinary-thread
     // lifecycle path waits for active emitters, keeping final counters stable.
     CloseProducers(s);
@@ -435,11 +600,12 @@ bool CategorySelected(std::string_view selected, std::string_view category) {
 }
 bool Enqueue(Sink &s, std::string_view category, std::string_view event,
              std::span<const std::pair<std::string_view, std::string_view>> fields,
-             std::string_view level, const std::string_view *stage = nullptr, std::string_view expectedLaunch = {}) noexcept {
+             std::string_view level, const std::string_view *stage = nullptr, std::string_view expectedLaunch = {}, std::string_view expectedSession) noexcept {
     const bool critical = CriticalEvent(category, event, level);
     auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
     Producer producer(s);
     if (!producer) return false;
+    if (!expectedSession.empty() && s.config.sessionId != expectedSession) return false;
     try {
         // Field sanitation and host thread formatting do not hold the admission lock.
         Record r; r.critical = critical;
@@ -467,6 +633,44 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         ++s.accepted; s.wake.notify_one(); return true;
     } catch (...) { drop(s.droppedAllocation); return false; }
 }
+}
+bool ResourceObservationEnabled() noexcept {
+    return resourceEnabled.load(std::memory_order_relaxed) && Enabled();
+}
+void ResourceAdd(ResourceMetric metric, uint64_t value) noexcept {
+    if (!ResourceObservationEnabled()) return;
+    const auto index = static_cast<size_t>(metric);
+    if (index < resourceValues.size()) resourceValues[index].fetch_add(value, std::memory_order_relaxed);
+}
+void ResourceSet(ResourceMetric metric, uint64_t value) noexcept {
+    if (!ResourceObservationEnabled()) return;
+    const auto index = static_cast<size_t>(metric);
+    if (index < resourceValues.size()) {
+        resourceValues[index].store(value, std::memory_order_relaxed);
+        const auto mask = uint64_t{1} << index;
+        // Publish validity once per process. Repeated SVC observations must not
+        // contend on a shared RMW solely to re-publish an already-valid bit.
+        if (!(resourceGaugesSeen.load(std::memory_order_relaxed) & mask))
+            resourceGaugesSeen.fetch_or(mask, std::memory_order_release);
+    }
+}
+void ConfigureResourceObservation(bool enabled, const char *cohort) noexcept {
+    resourceEnabled.store(false, std::memory_order_relaxed);
+    try {
+        auto &s = Get(); std::lock_guard lock(s.mutex);
+        const std::string_view label{cohort ? cohort : ""};
+        s.resourceCohort = label == "official" || label == "golden_mod" ? label : "unspecified";
+        resourceEnabled.store(enabled && CategorySelected(s.config.categories, "resource"), std::memory_order_relaxed);
+    } catch (...) {}
+}
+void ResourcePresentationPaused(bool paused) noexcept {
+    resourcePauseState.store(paused ? 2U : 1U, std::memory_order_relaxed);
+}
+void ResourceProcessExited() noexcept { resourceNormalExit.store(true, std::memory_order_relaxed); }
+bool EmitHostResourceFields(std::string_view session, std::string_view launch,
+        std::span<const std::pair<std::string_view, std::string_view>> fields) noexcept {
+    if (!ResourceObservationEnabled() || session.empty() || launch.empty() || fields.size() > 16) return false;
+    return Enqueue(Get(), "resource", "HOST_MEMORY_SAMPLE", fields, "INFO", nullptr, launch, session);
 }
 std::string Sanitize(std::string_view input, size_t limit) {
     // Scan only the bounded input. Spaces/quotes are legal filename bytes, so a
@@ -598,7 +802,10 @@ bool Start(const Config &config) noexcept {
         }
     } catch (...) { return false; }
 }
-void Stop() noexcept { try { auto &s = Get(); std::lock_guard life(s.lifecycle); StopLocked(s); } catch (...) {} }
+void Stop() noexcept {
+    resourceEnabled.store(false, std::memory_order_relaxed);
+    try { auto &s = Get(); std::lock_guard life(s.lifecycle); StopLocked(s); } catch (...) {}
+}
 bool Flush(uint32_t timeoutMilliseconds) noexcept {
     try {
         auto &s = Get();
@@ -691,6 +898,8 @@ void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
         try {
         s.activeLaunchId = std::move(value);
         if (newLaunch) {
+            resourcePauseState.store(0, std::memory_order_relaxed);
+            resourceNormalExit.store(false, std::memory_order_relaxed);
             s.stage.clear(); s.presentReturns = 0; s.presentAccepted = 0; s.presentOther = 0;
             s.firstPresentUs = 0; s.lastPresentResult = 0; s.stopRequested = false; s.launchStartedUs = MonotonicUs();
             s.hostExitRequested = false;
@@ -708,6 +917,10 @@ void PresentResult(int32_t result, bool wrapperException) noexcept {
     s.lastPresentViaException.store(wrapperException, std::memory_order_relaxed);
     if (wrapperException) s.presentWrapperExceptions.fetch_add(1, std::memory_order_relaxed);
     if (!wrapperException && (result == 0 || result == 1000001003)) { // VK_SUCCESS / VK_SUBOPTIMAL_KHR: accepted by the host API.
+        if (resourceEnabled.load(std::memory_order_relaxed) && !resourcePauseState.load(std::memory_order_relaxed)) {
+            unsigned unknown{};
+            resourcePauseState.compare_exchange_strong(unknown, 1U, std::memory_order_relaxed);
+        }
         s.presentAccepted.fetch_add(1, std::memory_order_relaxed);
         uint64_t empty{};
         if (!s.firstPresentUs.load(std::memory_order_relaxed)) s.firstPresentUs.compare_exchange_strong(empty, MonotonicUs(), std::memory_order_relaxed);

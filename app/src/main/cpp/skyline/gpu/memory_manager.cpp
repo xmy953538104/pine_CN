@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2021 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/resource_observer.h>
 #include <gpu.h>
 #include "memory_manager.h"
 #include "mapped_allocation.h"
@@ -90,6 +91,10 @@ namespace skyline::gpu::memory {
         VmaAllocation allocation;
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateBuffer(vmaAllocator, &static_cast<const VkBufferCreateInfo &>(bufferCreateInfo), &allocationCreateInfo, &buffer, &allocation, &allocationInfo));
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocationBytes, allocationInfo.size);
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocations);
+        }
 
         return std::make_shared<memory::StagingBuffer>(reinterpret_cast<u8 *>(allocationInfo.pMappedData), size, vmaAllocator, buffer, allocation);
     }
@@ -108,6 +113,10 @@ namespace skyline::gpu::memory {
         VmaAllocation allocation;
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateBuffer(vmaAllocator, &static_cast<const VkBufferCreateInfo &>(bufferCreateInfo), &allocationCreateInfo, &buffer, &allocation, &allocationInfo));
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocationBytes, allocationInfo.size);
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocations);
+        }
 
         return Buffer(reinterpret_cast<u8 *>(allocationInfo.pMappedData), size, vmaAllocator, buffer, allocation);
     }
@@ -121,6 +130,10 @@ namespace skyline::gpu::memory {
         VmaAllocation allocation;
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateImage(vmaAllocator, &static_cast<const VkImageCreateInfo &>(createInfo), &allocationCreateInfo, &image, &allocation, &allocationInfo));
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocationBytes, allocationInfo.size);
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocations);
+        }
 
         return Image(vmaAllocator, image, allocation);
     }
@@ -135,6 +148,10 @@ namespace skyline::gpu::memory {
         VmaAllocation allocation;
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateImage(vmaAllocator, &static_cast<const VkImageCreateInfo &>(createInfo), &allocationCreateInfo, &image, &allocation, &allocationInfo));
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocationBytes, allocationInfo.size);
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostVmaAllocations);
+        }
 
         return Image(vmaAllocator, image, allocation);
     }

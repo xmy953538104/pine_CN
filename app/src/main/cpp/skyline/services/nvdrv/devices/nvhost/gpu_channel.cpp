@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR MPL-2.0
 // Copyright © 2021 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/resource_observer.h>
 #include <soc.h>
 #include <services/nvdrv/devices/deserialisation/deserialisation.h>
 #include "gpu_channel.h"
@@ -133,6 +134,10 @@ namespace skyline::service::nvdrv::device::nvhost {
         }
 
         flags.raw = 0;
+        if (diagnostics::ResourceObservationEnabled()) {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::DriverFifoSubmittedEntries, numEntries);
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::DriverFifoSubmissions);
+        }
 
         return PosixResult::Success;
     }
@@ -192,6 +197,11 @@ namespace skyline::service::nvdrv::device::nvhost {
 
         // Map onto the GPU
         asCtx->gmmu.Map(pushBufferAddr, reinterpret_cast<u8 *>(pushBufferMemory.data()), pushBufferSize);
+        if (diagnostics::ResourceObservationEnabled()) {
+            // Latest successful driver FIFO capacity, not NVN user-buffer capacity.
+            diagnostics::ResourceSet(diagnostics::ResourceMetric::DriverFifoCapacityEntries, numEntries);
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::DriverFifoAllocations);
+        }
 
         return PosixResult::Success;
     }

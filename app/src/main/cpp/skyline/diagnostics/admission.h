@@ -6,6 +6,7 @@
 
 namespace skyline::diagnostics {
 inline bool CriticalEvent(std::string_view category, std::string_view event, std::string_view level) noexcept {
+    if (category == "resource") return event == "RESOURCE_POST_PROGRESS_NO_NEW_PRESENT" || event == "RESOURCE_CAPABILITIES";
     if (category == "exception") return true;
     if (category == "guest") return event == "DFX_PROBE" || event == "DFX_MAIN_ENTER" || event == "DFX_MODINDEX_READY" ||
         event == "DFX_MODMAIN_OK" || event == "DFX_HAMLET_ENTER" || event == "DFX_LUA_ERROR";

@@ -21,8 +21,14 @@ object Diagnostics {
     private var appContext: Context? = null
     private var configurationGeneration = 0L // Guarded by the Diagnostics monitor.
     private var sessionStopGeneration = 0L
+    private var resources = false
+    private var resourceCategorySelected = true
+    private var resourceNativeConfigured = false
+    private var resourceCohort = "unspecified"
+    private var resourceWorker: HostResourceWorker? = null
     private data class Configuration(val enabled: Boolean = false, val verbose: Boolean = false,
-        val files: Int = 4, val categories: String = "", val loaded: Boolean = false)
+        val files: Int = 4, val categories: String = "", val loaded: Boolean = false,
+        val resources: Boolean = false, val cohort: String = "unspecified")
     private class ConfigurationRequest(val generation: Long, var stopGeneration: Long,
         var snapshot: Configuration? = null)
     private var latestConfigurationRequest: ConfigurationRequest? = null
@@ -48,6 +54,8 @@ object Diagnostics {
     fun directory(context: Context) = File(rootDirectory(context), processScope)
     fun exportDirectory(context: Context) = File(context.cacheDir.canonicalFile, "diagnostics-exports")
     @JvmStatic external fun configureNative(path: String, enabled: Boolean, verbose: Boolean, maxFiles: Int, session: String, categories: String, processRunId: String): Boolean
+    @JvmStatic external fun configureResourceNative(enabled: Boolean, cohort: String)
+    @JvmStatic external fun emitHostResourcesNative(expectedSession: String, expectedLaunch: String, keys: Array<String>, values: Array<String>): Boolean
     @JvmStatic external fun setLaunchNative(launchId: String, applicationTitleId: String, newLaunch: Boolean)
     @JvmStatic external fun statusNative(): LongArray
     @JvmStatic external fun flushNative(): Boolean
@@ -72,7 +80,9 @@ object Diagnostics {
         // may wait for its SharedPreferences disk loader even for getBoolean.
         val values = preferences(context).all
         Configuration(values["enabled"] as Boolean? ?: false, values["verbose"] as Boolean? ?: false,
-            values["files"] as Int? ?: 4, values["categories"] as String? ?: "", true)
+            values["files"] as Int? ?: 4, values["categories"] as String? ?: "", true,
+            values["resources"] as Boolean? ?: false,
+            (values["resource_cohort"] as? String)?.takeIf { it in setOf("unspecified", "official", "golden_mod") } ?: "unspecified")
     }.getOrDefault(Configuration())
 
     /** App startup remains disabled until persisted settings have loaded off-main. */
@@ -136,9 +146,14 @@ object Diagnostics {
         appContext = context.applicationContext
         val enabled = configuration.enabled
         val categories = configuration.categories
-        val nextSignature = "$categories:$enabled:${configuration.verbose}:${configuration.files}"
+        val nextSignature = "$categories:$enabled:${configuration.verbose}:${configuration.files}:${configuration.resources}:${configuration.cohort}"
         if (signature == nextSignature && (!enabled || status().enabled)) return
         active = false
+        resourceWorker?.update(null)
+        resourceNativeConfigured = false
+        resourceCategorySelected = categories.isEmpty() || "resource" in categories.split(",")
+        resources = configuration.resources
+        resourceCohort = configuration.cohort
         val launchObservedLate = enabled && launch.active && launch.id.isEmpty()
         if (enabled) {
             val launchId = launch.observe(true)
@@ -156,6 +171,7 @@ object Diagnostics {
         active = runCatching {
             configureNative(if (enabled) directory(context).absolutePath else "", enabled, configuration.verbose, configuration.files, sessionId, categories, if (enabled) processRunId else "")
         }.getOrDefault(false)
+        syncResources()
         signature = if (!configuration.loaded || enabled && !active) "" else nextSignature
         if (active) fieldsEvent("lifecycle", "SESSION_METADATA") {
             mapOf("detail" to "process=$processScope process_run_id=$processRunId session=$sessionId application_id=${BuildConfig.APPLICATION_ID} version=${BuildConfig.VERSION_NAME} build=${BuildConfig.BUILD_TYPE} commit=${BuildConfig.DIAGNOSTICS_COMMIT} launch_start_observed=${launch.startObserved}",
@@ -176,6 +192,58 @@ object Diagnostics {
                 .onFailure { event("lifecycle", "PROCESS_EXIT_HISTORY_UNAVAILABLE") { "reason=observer_thread_start_failed" } }
         }
     }
+    /** Called only under the Diagnostics lifecycle monitor; no memory query here. */
+    private fun syncResources() {
+        val enabled = active && resources && resourceCategorySelected
+        resourceNativeConfigured = runCatching { configureResourceNative(enabled, resourceCohort) }.isSuccess && enabled
+        val identity = if (resourceNativeConfigured && launch.active && launch.id.isNotEmpty() && launch.owner != 0L)
+            HostResourceSampler.Identity(sessionId, launch.id, launch.owner, processRunId, processScope, resourceCohort) else null
+        if (identity != null && resourceWorker == null) {
+            resourceWorker = HostResourceWorker(HostResourceSampler(System::nanoTime, ::readHostResources, ::publishHostResources))
+        }
+        runCatching { resourceWorker?.update(identity) }
+    }
+    private fun readHostResources(): HostResourceSampler.Reading {
+        val enabled = synchronized(this) { active && resources && resourceCategorySelected && resourceNativeConfigured && launch.active && launch.owner != 0L }
+        if (!enabled || !status().enabled) return HostResourceSampler.Reading(null, null, "inactive", "inactive")
+        // These potentially slow kernel queries run only on PineDiagMemory, outside
+        // the lifecycle monitor. TotalPss is the Android API's total, not GPU/NVN memory.
+        val pss = runCatching {
+            val info = android.os.Debug.MemoryInfo()
+            android.os.Debug.getMemoryInfo(info)
+            info.totalPss.toLong().takeIf { it >= 0 }
+        }.getOrNull()
+        val rss = runCatching {
+            File("/proc/self/status").inputStream().use { input ->
+                val bytes = ByteArray(65_537)
+                var size = 0
+                while (size < bytes.size) {
+                    val count = input.read(bytes, size, bytes.size - size)
+                    if (count < 0) break
+                    size += count
+                }
+                if (size > 65_536) null else HostResourceSampler.parseRssKib(String(bytes, 0, size, Charsets.US_ASCII))
+            }
+        }.getOrNull()
+        return HostResourceSampler.Reading(pss, rss, if (pss == null) "unavailable" else "observed",
+            if (rss == null) "unavailable" else "observed")
+    }
+    private fun publishHostResources(identity: HostResourceSampler.Identity, sample: HostResourceSampler.Sample): Boolean = synchronized(this) {
+        if (!active || !resources || !resourceCategorySelected || !resourceNativeConfigured || !launch.active || !launch.belongsTo(identity.owner) ||
+            launch.id != identity.launch || sessionId != identity.session) return false
+        val fields = linkedMapOf(
+            "android_total_pss_kib" to (sample.reading.pssKib?.toString() ?: "unavailable"),
+            "rss_kib" to (sample.reading.rssKib?.toString() ?: "unavailable"),
+            "pss_status" to sample.reading.pssStatus, "rss_status" to sample.reading.rssStatus,
+            "pss_source" to "Debug.MemoryInfo.getTotalPss", "rss_source" to "proc_self_status_VmRSS",
+            "sample_begin_monotonic_ns" to sample.beginNs.toString(), "sample_end_monotonic_ns" to sample.endNs.toString(),
+            "sample_duration_us" to ((sample.endNs - sample.beginNs) / 1000).toString(),
+            "over_budget" to sample.overBudget.toString(), "next_delay_ms" to sample.nextDelayMs.toString(),
+            "process_scope" to identity.scope, "pid" to android.os.Process.myPid().toString(),
+            "comparison_cohort" to identity.cohort, "program_build_id_status" to "not_observed",
+            "program_build_id_reason" to "loader_header_not_retained")
+        runCatching { emitHostResourcesNative(identity.session, identity.launch, fields.keys.toTypedArray(), fields.values.toTypedArray()) }.getOrDefault(false)
+    }
     internal fun normalizedTitleId(titleId: String?): String = titleId?.uppercase(Locale.ROOT)
         ?.takeIf { it.length == 16 && it != "0000000000000000" && it.all { char -> char in '0'..'9' || char in 'A'..'F' } }.orEmpty()
     fun event(category: String, event: String, titleId: String? = null, detail: () -> String) {
@@ -191,6 +259,7 @@ object Diagnostics {
         runCatching { setLaunchNative(id, normalizedTitleId(applicationTitleId), true) }
         event("lifecycle", "LAUNCH_BEGIN", applicationTitleId) { "start_observed=true" }
         if (active) appContext?.let(::publishAssociation)
+        syncResources()
     }
     /** Called on the ordinary JNI launch thread, after the sink releases its mutex. */
     @JvmStatic fun onNativeContentIdentity(owner: Long, titleId: String, source: String) {
@@ -250,6 +319,7 @@ object Diagnostics {
     /** Native completion owns state cleanup even when Activity navigation was rejected. */
     @Synchronized fun endLaunch(owner: Long): Boolean {
         if (!launch.end(owner)) return false
+        resourceWorker?.update(null)
         applicationTitleId = ""
         applicationIdentitySource = "unknown"
         launchApplicationHint = ""
@@ -267,6 +337,9 @@ object Diagnostics {
     }
     @Synchronized fun finishSession(owner: Long? = null) {
         if (owner != null && !launch.belongsTo(owner)) return
+        resourceWorker?.update(null)
+        resourceNativeConfigured = false
+        runCatching { configureResourceNative(false, resourceCohort) }
         sessionStopGeneration++ // A read alone cannot revive this completed session.
         runCatching { stopNative() }
         active = false

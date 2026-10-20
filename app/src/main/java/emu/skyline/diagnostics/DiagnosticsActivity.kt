@@ -91,9 +91,24 @@ class DiagnosticsActivity : AppCompatActivity() {
             })
         }
         toggle("Enable diagnostics / 启用诊断 (default off)", "enabled")
+        toggle("Process resources / 进程资源 (default off)", "resources")
+        layout.addView(Button(this).apply {
+            text = "Resource cohort / 对比组 (user label, not content verification)"
+            setOnClickListener {
+                val cohorts = arrayOf("unspecified", "official", "golden_mod")
+                AlertDialog.Builder(this@DiagnosticsActivity).setTitle("User label only / 仅用户标签")
+                    .setItems(cohorts) { _, index ->
+                        prefs.edit().putString("resource_cohort", cohorts[index]).commit()
+                        applySettings()
+                    }.show()
+            }
+        })
+        layout.addView(TextView(this).apply {
+            text = "Resource sampling requires diagnostics and a live game launch. PSS is Android total PSS (including its swap-PSS accounting); RSS is current process resident memory (KiB). Both include other work in the same process, not just the game. Default interval 10s; slow reads back off. Cohorts do not verify content. Guest NSO BuildID is not observed."
+        })
         toggle("Detailed tracing / 详细追踪", "verbose")
         layout.addView(Button(this).apply {
-            text = "Retention / 保留: 2, 4 or 8 × 2 MiB + up to 128 KiB state per process"
+            text = "Retention / 保留: 2, 4 or 8 × 2 MiB + up to 128 KiB state + 128 KiB resource window per process"
             setOnClickListener {
                 AlertDialog.Builder(this@DiagnosticsActivity).setTitle("Maximum log space per process")
                     .setItems(arrayOf("2 files / 4 MiB", "4 files / 8 MiB", "8 files / 16 MiB")) { _, index ->
@@ -105,7 +120,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         layout.addView(Button(this).apply {
             text = "Diagnostic categories / 诊断项目"
             setOnClickListener {
-                val names = arrayOf("content", "storage", "guest", "exception")
+                val names = arrayOf("content", "storage", "guest", "exception", "resource")
                 val saved = prefs.getString("categories", "") ?: ""
                 val selected = BooleanArray(names.size) { saved.isEmpty() || names[it] in saved.split(",") }
                 AlertDialog.Builder(this@DiagnosticsActivity).setTitle("Lifecycle events always enabled")
@@ -171,6 +186,9 @@ class DiagnosticsActivity : AppCompatActivity() {
                     appendLine("sink_active=${state.enabled}")
                     appendLine("written=${state.written}; dropped=${state.dropped}; disk_errors=${state.diskErrors}")
                     appendLine("configured_enabled=${prefs.getBoolean("enabled", false)}")
+                    appendLine("configured_resources=${prefs.getBoolean("resources", false)}")
+                    appendLine("resource_cohort_is_user_label_not_content_verification=true")
+                    appendLine("configured_resource_cohort=${prefs.getString("resource_cohort", "unspecified")?.takeIf { it in setOf("unspecified", "official", "golden_mod") } ?: "unspecified"}")
                     appendLine("configured_detailed=${prefs.getBoolean("verbose", false)}")
                     appendLine("configured_categories=${prefs.getString("categories", "").orEmpty().ifEmpty { "all" }}")
                     appendLine("configured_retention_per_process=${prefs.getInt("files", 4)} x 2 MiB")
@@ -219,7 +237,7 @@ class DiagnosticsActivity : AppCompatActivity() {
                         appendLine("$scope: last session ${sessions[scope]}, ${logs.size} logs, ${logs.sumOf { it.length() }} bytes")
                     }
                     val retention = Diagnostics.preferences(this@DiagnosticsActivity).getInt("files", 4)
-                    append("Limit per process: $retention × 2 MiB + up to 128 KiB state; two scopes: up to ${retention * 4} MiB + 256 KiB state")
+                    append("Limit per process: $retention × 2 MiB + up to 128 KiB state + 128 KiB resource window; two scopes: up to ${retention * 4} MiB + 512 KiB state/windows")
                 }
             }.getOrDefault("Diagnostics status unavailable")
         }

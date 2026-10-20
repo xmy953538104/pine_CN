@@ -3,6 +3,7 @@
 
 #include <os.h>
 #include <diagnostics/guest.h>
+#include <diagnostics/resource_observer.h>
 #include <nce.h>
 #include <kernel/types/KProcess.h>
 #include <common/trace.h>
@@ -13,14 +14,17 @@
 namespace skyline::kernel::svc {
     void SetHeapSize(const DeviceState &state, SvcContext &ctx) {
         u32 size{ctx.w1};
+        diagnostics::ResourceSet(diagnostics::ResourceMetric::GuestHeapRequestedBytes, size);
 
         if (!util::IsAligned(size, 0x200000)) [[unlikely]] {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::GuestHeapErrors);
             ctx.w0 = result::InvalidSize;
             ctx.x1 = 0;
 
             LOGW("'size' not divisible by 2MB: 0x{:X}", size);
             return;
         } else if (state.process->memory.heap.size() < size) [[unlikely]] {
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::GuestHeapErrors);
             ctx.w0 = result::InvalidSize;
             ctx.x1 = 0;
 
@@ -37,6 +41,7 @@ namespace skyline::kernel::svc {
             state.process->memory.UnmapMemory(span<u8>{heapBaseAddr + size, heapCurrSize - size});
 
         state.process->memory.processHeapSize = size;
+        diagnostics::ResourceSet(diagnostics::ResourceMetric::GuestHeapLogicalBytes, size);
 
         ctx.w0 = Result{};
         ctx.x1 = reinterpret_cast<u64>(heapBaseAddr);
@@ -248,6 +253,7 @@ namespace skyline::kernel::svc {
 
     void ExitProcess(const DeviceState &state, SvcContext &ctx) {
         LOGD("Exiting process");
+        diagnostics::ResourceProcessExited();
         throw nce::NCE::ExitException(true);
     }
 
@@ -967,7 +973,7 @@ namespace skyline::kernel::svc {
         KHandle handle{ctx.w2};
         u64 id1{ctx.x3};
 
-        constexpr u64 totalPhysicalMemory{0xF8000000}; // ~4 GB of RAM
+        constexpr u64 totalPhysicalMemory{0xF8000000}; // 3.875 GiB guest report cap, not host RAM or virtual Heap capacity
 
         u64 out{};
         switch (info) {
@@ -1070,6 +1076,17 @@ namespace skyline::kernel::svc {
 
         ctx.x1 = out;
         ctx.w0 = Result{};
+        // Reuse values already computed by this SVC. Never traverse guest mappings
+        // or acquire memory-manager locks from the diagnostic sampler.
+        using diagnostics::ResourceMetric;
+        switch (info) {
+            case InfoState::HeapRegionSize: diagnostics::ResourceSet(ResourceMetric::GuestVirtualHeapBytes, out); break;
+            case InfoState::TotalMemoryAvailable: diagnostics::ResourceSet(ResourceMetric::GuestReportedAvailableBytes, out); break;
+            case InfoState::TotalMemoryUsage: diagnostics::ResourceSet(ResourceMetric::GuestReportedUsedBytes, out); break;
+            case InfoState::TotalSystemResourceAvailable: diagnostics::ResourceSet(ResourceMetric::GuestSystemResourceLimitBytes, out); break;
+            case InfoState::TotalSystemResourceUsage: diagnostics::ResourceSet(ResourceMetric::GuestSystemResourceUsedBytes, out); break;
+            default: break;
+        }
     }
 
     void MapPhysicalMemory(const DeviceState &state, SvcContext &ctx) {

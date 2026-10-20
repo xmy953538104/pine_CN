@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/resource_observer.h>
 #include <gpu.h>
 #include <common/signal.h>
 #include <common/settings.h>
@@ -384,6 +385,8 @@ namespace skyline::soc::gm20b {
                 }
 
                 Process(gpEntry);
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::DriverFifoProcessedWords, gpEntry.size);
             }, [this, &channelLocked]() {
                 // If we run out of GpEntries to process ensure we submit any remaining GPU work before waiting for more to arrive
                 LOGD("Finished processing pushbuffer batch");

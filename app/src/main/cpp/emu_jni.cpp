@@ -8,6 +8,7 @@
 #include "skyline/diagnostics/utf16.h"
 #include "skyline/diagnostics/initialization.h"
 #include "skyline/diagnostics/identity_jni.h"
+#include "skyline/diagnostics/resource_observer.h"
 #include "selected_jni.h"
 #include "skyline/nce.h"
 #include <csignal>
@@ -268,6 +269,7 @@ extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_pauseEmulation(JNIE
     if (pause) {
         gpu->presentation.Pause();
     } else gpu->presentation.Resume();
+    skyline::diagnostics::ResourcePresentationPaused(pause);
 }
 
 extern "C" JNIEXPORT void Java_emu_skyline_EmulationActivity_changeAudioStatus(JNIEnv *, jobject, jboolean play) {
@@ -382,6 +384,7 @@ extern "C" JNIEXPORT void JNICALL Java_emu_skyline_EmulationActivity_setAnisotro
 extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_configureNative(
     JNIEnv *env, jclass, jstring path, jboolean enabled, jboolean verbose, jint maxFiles, jstring session, jstring categories, jstring processRunId) {
     try {
+    skyline::diagnostics::ConfigureResourceObservation(false, "unspecified");
     skyline::diagnostics::Stop();
     if (!enabled) return false;
     skyline::diagnostics::Config config;
@@ -448,6 +451,41 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_e
         }
         if (env->ExceptionCheck()) return false;
         return skyline::diagnostics::EmitFields(categoryText, eventText, {fields.data(), static_cast<size_t>(count)}, levelText);
+    } catch (...) { return false; }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_emu_skyline_diagnostics_Diagnostics_configureResourceNative(
+    JNIEnv *env, jclass, jboolean enabled, jstring cohort) {
+    try {
+        const auto label = ConvertDiagnosticJString(env, cohort);
+        if (!env->ExceptionCheck()) skyline::diagnostics::ConfigureResourceObservation(enabled, label.c_str());
+    } catch (...) {}
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_emitHostResourcesNative(
+    JNIEnv *env, jclass, jstring session, jstring launch, jobjectArray keys, jobjectArray values) {
+    try {
+        if (!skyline::diagnostics::ResourceObservationEnabled() || !keys || !values) return false;
+        const auto count = env->GetArrayLength(keys);
+        if (env->ExceptionCheck() || count > 16 || env->GetArrayLength(values) != count || env->ExceptionCheck()) return false;
+        const auto sessionText = ConvertDiagnosticJString(env, session);
+        const auto launchText = ConvertDiagnosticJString(env, launch);
+        std::array<std::string, 16> ownedKeys, ownedValues;
+        std::array<std::pair<std::string_view, std::string_view>, 16> fields;
+        for (jsize i = 0; i < count; ++i) {
+            auto key = static_cast<jstring>(env->GetObjectArrayElement(keys, i));
+            if (env->ExceptionCheck()) return false;
+            auto value = static_cast<jstring>(env->GetObjectArrayElement(values, i));
+            if (env->ExceptionCheck()) { if (key) env->DeleteLocalRef(key); return false; }
+            ownedKeys[i] = ConvertDiagnosticJString(env, key);
+            ownedValues[i] = ConvertDiagnosticJString(env, value);
+            if (key) env->DeleteLocalRef(key);
+            if (value) env->DeleteLocalRef(value);
+            if (env->ExceptionCheck()) return false;
+            fields[i] = {ownedKeys[i], ownedValues[i]};
+        }
+        if (env->ExceptionCheck()) return false;
+        return skyline::diagnostics::EmitHostResourceFields(sessionText, launchText, {fields.data(), static_cast<size_t>(count)});
     } catch (...) { return false; }
 }
 

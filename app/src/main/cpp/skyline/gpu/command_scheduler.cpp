@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2021 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/resource_observer.h>
+#include <chrono>
 #include <gpu.h>
 #include <loader/loader.h>
 #include <vulkan/vulkan.hpp>
@@ -15,7 +17,30 @@ namespace skyline::gpu {
 
         try {
             cycleQueue.Process([](const std::shared_ptr<FenceCycle> &cycle) {
-                cycle->Wait(true);
+                if (!diagnostics::ResourceObservationEnabled()) {
+                    cycle->Wait(true);
+                    return;
+                }
+                const auto started{std::chrono::steady_clock::now()};
+                diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostFenceWaitEntered);
+                const auto recordElapsed = [&] {
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostFenceWaits);
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostFenceWaitUs,
+                        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+                };
+                try {
+                    cycle->Wait(true);
+                } catch (const signal::SignalException &e) {
+                    recordElapsed();
+                    if (e.signal != SIGINT)
+                        diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostFenceErrors);
+                    throw;
+                } catch (...) {
+                    recordElapsed();
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostFenceErrors);
+                    throw;
+                }
+                recordElapsed();
             }, [] {});
         } catch (const signal::SignalException &e) {
             LOGE("{}\nStack Trace:{}", e.what(), state.loader->GetStackTrace(e.frames));
@@ -75,6 +100,8 @@ namespace skyline::gpu {
         auto result{(*gpu.vkDevice).allocateCommandBuffers(&commandBufferAllocateInfo, &commandBuffer, *gpu.vkDevice.getDispatcher())};
         if (result != vk::Result::eSuccess)
             vk::detail::throwResultException(result, __builtin_FUNCTION());
+        if (diagnostics::ResourceObservationEnabled())
+            diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostCommandBufferAllocations);
         return {pool->buffers.emplace_back(gpu.vkDevice, commandBuffer, pool->vkCommandPool)};
     }
 
@@ -142,9 +169,17 @@ namespace skyline::gpu {
             try {
                 std::scoped_lock lock{gpu.queueMutex};
                 gpu.vkQueue.submit2(submitInfo, cycle->fence);
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostSubmitAccepted);
             } catch (const vk::DeviceLostError &) {
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostSubmitErrors);
                 std::this_thread::sleep_for(std::chrono::seconds(5));
                 throw exception("Vulkan device lost!");
+            } catch (...) {
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostSubmitErrors);
+                throw;
             }
         } else {
             boost::container::small_vector<vk::Semaphore, 3> fullWaitSemaphores{waitSemaphores.begin(), waitSemaphores.end()};
@@ -171,9 +206,17 @@ namespace skyline::gpu {
             try {
                 std::scoped_lock lock{gpu.queueMutex};
                 gpu.vkQueue.submit(submitInfo, cycle->fence);
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostSubmitAccepted);
             } catch (const vk::DeviceLostError &) {
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostSubmitErrors);
                 std::this_thread::sleep_for(std::chrono::seconds(5));
                 throw exception("Vulkan device lost!");
+            } catch (...) {
+                if (diagnostics::ResourceObservationEnabled())
+                    diagnostics::ResourceAdd(diagnostics::ResourceMetric::HostSubmitErrors);
+                throw;
             }
         }
 

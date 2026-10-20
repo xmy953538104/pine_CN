@@ -358,8 +358,17 @@ object DiagnosticExport {
             val fields = record["fields"] as? JsonObject ?: return null
             val id = (fields["exit_record_id"] as? JsonPrimitive)?.contentOrNull ?: return null
             if (!Regex("[0-9a-f]{64}").matches(id)) return null
-            if (event == "PREVIOUS_PROCESS_EXIT_REFINED") return "$event:$id:${(fields["status"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(16)}"
-            if (event != "PREVIOUS_NATIVE_TRACE") return "$event:$id"
+            if (event != "PREVIOUS_NATIVE_TRACE") {
+                // A later row with the same status may provide the only alias
+                // bridge. Keep that new evidence instead of discarding it as
+                // a replay before the summary can observe it.
+                val aliases = (if (event != "PREVIOUS_PROCESS_CRASH" && (fields["reason_code"] as? JsonPrimitive)?.intOrNull == 2)
+                    listOf("legacy_exit_record_id", "legacy_initial_exit_record_id") else emptyList()).mapNotNull {
+                    (fields[it] as? JsonPrimitive)?.contentOrNull?.takeIf { value -> Regex("[0-9a-f]{64}").matches(value) }
+                }.distinct().sorted().joinToString(":")
+                val status = if (event == "PREVIOUS_PROCESS_EXIT_REFINED") (fields["status"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(16) else ""
+                return "$event:$id:$status:$aliases"
+            }
             val status = (fields["trace_status"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(64)
             val attempt = (fields["trace_attempt"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(8)
             val frames = (fields["frames"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(2048)

@@ -84,6 +84,10 @@ independently of read order. A late status-zero bridge can merge two already
 counted identities. All original evidence rows remain present; this changes the
 summary count only. Invalid aliases never establish identity, and hitting the
 bound reports incomplete deduplication rather than growing storage indefinitely.
+Reason-2 replay deduplication includes explicit alias evidence, so an already
+seen status cannot suppress a later row carrying the only migration bridge.
+The existing native-crash classification retains its previous exact-ID replay
+deduplication and observation-count semantics.
 
 `GUEST_BREAK_REQUEST` is captured before the existing formatter. It proves only
 the request: formatter return, Kill, longjmp and cleanup completion remain unknown

@@ -244,6 +244,43 @@ class DiagnosticExportTest {
         }
     }
 
+    @Test fun lateAliasBridgeWithPreviouslySeenStatusRemainsExportedAndMergesCounts() = sandbox { logs, textLog, cache, _ ->
+        val old = ExitRecordIdentity.legacyId(1000, 2, 11, 123, "emulation")
+        val seen = linkedSetOf("e:$old")
+        val id = ExitRecordIdentity.migrate(seen, 1000, 2, 11, 123, "emulation")
+        val alias = ExitRecordIdentity.observationFields(seen, id, 1000, 2, 0, 123, "emulation")
+        val oldFatal = signalHistoryRow(1, "PREVIOUS_PROCESS_EXIT", mapOf("exit_record_id" to old, "reason_code" to "2", "status" to "11"))
+        val currentFatal = signalHistoryRow(2, "PREVIOUS_PROCESS_FATAL_SIGNAL", mapOf("exit_record_id" to id, "reason_code" to "2", "status" to "11"))
+        val incomplete = signalHistoryRow(3, "PREVIOUS_PROCESS_EXIT_REFINED", mapOf("exit_record_id" to id, "reason_code" to "2", "status" to "0"))
+        val bridge = signalHistoryRow(4, "PREVIOUS_PROCESS_EXIT_REFINED", alias + mapOf("reason_code" to "2", "status" to "0"))
+        for (tail in listOf(listOf(incomplete, bridge), listOf(bridge, incomplete))) {
+            log(logs, "main/diagnostics-0.jsonl", oldFatal + currentFatal + tail.joinToString(""))
+            DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+                val entries = archive(snapshot)
+                val records = entries.getValue("main/diagnostics-0.jsonl").lineSequence().filter { it.isNotBlank() }
+                    .map { Json.parseToJsonElement(it).jsonObject }.toList()
+                assertEquals(4, records.size)
+                assertTrue(records.any { it.getValue("fields").jsonObject["migration_reason"]?.jsonPrimitive?.content == "legacy_status_identity_v1_to_v2" })
+                assertTrue(entries.getValue("session-metadata.txt").contains("historical_fatal_signal_observations=1"))
+                assertTrue(entries.getValue("session-metadata.txt").contains("omitted_duplicate_historical_records=0"))
+            }
+        }
+    }
+
+    @Test fun nativeCrashExactIdReplayDedupIsUnchangedBySignaledAliasEnrichment() = sandbox { logs, textLog, cache, _ ->
+        val fields = mapOf("exit_record_id" to "a".repeat(64), "reason_code" to "5", "status" to "6")
+        log(logs, "main/diagnostics-0.jsonl", signalHistoryRow(1, "PREVIOUS_PROCESS_CRASH", fields) +
+            signalHistoryRow(2, "PREVIOUS_PROCESS_CRASH", fields + ("legacy_exit_record_id" to "b".repeat(64))))
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            val entries = archive(snapshot)
+            assertEquals(1, entries.getValue("main/diagnostics-0.jsonl").lineSequence().count { it.isNotBlank() })
+            val metadata = entries.getValue("session-metadata.txt")
+            assertTrue(metadata.contains("historical_crash_observations=1"))
+            assertTrue(metadata.contains("historical_fatal_signal_observations=0"))
+            assertTrue(metadata.contains("omitted_duplicate_historical_records=1"))
+        }
+    }
+
     @Test fun malformedAliasCannotMergeTwoDistinctFatalExitsInRealZip() = sandbox { logs, textLog, cache, _ ->
         val first = signalHistoryRow(1, "PREVIOUS_PROCESS_EXIT", mapOf("exit_record_id" to "a".repeat(64), "reason_code" to "2", "status" to "11"))
         val second = Json.parseToJsonElement(signalHistoryRow(2, "PREVIOUS_PROCESS_EXIT_REFINED",

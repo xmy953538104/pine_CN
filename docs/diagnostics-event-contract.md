@@ -297,12 +297,29 @@ without IDs cannot be safely merged. Historical crash observations are counted
 separately from current-session error records; neither count is a complete crash
 count when logs are missing.
 
+Exit identity version 2 uses timestamp/reason/PID/process scope, excluding the
+mutable Android status. A later status observation is
+`PREVIOUS_PROCESS_EXIT_REFINED` (INFO), with `previous_status` and the same stable
+`exit_record_id`; it is not another crash. Legacy version-1 imports retain their
+initial/current status aliases in `legacy_initial_exit_record_id` and
+`legacy_exit_record_id`. Migration publishes one non-crash refinement with
+`migration_reason=legacy_status_identity_v1_to_v2` even if that status was already
+observed. A bounded private pending marker survives failed admission/flush until
+the bridge is written. Existing historical rows are not silently rewritten, and
+the merged trace retry budget remains at most three reads per exit.
+The export's historical-observation count still deduplicates exact IDs; old
+version-1 aliases can remain separate observations. Use the explicit bridge to
+correlate them, and never interpret that counter as a count of unique crashes.
+
 On API 31+, at most one most-recent own native exit per process is queried for a
 trace. The platform may return null because its shared circular buffer was
 reused. `PREVIOUS_NATIVE_TRACE` explicitly reports null, unsupported, read limit,
 timeout, ownership mismatch, malformed input or a safe summary. The observer waits
-at most 1500 ms for that task, reads at most 256 KiB, and parses a fixed-depth AOSP
-protobuf subset with an operation budget. An uninterruptible platform task can
+at most 1500 ms for that task. A fixed-depth streaming AOSP protobuf subset uses a
+4 KiB input buffer, an 8 MiB scan ceiling, 32768 work operations and a 1000 ms
+parsing deadline. Unknown fields are skipped without buffering their contents;
+at most 256 thread summaries and 64 KiB of candidate frame text are retained.
+An uninterruptible platform task can
 remain as one daemon until process death; the UI and session shutdown never join it.
 
 Only fault-thread module basenames from a fixed list, relative PCs and validated
@@ -316,6 +333,16 @@ No new permission, protobuf dependency, root setting or system security change i
 required. The [Android API](https://developer.android.com/reference/android/app/ApplicationExitInfo#getTraceInputStream())
 and [AOSP schema](https://android.googlesource.com/platform/system/core/+/refs/heads/master/debuggerd/proto/tombstone.proto)
 define the supported source; unavailable trace data is never replaced by invented frames.
+
+`trace_complete`, `trace_capture_status` and `trace_bytes_read` distinguish a
+complete summary from input/byte/work/thread/deadline/read truncation. A stopped
+scan can retain only completed allowlisted frames whose positive PID, UID,
+fault TID, thread-map key and `Thread.id` were observed and agree. Incomplete
+frames are omitted. Missing ownership suppresses frames; conflicting ownership,
+malformed wire data and invalid UTF-8 do not yield a usable partial summary.
+Partial trace attempts remain retryable within the existing three-start budget.
+An outer observer timeout reports `observer_deadline`; it does not invent a
+prefix which the blocked task has not returned.
 
 ## UI associations and owned legacy errors
 
@@ -448,7 +475,28 @@ See [diagnostics-resources-v1.md](diagnostics-resources-v1.md) for exact sources
 units, scope, availability and acceptance boundaries. New events use schema 1
 and category `resource`: `RESOURCE_CAPABILITIES`, `RESOURCE_GUEST_SAMPLE`,
 `RESOURCE_GPU_SAMPLE`, `HOST_MEMORY_SAMPLE`,
-`RESOURCE_POST_PROGRESS_NO_NEW_PRESENT`, `RESOURCE_PRESENT_RECOVERED`.
+`RESOURCE_POST_PROGRESS_NO_NEW_PRESENT`, `RESOURCE_PRESENT_RECOVERED`,
+`RESOURCE_WINDOW_PERSIST_FAILED`, `RESOURCE_WINDOW_PERSIST_RECOVERED`.
 Cohort is a user label; NVN user buffer metrics and loaded NSO BuildID remain
 explicitly unavailable/not observed. Resource window metadata has its own
 `record_kind=resource_window_metadata` and no invented sequence number.
+
+The writer reports the first resource-window persistence failure, then at most
+once per minute while failures persist. `failure_stage`, `failure_reason`,
+`error_code` and numeric `errno` are fixed privacy-safe codes; they contain no
+path, session text, exception message or `strerror` output. The cumulative
+`window_persist_errors` belongs to this writer/process, independent of main
+JSONL `disk_errors` and aggregate `snapshot_errors`. A successful subsequent
+checkpoint emits one recovery event with the previous failure codes. It proves
+that diagnostic checkpoint completed, not guest storage success or durability
+across power loss. Checkpoint cadence and resource sampling rates are unchanged.
+
+### Guest Break request classification
+
+`GUEST_BREAK_REQUEST` observes the real `kernel::svc::Break` reason before the
+existing stack formatter. `notification_only=true` means reason bit 31 was set;
+the other branch requests guest termination. This record neither establishes an
+Android host signal nor diagnoses NVN/RAM exhaustion. A formatter exception can
+prevent the original guest termination code from being reached; the existing
+exception propagation, Kill/longjmp and Loader implementation are preserved.
+See [P0 trace/window evidence](diagnostics-trace-window-p0.md).

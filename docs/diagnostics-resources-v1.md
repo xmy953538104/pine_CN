@@ -10,6 +10,11 @@ builds where emulation shares the main Android process.
 
 ## What is actually observed
 
+The [trace/window P0 repair](diagnostics-trace-window-p0.md) follows this observer
+without changing its sampling cadence, memory policy or rendering behavior.
+It fixes search-only directory traversal, reports bounded privacy-safe checkpoint
+failure/recovery details and tests actual writer files through ZIP export.
+
 | Metric | Source and limitation |
 | --- | --- |
 | Guest policy cap | Existing `GetInfo` constant `0xF8000000` = 4,160,749,568 bytes = 3.875 GiB. This is static policy; the returned available value is `min(cap, heap region size)`. |

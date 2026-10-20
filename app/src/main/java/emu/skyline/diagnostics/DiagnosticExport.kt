@@ -337,8 +337,7 @@ object DiagnosticExport {
         private val historicalIdentities = hashSetOf<String>()
         private var historicalDuplicates = 0L
         private var historicalCrashes = 0L
-        private var historicalFatalSignals = 0L
-        private val fatalSignalIdentities = hashSetOf<String>()
+        private val historicalFatalSignals = HistoricalExitAliases(MAX_IDENTITIES)
         private val historicalEvents = setOf("PREVIOUS_PROCESS_CRASH", "PREVIOUS_PROCESS_FATAL_SIGNAL",
             "PREVIOUS_PROCESS_EXIT", "PREVIOUS_PROCESS_EXIT_REFINED", "PREVIOUS_NATIVE_TRACE")
         private val criticalRows = ArrayDeque<String>()
@@ -422,13 +421,13 @@ object DiagnosticExport {
             // Trace and snapshot rows never manufacture another host exit.
             val fields = record["fields"] as? JsonObject
             if (historical && event != "PREVIOUS_NATIVE_TRACE" &&
-                (fields?.get("reason_code") as? JsonPrimitive)?.intOrNull == 2 &&
-                (fields?.get("status") as? JsonPrimitive)?.intOrNull in setOf(4, 6, 7, 8, 11)) {
-                val id = (fields?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull?.takeIf { Regex("[0-9a-f]{64}").matches(it) }
-                if (id == null || (id !in fatalSignalIdentities && fatalSignalIdentities.size < MAX_IDENTITIES)) {
-                    historicalFatalSignals++
-                    if (id != null) fatalSignalIdentities.add(id)
-                } else if (id !in fatalSignalIdentities) dedupLimit = true
+                (fields?.get("reason_code") as? JsonPrimitive)?.intOrNull == 2) {
+                // Production v1 -> v2 rows retain explicit aliases even when
+                // status is still zero. Union before counting, including when
+                // a bridge arrives after both identities were counted already.
+                historicalFatalSignals.observe((fields?.get("exit_record_id") as? JsonPrimitive)?.contentOrNull,
+                    listOf("legacy_exit_record_id", "legacy_initial_exit_record_id").map { (fields?.get(it) as? JsonPrimitive)?.contentOrNull },
+                    (fields?.get("status") as? JsonPrimitive)?.intOrNull in setOf(4, 6, 7, 8, 11))
             }
             observation?.let {
                 val dropped = (record["dropped_count"] as? JsonPrimitive)?.longOrNull
@@ -501,7 +500,7 @@ object DiagnosticExport {
             appendLine("omitted_incomplete_records=$incomplete")
             appendLine("omitted_oversized_lines=$oversized")
             appendLine("omitted_duplicate_records=$duplicates")
-            appendLine("deduplication_limit_reached=$dedupLimit")
+            appendLine("deduplication_limit_reached=${dedupLimit || historicalFatalSignals.limitReached}")
             appendLine("files_shortened_while_reading=$truncated")
             appendLine("omitted_lines_at_export_byte_limit=$exportLimit")
             appendLine("omitted_lines_at_file_byte_limit=$fileLimit")
@@ -511,10 +510,10 @@ object DiagnosticExport {
             appendLine("observed_content_summary=up to 64 most recently captured content events, in snapshot read order")
             content.forEach(::appendLine)
             appendLine("historical_crash_observations=$historicalCrashes")
-            appendLine("historical_fatal_signal_observations=$historicalFatalSignals")
+            appendLine("historical_fatal_signal_observations=${historicalFatalSignals.observations}")
             appendLine("omitted_duplicate_historical_records=$historicalDuplicates")
             appendLine("historical_crash_scope=system history imports, not new crashes in the exporting session; known exit_record_id deduplicated across sessions")
-            appendLine("historical_fatal_signal_scope=Android reason 2 with fatal status 4,6,7,8,11; includes older exit rows, deduplicated by valid exit_record_id; separate from Guest Break and native-crash classification")
+            appendLine("historical_fatal_signal_scope=Android reason 2 with fatal status 4,6,7,8,11; includes older exit rows, deduplicated by valid exit_record_id and explicit legacy aliases within the identity bound; separate from Guest Break and native-crash classification")
             appendLine("historical_zero_scope=zero crash or fatal-signal observations does not prove no host fatal signal; history and trace may be unavailable")
             appendLine("observed_error_count=$errorCount")
             appendLine("observed_error_count_scope=exported records only; zero does not imply no crash or successful initialization")

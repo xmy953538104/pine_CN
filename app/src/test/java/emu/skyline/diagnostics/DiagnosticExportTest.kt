@@ -189,6 +189,73 @@ class DiagnosticExportTest {
         }
     }
 
+    private fun signalHistoryRow(sequence: Int, event: String, fields: Map<String, String>): String = buildJsonObject {
+        put("session_id", "alias-observer"); put("sequence", sequence); put("category", "lifecycle")
+        put("event", event); put("level", "ERROR")
+        putJsonObject("fields") { fields.forEach { (name, value) -> put(name, value) } }
+    }.toString() + "\n"
+
+    @Test fun productionLegacyMigrationCountsOnceAndPreservesBothZipRowsInEitherOrder() {
+        for (reverse in listOf(false, true)) sandbox { logs, textLog, cache, _ ->
+            val old = ExitRecordIdentity.legacyId(1000, 2, 11, 123, "emulation")
+            val seen = linkedSetOf("e:$old")
+            val id = ExitRecordIdentity.migrate(seen, 1000, 2, 11, 123, "emulation")
+            val bridge = ExitRecordIdentity.observationFields(seen, id, 1000, 2, 11, 123, "emulation")
+            assertEquals(old, bridge["legacy_exit_record_id"])
+            assertEquals("legacy_status_identity_v1_to_v2", bridge["migration_reason"])
+            val rows = listOf(signalHistoryRow(1, "PREVIOUS_PROCESS_EXIT", mapOf("exit_record_id" to old, "reason_code" to "2", "status" to "11")),
+                signalHistoryRow(2, "PREVIOUS_PROCESS_EXIT_REFINED", bridge + mapOf("reason_code" to "2", "status" to "11")))
+            log(logs, "main/diagnostics-0.jsonl", (if (reverse) rows.reversed() else rows).joinToString(""))
+            DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+                val entries = archive(snapshot)
+                val exported = entries.getValue("main/diagnostics-0.jsonl").lineSequence().filter { it.isNotBlank() }
+                    .map { Json.parseToJsonElement(it).jsonObject }.toList()
+                assertEquals(2, exported.size)
+                assertEquals(setOf(old, id), exported.map { it.getValue("fields").jsonObject.getValue("exit_record_id").jsonPrimitive.content }.toSet())
+                assertTrue(entries.getValue("session-metadata.txt").contains("historical_fatal_signal_observations=1"))
+                assertTrue(entries.getValue("session-metadata.txt").contains("observed_error_count=0"))
+            }
+        }
+    }
+
+    @Test fun productionInitialAndCompletedStatusAliasesCountOnceInAllZipReadOrders() = sandbox { logs, textLog, cache, _ ->
+        val initial = ExitRecordIdentity.legacyId(1000, 2, 0, 123, "emulation")
+        val old = ExitRecordIdentity.legacyId(1000, 2, 11, 123, "emulation")
+        val seen = linkedSetOf("e:$initial", "e:$old")
+        val id = ExitRecordIdentity.migrate(seen, 1000, 2, 11, 123, "emulation")
+        val bridge = ExitRecordIdentity.observationFields(seen, id, 1000, 2, 0, 123, "emulation")
+        ExitRecordIdentity.markObserved(seen, id, 0)
+        val complete = ExitRecordIdentity.observationFields(seen, id, 1000, 2, 11, 123, "emulation")
+        val records = listOf(
+            signalHistoryRow(1, "PREVIOUS_PROCESS_EXIT", mapOf("exit_record_id" to initial, "reason_code" to "2", "status" to "0")),
+            signalHistoryRow(2, "PREVIOUS_PROCESS_EXIT", mapOf("exit_record_id" to old, "reason_code" to "2", "status" to "11")),
+            signalHistoryRow(3, "PREVIOUS_PROCESS_EXIT_REFINED", bridge + mapOf("reason_code" to "2", "status" to "0")),
+            signalHistoryRow(4, "PREVIOUS_PROCESS_EXIT_REFINED", complete + mapOf("reason_code" to "2", "status" to "11")))
+        fun permutations(values: List<Int>): List<List<Int>> = if (values.isEmpty()) listOf(emptyList()) else values.flatMap { value ->
+            permutations(values - value).map { listOf(value) + it }
+        }
+        for (order in permutations(records.indices.toList())) {
+            log(logs, "main/diagnostics-0.jsonl", order.joinToString("") { records[it] })
+            DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+                val entries = archive(snapshot)
+                assertEquals(4, entries.getValue("main/diagnostics-0.jsonl").lineSequence().count { it.isNotBlank() })
+                assertTrue(order.toString(), entries.getValue("session-metadata.txt").contains("historical_fatal_signal_observations=1"))
+            }
+        }
+    }
+
+    @Test fun malformedAliasCannotMergeTwoDistinctFatalExitsInRealZip() = sandbox { logs, textLog, cache, _ ->
+        val first = signalHistoryRow(1, "PREVIOUS_PROCESS_EXIT", mapOf("exit_record_id" to "a".repeat(64), "reason_code" to "2", "status" to "11"))
+        val second = Json.parseToJsonElement(signalHistoryRow(2, "PREVIOUS_PROCESS_EXIT_REFINED",
+            mapOf("exit_record_id" to "b".repeat(64), "reason_code" to "2", "status" to "11"))).jsonObject
+        val malformed = JsonObject(second + ("fields" to JsonObject(second.getValue("fields").jsonObject +
+            ("legacy_exit_record_id" to JsonArray(listOf(JsonPrimitive("a".repeat(64))))))))
+        log(logs, "main/diagnostics-0.jsonl", first + malformed.toString() + "\n")
+        DiagnosticExport.capture(logs, textLog, cache, "schema=1").use { snapshot ->
+            assertTrue(archive(snapshot).getValue("session-metadata.txt").contains("historical_fatal_signal_observations=2"))
+        }
+    }
+
     @Test fun realNativeTwentyFourFieldTraceSnapshotRetainsHostScopeAndStackAfterRotationAndExport() = sandbox { logs, textLog, cache, _ ->
         val fixture = File("../tools/tests/fixtures/native-trace-snapshot.jsonl").readText()
         log(logs, "main/critical-state.jsonl", fixture)

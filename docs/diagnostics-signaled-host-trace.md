@@ -53,6 +53,13 @@ and positive PID/UID/fault-TID/thread-map identity checks are unchanged. It neve
 exports raw tombstones, registers, memory, paths or abort messages. Only completed
 allowlisted frames from the verified fault thread can be emitted.
 
+Trace selection prioritizes eligible reason-5 records (newest first), then fatal
+reason-2 records (newest first). This preserves pre-existing reason-5 coverage
+when an opportunistic reason-2 stream is null. Legacy terminal/exhausted markers
+are migrated before selection. Exit events retain their timestamp order and
+the one-read-per-process/three-starts-per-exit budgets remain unchanged. Two
+records with different reasons remain separate candidates, not inferred aliases.
+
 `PREVIOUS_NATIVE_TRACE` retains 24 producer fields, including historical Title,
 session/process/launch/commit, `reason_code`, `status`, `exit_wall_clock_ms` and
 `trace_scope=host_process_candidate_not_guest`. `signal_number` comes from the
@@ -70,6 +77,13 @@ classification/refinement rows, and never counts trace/snapshot rows as new
 host deaths. Zero imported crashes does not prove no fatal signal. The stable ID
 still includes reason: an unproven platform change of the same exit from reason
 2 to 5 would need explicit future correlation; this change does not invent one.
+
+Within the existing 65536-identity summary bound, explicit
+`legacy_exit_record_id` and `legacy_initial_exit_record_id` aliases are unioned
+independently of read order. A late status-zero bridge can merge two already
+counted identities. All original evidence rows remain present; this changes the
+summary count only. Invalid aliases never establish identity, and hitting the
+bound reports incomplete deduplication rather than growing storage indefinitely.
 
 `GUEST_BREAK_REQUEST` is captured before the existing formatter. It proves only
 the request: formatter return, Kill, longjmp and cleanup completion remain unknown
@@ -119,6 +133,10 @@ different units and cumulative scopes. Host VMA bytes accumulate selected
 successful allocations without subtracting frees or covering imported buffers.
 None is NVN occupancy/free memory, live RAM usage, or proof of NVN OOM. No guest
 buffer strategy, capacity, GPU behavior or game assets are changed.
+The reported Guest Abort path through a client draw call does not provide the
+missing current/end/needed fields or actual abort condition. Any future passive
+client-memory observation needs the exact SDK version, addresses, field units,
+ownership/lifetime and callback ABI handoff; no speculative memory walk is added.
 
 ## Offline reproduction
 

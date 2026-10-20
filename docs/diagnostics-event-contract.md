@@ -529,3 +529,10 @@ evictions; the ceiling is not a complete-history guarantee. This is best effort,
 not crash-atomic. `GUEST_SIGNAL` separately labels normal-thread drain time after
 longjmp; it is not the timestamp or stack of the final host signal.
 See [signal trace and checkpoint boundaries](diagnostics-signaled-host-trace.md).
+
+Trace selection preserves eligible reason-5 coverage before opportunistic fatal
+reason-2 reads, newest first in each group, with the existing budgets. Exit rows
+remain in original timestamp order. Fatal-signal summary counting unions valid
+explicit legacy initial/current aliases within 65536 identities, including late
+status-zero bridges, without dropping the original old/refined evidence rows.
+This does not infer an alias between reason 2 and reason 5.

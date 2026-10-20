@@ -64,6 +64,10 @@ with a ten-second delay, never catches up in a burst and backs off on reads over
 100 ms or unavailable metrics, up to 60 seconds. A slow kernel query cannot be
 safely forcibly interrupted; it stays on the single daemon, outside lifecycle
 locks, and a stale Session/Launch is rejected at native admission.
+An unexpected observer-daemon failure (including interruption/Error) is contained
+inside that daemon and disables its epoch without logging, allocation or retry
+in the catch path. A later explicit update can start a fresh delayed epoch; it
+cannot leave a failed read permanently BUSY or become an Android uncaught crash.
 
 A continuous, observable interval must include at least three new accepted
 Present returns before a 30-second quiet episode is reported as

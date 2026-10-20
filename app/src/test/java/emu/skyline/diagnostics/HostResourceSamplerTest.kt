@@ -6,6 +6,7 @@ import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 
 class HostResourceSamplerTest {
     private fun token(session: String = "A", launch: String = "launch", scope: String = "main") =
@@ -110,5 +111,53 @@ class HostResourceSamplerTest {
             "VmRSS: 9999999999999999999999 kB", "x".repeat(65_537)).forEach {
             assertNull(HostResourceSampler.parseRssKib(it))
         }
+    }
+
+    private fun threadOf(worker: HostResourceWorker) = HostResourceWorker::class.java
+        .getDeclaredField("worker").apply { isAccessible = true }.get(worker) as Thread
+
+    @Test fun workerInterruptionCannotReachGlobalUncaughtHandler() {
+        val sampler = HostResourceSampler({ 0L }, { fail("not due"); value }, { _, _ -> false })
+        val worker = HostResourceWorker(sampler)
+        worker.update(token())
+        val thread = threadOf(worker)
+        val uncaught = AtomicReference<Throwable>()
+        thread.uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, failure -> uncaught.set(failure) }
+        try {
+            thread.interrupt()
+            thread.join(5_000)
+            assertFalse("observer must stop after interruption", thread.isAlive)
+            assertNull("observer fault must not reach Android's global handler", uncaught.get())
+            assertEquals(HostResourceSampler.Result.DISABLED, sampler.poll())
+        } finally { worker.update(null); thread.interrupt(); thread.join(5_000) }
+    }
+
+    @Test fun workerErrorStopsAndLaterExplicitUpdateCanStartFreshEpoch() {
+        val now = AtomicLong()
+        val sampler = HostResourceSampler(now::get, { throw AssertionError("controlled query failure") }, { _, _ -> false })
+        val worker = HostResourceWorker(sampler)
+        worker.update(token())
+        val thread = threadOf(worker)
+        val uncaught = AtomicReference<Throwable>()
+        thread.uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, failure -> uncaught.set(failure) }
+        try {
+            // Observe the real daemon wait before waking it; no lost-notify
+            // timing assumption or five-second sleep in this controlled test.
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (thread.isAlive && thread.state != Thread.State.TIMED_WAITING && System.nanoTime() < deadline) Thread.yield()
+            assertEquals(Thread.State.TIMED_WAITING, thread.state)
+            now.set(10_000_000_000)
+            worker.update(token())
+            thread.join(5_000)
+            assertFalse("query Error must stop the daemon", thread.isAlive)
+            assertNull("Error must remain in the observer", uncaught.get())
+            assertEquals("failed read must not leave BUSY latched", HostResourceSampler.Result.DISABLED, sampler.poll())
+            worker.update(token("B"))
+            val replacement = threadOf(worker)
+            try {
+                assertNotSame(thread, replacement)
+                assertEquals(HostResourceSampler.Result.NOT_DUE, sampler.poll())
+            } finally { worker.update(null); replacement.join(5_000); assertFalse(replacement.isAlive) }
+        } finally { worker.update(null); thread.interrupt(); thread.join(5_000) }
     }
 }

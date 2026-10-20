@@ -41,6 +41,17 @@ internal class HostResourceSampler(
         dueNs = clockNs() + baseDelayMs * 1_000_000
     }
 
+    /** Only the single worker calls this after its poll has unwound. No clock,
+     * allocation or retry is needed even if a query/clock failed with an Error.
+     * A later explicit update may establish a fresh delayed observation epoch.
+     */
+    @Synchronized fun disableAfterWorkerFailure() {
+        generation++
+        identity = null
+        reading = false
+        dueNs = 0L
+    }
+
     fun poll(): Result {
         val token: Identity
         val epoch: Long
@@ -104,13 +115,24 @@ internal class HostResourceWorker(private val sampler: HostResourceSampler) {
         gate.notifyAll()
     }
     private fun run() {
-        while (true) {
-            synchronized(gate) {
-                if (!enabled) { worker = null; return }
-                gate.wait(5_000)
-                if (!enabled) { worker = null; return }
+        try {
+            while (true) {
+                synchronized(gate) {
+                    if (!enabled) { worker = null; return }
+                    gate.wait(5_000)
+                    if (!enabled) { worker = null; return }
+                }
+                sampler.poll()
             }
-            sampler.poll()
+        } catch (_: Throwable) {
+            // This boundary owns only the observer daemon, never guest work.
+            // Android's global uncaught handler must not turn its failure into
+            // an app crash. No logging/allocation or automatic retry here.
+            synchronized(gate) {
+                sampler.disableAfterWorkerFailure()
+                enabled = false
+                worker = null
+            }
         }
     }
 }

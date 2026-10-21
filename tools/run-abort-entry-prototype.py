@@ -67,6 +67,7 @@ def main():
             assert any(row.get('event') == 'SYNTHETIC_ABORT_ENTRY' for row in window)
             report.update(aarch64_execution='passed_under_qemu_linux_user_not_android', native_result=objects[-1],
                           native_diagnostics_and_window='actual production writer files parsed',
+                          fixture_performance=json.loads((a.output/'aarch64/fixture-performance.json').read_text()),
                           raw_entry_event=observed[0], executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
             run(['python3', str(ROOT/'tools/abort-entry-elf-control.py'), '--output', str(a.output/'aarch64-elf'), '--cc', compiler.removesuffix('g++')+'gcc', '--qemu', qemu], a.output/'aarch64-elf.log')
             run([qemu, '--version'], a.output/'qemu-version.log')

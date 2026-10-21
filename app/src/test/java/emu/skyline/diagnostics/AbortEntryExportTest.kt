@@ -56,23 +56,29 @@ class AbortEntryExportTest {
                     entries[entry.name] = zip.readBytes().toString(Charsets.UTF_8)
                 }
             }
-            for (name in listOf("main/diagnostics-0.jsonl", "main/resource-window.jsonl")) {
-                val exported = entries.getValue(name).lineSequence().filter { it.isNotBlank() }
-                    .map { Json.parseToJsonElement(it).jsonObject }
-                    .single { it["event"]?.jsonPrimitive?.content == "SYNTHETIC_ABORT_ENTRY" }
-                assertEquals(original, exported)
-                assertEquals("0xfedcba9876543210", exported.getValue("fields").jsonObject.getValue("entry_x0").jsonPrimitive.content)
+            // The existing exporter visits the resource window first and
+            // deduplicates identical (session,kind,sequence) across files.
+            // Preserve that policy; an entry must survive exactly once.
+            assertTrue(entries.containsKey("main/diagnostics-0.jsonl"))
+            val rows = entries.filterKeys { it.endsWith(".jsonl") }.values.flatMap { text ->
+                text.lineSequence().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.toList()
             }
+            val exported = rows.single { it["event"]?.jsonPrimitive?.content == "SYNTHETIC_ABORT_ENTRY" }
+            assertEquals(original, exported)
+            assertEquals("0xfedcba9876543210", exported.getValue("fields").jsonObject.getValue("entry_x0").jsonPrimitive.content)
+            assertTrue(entries.getValue("main/resource-window.jsonl").lineSequence().filter { it.isNotBlank() }
+                .map { Json.parseToJsonElement(it).jsonObject }.any { it == exported })
             assertTrue(entries.getValue("session-metadata.txt").contains("observed_error_count=0"))
             val bytes = archive.toByteArray()
             val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             val report = buildJsonObject {
                 put("scope", mode); put("android_app_run", false); put("game_observation", false)
                 put("actual_DiagnosticExport_zip", true); put("zip_sha256", sha)
-                put("entry_x0", "0xfedcba9876543210"); put("entry_rows_per_exported_file", 1)
+                put("entry_x0", "0xfedcba9876543210"); put("entry_rows_across_archive", 1)
+                put("resource_window_entry_preserved", true); put("existing_export_dedup_preserved", true)
             }
             System.getenv("PINE_ABORT_ENTRY_EXPORT_REPORT")?.let { path ->
-                File(path).apply { parentFile.mkdirs(); writeText(report.toString() + "\n") }
+                File(path).apply { parentFile!!.mkdirs(); writeText(report.toString() + "\n") }
                 File(path).resolveSibling("entry-export.zip").writeBytes(bytes)
             }
             println(report)

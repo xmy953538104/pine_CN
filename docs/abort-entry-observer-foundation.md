@@ -69,3 +69,103 @@ is a fixture invariant, not execution of Pine's Kill/longjmp implementation.
 No forced Owner crash, SDK scanning, SIGTRAP recovery, OverrideHook substitution,
 NVN capacity change, loader selection/relocation change, or scheduler dispatch is
 part of this experiment. P2 callback pairing remains out of scope.
+
+## Implemented owned input identity boundary
+
+`diagnostics/nso_image.{h,cpp}` now retains at most 16 modules, eight windows per
+module and 256 bytes per window. `NsoLoader::LoadNso` checks a default-false atomic;
+only an explicitly configured native experiment copies the raw 32-byte Build ID,
+hashes the three **unpadded decompressed input** segments (256 MiB aggregate work
+cap), copies requested exact windows and records the placement returned by the
+unchanged `LoadExecutable`. There is no UI/JNI switch to enable this experiment.
+No commercial identity or SDK byte window is bundled with the feature.
+
+The metadata owns all bytes it retains, independent of `Executable` lifetime. It
+records the header-declared hashes separately from computed input hashes, and does
+not claim that the old ignored LZ4 return or Backing short reads were validated.
+`VerifyPreimage` compares an explicit expected full Build ID, three input hashes
+and bounded window hashes/locations. `MatchOnly` means **input match only**; it
+never enables a patch or authenticates the subsequent NCE/rtld-mutated mapping.
+`liveBytesVerified` stays false. Runtime addresses are the Loader-returned Guest
+placement, not a dereferenced/live range verification.
+
+Ownership carries actual sink Session/Process IDs and Launch ID plus sink/launch
+generations, acquired with two try-locks on an ordinary loader thread. Captures
+that cross a logging or launch/configuration boundary are discarded. The registry
+holds only a weak KProcess ownership identity; it does not keep a process/mapping
+alive. Duplicate module names are ambiguous instead of silently selecting one.
+Full/busy/allocation/stale/bounds cases drop metadata, leaving original loading and
+exception propagation alone. The ordinary-off path performs no hashing, copying,
+metadata allocation, queueing or file I/O.
+
+`LiveGotCapability()` deliberately returns `ResolverProtocolUnavailable`. It
+neither reads the original file's placeholder as a live value nor dereferences
+`GetChunk`/`GetHostSpan`. A future lease must combine an exact mapped range and
+alignment, a pinned owning process/launch/thread generation, nonblocking lifetime
+exclusion, and a resolver publication protocol that also serializes Guest writes.
+A mapping mutex by itself does not supply that protocol. Even a sound current
+snapshot would be labeled a current sample, not historical call-chain proof.
+
+## Actual execution and export scopes
+
+The first successful executed fixture was commit
+`0b9340a5a272ba697b4086f50aa3efb4f4ed25cd`, CI
+[39527527694](https://github.com/xmy953538104/pine_CN/actions/runs/39527527694):
+101 portable assertions and 1007 total ARM64 assertions. Earlier runs failed a
+strict compiler warning and then a fixture comparison between different call-stack
+positions. Matching ordinary-return and non-return baseline positions fixed the
+comparison; no register/SP comparison was removed. Later revisions add a genuinely
+different caller, elapsed-time ranges and owned metadata tests.
+
+`tools/abort-entry-elf-control.py` builds our own GNU shared library and changes
+only one `Elf64_Sym.st_value`. Executed external and internal PLT calls then return
+the proxy-control value; the linked hidden direct-call alias still reaches the
+original. This is a binding experiment, **not an OverrideHook implementation**, and
+says nothing about the actual Horizon rtld's policy.
+
+The dedicated CI feeds the executed fixture's actual Diagnostics JSONL and
+resource-window files into `AbortEntryExportTest`, using the production Kotlin
+`DiagnosticExport.capture/write` implementation. The existing exporter processes
+the resource window first and deduplicates the same session/kind/sequence across
+files. The test therefore requires exactly one unchanged entry across the archive,
+retained in the resource window; it does not change the exporter to retain duplicate
+events. Regular fast JVM CI uses an explicitly offline export-contract input and
+labels it as such. Only the dedicated CI can claim the executed-input ZIP test.
+
+The retained performance samples are min/median/max nanoseconds per invocation over
+five 10,000-call batches for unmodified, detour-disabled and detour-full paths. They
+measure a QEMU/Linux fixture, including its ABI harness, not an Android device,
+Pine's rendering threads, game FPS or worst-case hardware latency.
+
+## Remaining gates and minimum next feature
+
+| Gate | What this branch can demonstrate | Still required |
+| --- | --- | --- |
+| A | Owned Loader-input identity and explicit safe-read unavailability; GNU and controlled PLT routing experiments. | An actual loaded SDK image, post-NCE live-window verification, protected current GOT sample and real rtld binding/traversal evidence. |
+| B | Executed owned ARM64 entry X0/original LR, all compared state, ordinary return, repeated non-return and full rollback. | A Pine-specific entry-only ABI using real ThreadContext/GuestThread generations, stack/lifetime safety, and executed real Pine Kill/longjmp/cleanup preservation. |
+| C | Actual Diagnostics writer/resource-window and production Kotlin ZIP test over clearly synthetic data. | Real Guest entry events with authenticated module and thread provenance; no such event is produced here. |
+
+The minimum underlying implementation is a dedicated **entry-only** NCE observation
+primitive: per-thread preallocated slot with a non-reused lifetime generation;
+authenticated module/entry plan prepared while loading is quiescent; complete saved
+entry X0/X30/SP and affected state; a bounded noexcept, scheduling-neutral producer;
+and release/restoration **before** tail transfer to the original prologue/body.
+It must not inherit `HookHandler`, hold a hostSp/guard frame until function return,
+or pass through an exit hook. A symbol route additionally requires proof that the
+real resolver binds the selected GOT to this entry-only stub. An entry detour instead
+requires a verified displaced instruction and branch reachability, with exact
+conflict-aware rollback. Neither is wired into games in this PR.
+
+The current fixture uses 32 bytes below a valid Linux stack pointer. It does not
+prove safety for every possible Guest stack/guard boundary. Production needs either
+a proven compatible stack-range/lifetime contract or a separately tested bounded
+scratch/context mechanism that preserves all incoming state without assuming that
+extra Guest stack space. This is an explicit prerequisite, not an implicit ABI
+permission. The fixture's Linux TLS value is not a Pine GuestThread identifier.
+
+Stop codes for game integration remain `ACTUAL_SDK_IMAGE_NOT_OBSERVED`,
+`LIVE_GOT_RESOLVER_PROTOCOL_UNAVAILABLE`, `PINE_ENTRY_CAPTURE_NOT_CONNECTED` and
+`GUEST_STACK_LIFETIME_NOT_PROVEN`. These are precise missing capabilities; passing
+synthetic tests does not clear them. No experimental APK is produced. Rollback is
+to keep this branch unmerged/default-off or revert the follow-up commits; PR #22's
+APK/symbols and PR #23's decoder remain unchanged.

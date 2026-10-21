@@ -66,6 +66,8 @@ jobs:
           PINE_ABORT_ENTRY_CAPTURE: ${{ github.workspace }}/entry-evidence/aarch64/diagnostics
           PINE_ABORT_ENTRY_EXPORT_REPORT: ${{ github.workspace }}/entry-evidence/export-result.json
         run: |
+          ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --dry-run > entry-evidence/unit-task-graph.txt
+          python3 tools/ci/verify-jvm-only.py entry-evidence/unit-task-graph.txt
           ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --tests emu.skyline.diagnostics.AbortEntryExportTest --rerun-tasks --stacktrace
           python3 -c 'import json; r=json.load(open("entry-evidence/export-result.json")); assert r["scope"]=="executed_aarch64_fixture_not_game" and r["actual_DiagnosticExport_zip"] and not r["game_observation"]; print(r)'
       - name: Retain explicit execution scope
@@ -76,6 +78,7 @@ jobs:
           if test -f entry-evidence/aarch64-build.log; then tail -n 80 entry-evidence/aarch64-build.log; fi
           if test -f entry-evidence/export-result.json; then cat entry-evidence/export-result.json; fi
           if test -f entry-evidence/aarch64-elf.log; then cat entry-evidence/aarch64-elf.log; fi
+          if test -f entry-evidence/aarch64-metadata-run.log; then cat entry-evidence/aarch64-metadata-run.log; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,6 +86,7 @@ jobs:
           path: |
             entry-evidence/*.json
             entry-evidence/*.log
+            entry-evidence/unit-task-graph.txt
             entry-evidence/entry-export.zip
             entry-evidence/aarch64/**/*.jsonl
             entry-evidence/aarch64/*.json

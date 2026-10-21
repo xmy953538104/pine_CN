@@ -57,6 +57,7 @@ class ScopedLoad {
     bool observed{};
     std::unique_lock<std::mutex> loadLock;
     size_t patchUsage{},reservation{};
+    uint64_t configurationEpoch{};
 public:
     ScopedLoad(ProcessObservation &process, const image::Record *input, std::string_view moduleName = {}) noexcept;
     ~ScopedLoad();

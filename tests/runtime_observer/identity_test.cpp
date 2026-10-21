@@ -30,6 +30,19 @@ int main(int argc,char **argv){
  const std::string emitted{std::istreambuf_iterator<char>(events),{}};
  assert(emitted.find("MODULE_RUNTIME_IDENTITY")!=std::string::npos&&emitted.find("controlled_synthetic")!=std::string::npos);
  auto module=process.Binding();assert(module&&module->domain==r::Domain::ControlledSynthetic&&module->cachePublished);
+ // Consumer-only controlled injection, NOT executed Guest capture. Exercise
+ // actual slot admission/worker/Flush with interrupted and duplicate records.
+ module->observerInstalled=true;
+ auto first=process.AttachThread(37),second=process.AttachThread(38);assert(first&&second);
+ first->x0=0xfedcba9876543210ULL;first->lr=module->callPc+4;first->sp=0x70001000;first->observerPc=0x70002000;
+ first->state.store(1,std::memory_order_release);assert(Flush(5000));
+ {std::ifstream file(std::filesystem::path(argv[1])/"diagnostics-0.jsonl");std::string text{std::istreambuf_iterator<char>(file),{}};assert(text.find("NVN_ABORT_CALLSITE_OBSERVED")==std::string::npos);}
+ second->x0=first->x0;second->lr=first->lr;second->sp=first->sp;second->observerPc=first->observerPc;
+ first->state.store(2,std::memory_order_release);second->state.store(2,std::memory_order_release);assert(Flush(5000));
+ {std::ifstream file(std::filesystem::path(argv[1])/"diagnostics-0.jsonl");std::string text{std::istreambuf_iterator<char>(file),{}};
+ auto at=text.find("NVN_ABORT_CALLSITE_OBSERVED");assert(at!=std::string::npos&&text.find("NVN_ABORT_CALLSITE_OBSERVED",at+1)==std::string::npos);
+ assert(text.find("0xfedcba9876543210")!=std::string::npos&&text.find("post_callsite_bl_pre_original_plt")!=std::string::npos);}
+ assert(module->eventPublished&&first->state==3&&second->state==2);assert(Flush(5000));
  // Input and loaded provenance are independently owned, not borrowed spans.
  bytes[0][0]^=1;assert(module->loadedWindows[0].bytes[0]==0x11);bytes[0][0]^=1;
  process.BeforeMappingMutation(0x7200000000,4096);assert(process.Validated());
@@ -61,6 +74,10 @@ int main(int argc,char **argv){
  {r::ScopedLoad load(p,&source->record);r::ScopedLoad::Mapped(bytes[0],bytes[1],0x7100000000,0x7100000000,0x3000,true);}assert(p.Validated());
  p.SealLoads();{r::ScopedLoad late(p,nullptr,"sdk.nso");assert(!r::ScopedLoad::Active());}
  assert(!p.Validated()&&p.Binding()->stopReason==uint64_t(r::StopReason::LateLoad));}
+ // A disable/re-enable inside the same real load scope cannot re-admit old work.
+ {r::ProcessObservation p(profile,r::Domain::ControlledSynthetic);
+ {r::ScopedLoad load(p,&source->record);r::ConfigureIdentity(false);r::ConfigureIdentity(true);
+ r::ScopedLoad::Mapped(bytes[0],bytes[1],0x7100000000,0x7100000000,0x3000,true);}assert(!p.Validated()&&!p.Binding());}
  ModuleOwner owned;assert(TryModuleOwner(owned));std::atomic<uint64_t> gate{7};
  const std::pair<std::string_view,std::string_view> fields[]{{"source_domain","controlled_synthetic"}};
  assert(!EmitForModuleOwner(owned,"module_runtime","REJECT_DISABLED",fields,&gate,8));

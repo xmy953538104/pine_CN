@@ -47,17 +47,21 @@ RuntimeCallee:
  stp q26,q27,[sp,#720]
  stp q28,q29,[sp,#752]
  stp q30,q31,[sp,#784]
- ldr x16,=RuntimeNoReturn
+ adrp x16,RuntimeNoReturn
+ add x16,x16,:lo12:RuntimeNoReturn
  ldr x16,[x16]
  cbnz x16,RuntimeFinish
  ret
 .global RuntimeResolver
 RuntimeResolver:
- ldr x17,=RuntimeResolverLr
+ adrp x17,RuntimeResolverLr
+ add x17,x17,:lo12:RuntimeResolverLr
  str x30,[x17]
- ldr x17,=RuntimeResolverIp
+ adrp x17,RuntimeResolverIp
+ add x17,x17,:lo12:RuntimeResolverIp
  str x16,[x17]
- ldr x17,=RuntimeCallee
+ adrp x17,RuntimeCallee
+ add x17,x17,:lo12:RuntimeCallee
  str x17,[x16]
  br x17
 .global RuntimeFinish

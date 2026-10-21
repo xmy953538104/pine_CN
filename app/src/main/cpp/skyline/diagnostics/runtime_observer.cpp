@@ -127,7 +127,8 @@ void ProcessObservation::BeforeMappingMutation(uint64_t start,uint64_t size) noe
 }
 bool ProcessObservation::Validated()const noexcept {auto*m=published.load(std::memory_order_acquire);return !closed.load(std::memory_order_acquire)&&admission.load(std::memory_order_acquire)==1&&m&&m->active.load(std::memory_order_acquire)==1&&m->optionEpoch==optionEpoch.load(std::memory_order_acquire)&&m->input.owner.runtimeOwnerEpoch==ownerEpoch.load(std::memory_order_acquire);}
 ScopedLoad::ScopedLoad(ProcessObservation &p,const image::Record *record,std::string_view name) noexcept {
-    if(!IdentityRequested())return;
+    configurationEpoch=optionEpoch.load(std::memory_order_acquire);
+    if(!(configurationEpoch&1))return;
     if(name.empty()&&record)name=record->moduleName.data();
     if(name!="sdk.nso")return;
     if(p.loadsSealed.load(std::memory_order_acquire)){p.Invalidate(StopReason::LateLoad);return;}
@@ -143,7 +144,7 @@ size_t ScopedLoad::ReservationBytes() noexcept {
     auto*load=currentLoad;if(!load||!load->process)return 0;auto&p=*load->process;
     // Production remains closed: actual NCE lifetime/integrity qualification
     // has not passed. Only the explicitly typed controlled test build may emit.
-    if(!p.controlledExecution||p.domain!=Domain::ControlledSynthetic||!IdentityRequested()||p.loadsSealed.load()||p.closed.load())return 0;
+    if(!p.controlledExecution||p.domain!=Domain::ControlledSynthetic||load->configurationEpoch!=optionEpoch.load(std::memory_order_acquire)||!IdentityRequested()||p.loadsSealed.load()||p.closed.load())return 0;
     const auto&source=*load->input;const auto&expected=*p.profile;
     if(source.buildId!=expected.preimage.buildId||source.windowCount!=expected.preimage.windowCount)return 0;
     for(size_t i{};i<3;++i)if(source.segments[i].computedHash!=expected.preimage.segmentHashes[i]||
@@ -169,6 +170,7 @@ std::shared_ptr<GuestSlot> ProcessObservation::AttachThread(uint64_t id) noexcep
 void ScopedLoad::Mapped(std::span<uint8_t> text,std::span<const uint8_t> ro,uint64_t base,uint64_t reservation,size_t reservationSize,bool cachePublished,std::span<uint8_t> patch) noexcept {
     auto *load=currentLoad;if(!load||!load->process)return;auto &p=*load->process;load->observed=true;
     try {
+        if(load->configurationEpoch!=optionEpoch.load(std::memory_order_acquire)){p.Invalidate(StopReason::Disabled);return;}
         if(!IdentityRequested()||p.closed.load()||p.loadsSealed.load())return;
         if(p.published.load())throw StopReason::IdentityMismatch;
         const auto &expected=*p.profile;auto source=*load->input;
@@ -182,7 +184,7 @@ void ScopedLoad::Mapped(std::span<uint8_t> text,std::span<const uint8_t> ro,uint
             const auto start=base+segment.va,end=reservation+reservationSize;
             if(start> end||segment.size>end-start)throw StopReason::IdentityMismatch;
         }
-        auto module=std::make_shared<Module>();module->input=source;module->moduleBase=base;module->textSize=source.segments[0].size;module->roBase=base+source.segments[1].va;module->roSize=source.segments[1].size;module->optionEpoch=optionEpoch.load();module->domain=p.domain;module->cachePublished=cachePublished;
+        auto module=std::make_shared<Module>();module->input=source;module->moduleBase=base;module->textSize=source.segments[0].size;module->roBase=base+source.segments[1].va;module->roSize=source.segments[1].size;module->optionEpoch=load->configurationEpoch;module->domain=p.domain;module->cachePublished=cachePublished;
         for(size_t i{};i<expected.preimage.windowCount;++i){const auto&w=expected.preimage.windows[i];std::span<const uint8_t> bytes;
             if(w.va<module->textSize&&w.size<=module->textSize-w.va)bytes=text.subspan(w.va,w.size);
             else if(w.va>=source.segments[1].va&&w.va-source.segments[1].va<=module->roSize&&w.size<=module->roSize-(w.va-source.segments[1].va))bytes=ro.subspan(w.va-source.segments[1].va,w.size);

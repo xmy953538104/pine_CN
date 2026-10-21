@@ -59,6 +59,7 @@ def main():
         if notice.exists():shutil.copy2(notice, kit / 'licenses' / notice.name)
     for name in ('Start-PineBionic.cmd', 'Run-PineBionic.ps1', 'README.zh-CN.md'):
         shutil.copy2(ROOT / 'tools/android-bionic' / name, kit / name)
+    shutil.copy2(ROOT / 'docs/runtime-observer-decision.md', kit / 'RWX-RouteB-Decision.zh-CN.md')
     shutil.copy2(ROOT / 'tools/android-bionic/run-once.js', kit / 'host/run-once.js')
     (kit / 'build-evidence/source.patch').write_bytes(subprocess.check_output(['git', 'diff', '55b3fab1..HEAD'], cwd=ROOT))
     source_paths = ['LICENSE.md', 'tools/android-bionic', 'tools/tests/test-runtime-lifecycle.py', 'tools/tests/test-runtime-pipeline.py',

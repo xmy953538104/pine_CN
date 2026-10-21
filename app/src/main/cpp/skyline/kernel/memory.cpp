@@ -614,6 +614,7 @@ namespace skyline::kernel {
 
         auto sourceHost{GetHostSpan(source)};
         auto destinationHost{GetHostSpan(destination)};
+        if (diagnosticLifetime) diagnosticLifetime->BeforeHostWrite(reinterpret_cast<uintptr_t>(destination.data()),sourceHost.size());
         std::memcpy(destinationHost.data(), sourceHost.data(), sourceHost.size());
 
         ForeachChunkInRange(source, [&](std::pair<u8 *, ChunkDescriptor> &desc) __attribute__((always_inline)) {
@@ -642,6 +643,7 @@ namespace skyline::kernel {
             auto sourceHost{GetHostSpan(source)};
             auto dstChunkHost{GetHostSpan(span<u8>{dstChunk->first, dstChunk->second.size})};
             auto destinationOffset{dstChunk->first - destination.data()};
+            if (diagnosticLifetime) diagnosticLifetime->BeforeHostWrite(reinterpret_cast<uintptr_t>(source.data() + destinationOffset),dstChunkHost.size());
             std::memcpy(sourceHost.data() + destinationOffset, dstChunkHost.data(), dstChunkHost.size());
         }
     }

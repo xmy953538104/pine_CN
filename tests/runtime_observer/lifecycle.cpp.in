@@ -1,0 +1,320 @@
+// SPDX-License-Identifier: MPL-2.0
+// Verbatim production bodies below; scheduler/VFS/JVM/logging are controlled.
+// Real POSIX pthreads, signals, setjmp/longjmp and std::thread::join execute.
+// This is NOT the Android scheduler, bionic sigchain or Horizon rtld.
+#include <common.h>
+#include <nce/guest.h>
+#include <diagnostics/runtime_observer.h>
+#include <diagnostics/pending_signal.h>
+#include <diagnostics/runtime_bridge.h>
+#include <diagnostics/test_hooks.h>
+#include <cxxabi.h>
+#include <csetjmp>
+#include <condition_variable>
+#include <csignal>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <thread>
+#include <stdexcept>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <ucontext.h>
+#define LOGW(...) ((void)0)
+#define LOGWNF(...) ((void)0)
+#define LOGE(...) ((void)0)
+#define LOGENF(...) ((void)0)
+#define TRACE_EVENT(...) ((void)0)
+namespace fmt {template<class...A>std::string format(const char*,A...){return "HOS-test";}}
+namespace skyline {
+namespace r=diagnostics::runtime;
+struct exception:std::runtime_error {template<class...A>exception(const char*m,A...):std::runtime_error(m){}};
+struct AsyncLogger {static void UpdateTag(){}};
+namespace kernel::type {class KThread;class KNceThread;struct KProcess;}
+namespace signal {
+struct StackFrame {void*lr{};StackFrame*next{};};
+struct SignalException {int signal{};std::string what()const{return "controlled signal exception";}};
+inline void BlockSignal(std::initializer_list<int>signals){sigset_t set;sigemptyset(&set);for(int s:signals)sigaddset(&set,s);assert(!pthread_sigmask(SIG_BLOCK,&set,nullptr));}
+}
+namespace kernel {
+struct Scheduler {
+    static inline thread_local bool YieldPending{};
+    static constexpr int PreemptionSignal=SIGUSR1;
+    struct Core{uint8_t id{};};
+    Core GetOptimalCoreForThread(const std::shared_ptr<type::KThread>&){return {};}
+    void InsertThread(const std::shared_ptr<type::KThread>&){}
+    void RemoveThread(){} void WaitSchedule(){} void Rotate(){}
+};
+}
+struct Loader {std::string GetStackTrace(signal::StackFrame* =nullptr){return {};}};
+struct DeviceState {
+    static inline thread_local std::shared_ptr<kernel::type::KThread>thread;
+    kernel::Scheduler*scheduler{};kernel::type::KProcess*process{};Loader*loader{};
+};
+struct TrapManager {static bool TrapHandler(u8*,bool){return false;}};
+namespace nce {
+class NCE {public:struct ExitException:std::runtime_error{ExitException():std::runtime_error("exit"){} };
+    static void SignalHandler(int,siginfo_t*,ucontext_t*,void**);
+};
+}
+namespace kernel::type {
+#ifndef __ANDROID__
+// Bionic's flat TID field has a nested glibc ABI equivalent. Convert only the
+// dependency argument; execute the real OS timer_create, preserving its result.
+struct sigevent {int sigev_signo{},sigev_notify{},sigev_notify_thread_id{};};
+inline int timer_create(clockid_t clock,const sigevent*event,timer_t*timer){
+    ::sigevent native{};native.sigev_signo=event->sigev_signo;native.sigev_notify=event->sigev_notify;
+    native._sigev_un._tid=event->sigev_notify_thread_id;return ::timer_create(clock,&native,timer);
+}
+#endif
+struct KProcess {
+    r::ProcessObservation diagnosticObservation;
+    std::mutex threadMutex;bool disableThreadCreation{};
+    std::vector<std::shared_ptr<KThread>>threads;
+    std::atomic<unsigned>killCalls{};
+    std::array<u8,64>tls{};
+    explicit KProcess(const r::Profile&p):diagnosticObservation(p,r::Domain::ControlledSynthetic,true){}
+    ~KProcess();
+    u8*AllocateTlsSlot(){return tls.data();}
+    void Kill(bool){++killCalls;} // process scheduler/JVM side effects excluded
+};
+class KThread:public std::enable_shared_from_this<KThread> {
+public:
+    DeviceState state;KProcess&process;
+    std::thread thread;pthread_t pthread{};timer_t preemptionTimer{};
+    std::mutex statusMutex;std::condition_variable statusCondition;
+    bool running{},ready{},killed{};size_t id{};
+    std::mutex coreMigrationMutex;uint8_t coreId{};
+    std::shared_ptr<r::GuestSlot>diagnosticSlotStorage;
+    diagnostics::PendingGuestSignal pendingGuestSignal;
+    std::jmp_buf originalCtx{};
+    u8*tlsRegion{};void*entry{},*stackTop{};uint64_t entryArgument{},handle{};
+    std::atomic<bool>tailEntered{},releaseTail{true};
+    KThread(DeviceState s,KProcess&p,size_t tid):state(s),process(p),id(tid){}
+    virtual ~KThread();
+    virtual void Init()=0;virtual void Run()=0;
+    void ThreadEntrypoint();void DiagnosticHostReturned();
+    void Start(bool=false);void Kill(bool);
+    void JoinBeforeDiagnosticContextDestruction();
+    void Signal(){tailEntered.store(true,std::memory_order_release);while(!releaseTail.load(std::memory_order_acquire))std::this_thread::yield();}
+};
+class KNceThread:public KThread {
+public:
+    nce::ThreadContext ctx{};
+    using KThread::KThread;
+    ~KNceThread();void Init()override;void Run()override;
+};
+/* ACTUAL_THREAD_DESTRUCTOR */
+/* ACTUAL_THREAD_ENTRY */
+/* ACTUAL_THREAD_START_KILL */
+/* ACTUAL_THREAD_COMPLETION */
+/* ACTUAL_NCE_INIT */
+#ifdef __aarch64__
+/* ACTUAL_NCE_RUN */
+#else
+void KNceThread::Run(){for(;;)asm volatile("":::"memory");}
+#endif
+/* ACTUAL_PROCESS_DESTRUCTOR */
+}
+namespace kernel::svc {
+struct SvcContext{uint64_t x0{};};
+/* ACTUAL_SVC_BREAK */
+}
+using siginfo=siginfo_t;using ucontext=ucontext_t;
+#ifdef __aarch64__
+namespace nce {
+/* ACTUAL_NCE_SIGNAL */
+/* ACTUAL_TLS_RESTORER */
+}
+namespace signal {
+using GuestSignalAction=void(*)(int,siginfo*,ucontext*,void**);
+struct Action{void(*function)(int,siginfo*,ucontext*){};};
+static void*(*TlsRestorer)()=nce::NceTlsRestorer;
+static std::array<GuestSignalAction,NSIG>GuestHandlers{};
+static std::array<Action,NSIG>DefaultHandlers{};
+/* ACTUAL_GUEST_SIGNAL_WRAPPER */
+}
+#endif
+}
+using namespace skyline;
+namespace image=skyline::diagnostics::image;
+namespace r=skyline::diagnostics::runtime;
+using namespace skyline::kernel::type;
+
+struct Fixture {
+    r::Profile profile;
+    std::array<std::vector<uint8_t>,3>bytes;
+    std::unique_ptr<image::Pending>source;
+    u8*mapping{};
+    Fixture(){
+        mapping=static_cast<u8*>(mmap(nullptr,16384,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0));assert(mapping!=MAP_FAILED);
+        for(auto&b:bytes)b.resize(128,0x11);
+        auto put=[&](size_t at,uint32_t w){std::memcpy(bytes[0].data()+at,&w,4);};
+        put(0,0x94000010);put(64,0x90000010);put(68,0xf9400211);put(72,0x91000210);put(76,0xd61f0220);
+        profile.callVa=0;profile.pltVa=64;profile.originalBl=0x94000010;profile.noCallbackVa=4096;profile.insufficientVa=4100;
+        profile.preimage.buildId[0]=0x51;profile.preimage.windowCount=3;
+        profile.requests[0]={0,8};profile.requests[1]={64,16};profile.requests[2]={4096,8};
+        image::Input input;input.name="sdk.nso";input.buildId=profile.preimage.buildId;
+        for(size_t n{};n<3;++n){
+            profile.segments[n]={uint32_t(n*4096),128};profile.preimage.segmentHashes[n]=image::Sha256(bytes[n]);
+            input.segments[n]={uint32_t(n*4096),128,bytes[n]};std::memcpy(mapping+(n+1)*4096,bytes[n].data(),128);
+        }
+        for(size_t n{};n<3;++n){auto w=profile.requests[n];profile.preimage.windows[n]={w.va,w.size,image::Sha256(std::span(bytes[w.va/4096]).subspan(w.va%4096,w.size))};}
+        image::Configure(true,{profile.requests.data(),3});source=image::Capture(input);assert(source);
+    }
+    ~Fixture(){munmap(mapping,16384);}
+    std::shared_ptr<KProcess>Load(){
+        auto p=std::make_shared<KProcess>(profile);
+        {r::ScopedLoad load(p->diagnosticObservation,&source->record);assert(r::ScopedLoad::ReservationBytes()==4096);
+         r::ScopedLoad::Mapped({mapping+4096,128},{mapping+8192,128},uint64_t(mapping+4096),uint64_t(mapping),16384,true,{mapping,4096});}
+        assert(p->diagnosticObservation.Validated());return p;
+    }
+};
+template<class F>void Until(F predicate){const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(5);while(!predicate()){assert(std::chrono::steady_clock::now()<end);std::this_thread::yield();}}
+enum class Transfer{Break,CppException,SignalException,Async};
+class BoundaryThread:public KNceThread {
+public:
+    Transfer transfer;std::atomic<bool>entered{};
+    BoundaryThread(DeviceState s,KProcess&p,size_t tid,Transfer t):KNceThread(s,p,tid),transfer(t){}
+    void Run()override{
+        // Synthetic consumer state ONLY. SIGINT/longjmp/host-tail execution is
+        // real; this does not claim interruption of the 208-byte producer.
+        if(transfer==Transfer::Async)diagnosticSlotStorage->state.store(1,std::memory_order_release);
+        entered.store(true,std::memory_order_release);
+        if(transfer==Transfer::Break){kernel::svc::SvcContext c;kernel::svc::Break(state,c);}
+        if(transfer==Transfer::CppException)throw std::runtime_error("controlled C++ unwind");
+        if(transfer==Transfer::SignalException)throw signal::SignalException{SIGINT};
+        for(;;)asm volatile("":::"memory");
+    }
+};
+static void HostInterrupt(int signum,siginfo_t*,void*){
+    assert(signum==SIGINT);
+    std::longjmp(DeviceState::thread->originalCtx,1);
+}
+static void InstallSignals(){
+    struct sigaction action{};sigemptyset(&action.sa_mask);action.sa_sigaction=&HostInterrupt;action.sa_flags=SA_SIGINFO|SA_ONSTACK;
+    assert(!sigaction(SIGINT,&action,nullptr));
+}
+#ifdef __aarch64__
+extern "C" void LifecycleSpin();
+extern "C" {std::atomic<uint64_t>LifecycleGuestEntered{};}
+static void InstallActualGuestSignals(){
+    signal::GuestHandlers[SIGINT]=nce::NCE::SignalHandler;
+    struct sigaction action{};sigemptyset(&action.sa_mask);
+    action.sa_sigaction=reinterpret_cast<void(*)(int,siginfo_t*,void*)>(&signal::GuestSafeSignalHandler);
+    action.sa_flags=SA_SIGINFO|SA_ONSTACK;
+    assert(!sigaction(SIGINT,&action,nullptr));
+}
+#endif
+static void Begin(const std::filesystem::path&dir,const char*session){
+    diagnostics::Config c;c.directory=dir.string();c.sessionId=session;c.processRunId="controlled-pthread";
+    assert(diagnostics::Start(c));diagnostics::SetLaunchId("old-launch",true);r::ConfigureIdentity(true);
+}
+static std::string Read(const std::filesystem::path&dir){std::ifstream f(dir/"diagnostics-0.jsonl");return {std::istreambuf_iterator<char>(f),{}};}
+static std::atomic<bool>writerBlocked{},releaseWriter{};
+static void PauseWriter(diagnostics::testing::Point point,std::string_view event){
+    if(point==diagnostics::testing::Point::BeforeRecordWrite&&event=="LIFECYCLE_WRITER_BARRIER"){
+        writerBlocked.store(true,std::memory_order_release);while(!releaseWriter.load(std::memory_order_acquire))std::this_thread::yield();
+    }
+}
+int main(int argc,char**argv){
+    assert(argc==2);std::filesystem::path out=argv[1];InstallSignals();
+    Begin(out/"thread-exits","thread-exits");
+    {
+        Fixture fixture;auto process=fixture.Load();kernel::Scheduler scheduler;Loader loader;DeviceState state{&scheduler,process.get(),&loader};
+        for(auto transfer:{Transfer::Break,Transfer::CppException,Transfer::SignalException,Transfer::Async}){
+            auto thread=std::make_shared<BoundaryThread>(state,*process,transfer==Transfer::CppException?17:0,transfer);
+            process->threads.push_back(thread);thread->releaseTail=false;thread->Start();
+            Until([&]{return thread->entered.load(std::memory_order_acquire);});
+            if(transfer==Transfer::Async)thread->Kill(true);
+            Until([&]{return thread->tailEntered.load(std::memory_order_acquire);});
+            thread->Kill(true); // returns while the real exit tail is deliberately held
+            auto slot=thread->diagnosticSlotStorage;assert(slot&&slot->retired&&!slot->hostReturned&&!slot->hostJoined);
+            std::promise<void>completion;auto joined=completion.get_future();
+            std::thread joiner([&]{thread->JoinBeforeDiagnosticContextDestruction();completion.set_value();});
+            assert(joined.wait_for(std::chrono::milliseconds(50))==std::future_status::timeout);
+            thread->releaseTail=true;joiner.join();joined.get();assert(slot->hostReturned&&slot->hostJoined);
+            if(transfer==Transfer::Async)assert(slot->state==1); // interrupted Writing stays unread/unreused
+#ifndef __ANDROID__
+            assert(slot->signalStack==r::GuestSlot::SignalStack::Disabled); // real fresh Linux pthread
+#endif
+        }
+        assert(process->killCalls==1); // main SvcBreak bypassed Process::Kill; C++ id17 did not
+        // Synchronous Start(true) has NO std::thread: completion follows the entire entrypoint.
+        auto self=std::make_shared<BoundaryThread>(state,*process,0,Transfer::Break);process->threads.push_back(self);
+        self->releaseTail=false;std::thread caller([&]{self->Start(true);});
+        Until([&]{return self->tailEntered.load();});self->Kill(true);assert(!self->thread.joinable()&&!self->diagnosticSlotStorage->hostReturned);
+        std::promise<void>completion;auto joined=completion.get_future();
+        std::thread joiner([&]{self->JoinBeforeDiagnosticContextDestruction();completion.set_value();});
+        assert(joined.wait_for(std::chrono::milliseconds(50))==std::future_status::timeout);
+        self->releaseTail=true;caller.join();joiner.join();assert(self->diagnosticSlotStorage->hostJoined);
+        // P0 phases are independently owned. Only the callsite-containing window changes.
+        auto m=process->diagnosticObservation.Binding();assert(m->loadedWindows[0].hash!=m->installedWindows[0].hash);
+        assert(m->loadedWindows[1].hash==m->installedWindows[1].hash&&m->loadedWindows[2].hash==m->installedWindows[2].hash);
+        assert(image::Sha256(m->installedStub)==m->observerPatch.stubHash);
+        process->diagnosticObservation.BeforeMappingMutation(uint64_t(fixture.mapping)+1024,1);
+        assert(!process->diagnosticObservation.Validated()&&m->active==0); // NCE/observer reservation, outside text/ro
+        assert(diagnostics::Flush(5000));
+    }
+    diagnostics::Stop();
+#ifdef __aarch64__
+    Begin(out/"nce-asynchronous-exit","nce-asynchronous-exit");
+    {
+        InstallActualGuestSignals();Fixture fixture;auto process=fixture.Load();kernel::Scheduler scheduler;Loader loader;
+        DeviceState state{&scheduler,process.get(),&loader};auto thread=std::make_shared<KNceThread>(state,*process,0);process->threads.push_back(thread);
+        auto stack=mmap(nullptr,65536,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(stack!=MAP_FAILED);
+        thread->stackTop=static_cast<u8*>(stack)+65536;thread->entry=reinterpret_cast<void*>(&LifecycleSpin);thread->releaseTail=false;
+        LifecycleGuestEntered=0;thread->Start();Until([]{return LifecycleGuestEntered.load(std::memory_order_acquire)==1;});
+        auto slot=thread->diagnosticSlotStorage;assert(slot&&slot->state==0);
+        std::atomic<bool>destroyed{};std::promise<void>completion;auto completed=completion.get_future();
+        std::thread destroyer([p=std::move(process),&destroyed,&completion]()mutable{p.reset();destroyed=true;completion.set_value();});
+        Until([&]{return thread->tailEntered.load(std::memory_order_acquire);});
+        assert(slot->retired&&!slot->hostReturned&&!slot->hostJoined&&!destroyed);
+        assert(completed.wait_for(std::chrono::milliseconds(50))==std::future_status::timeout);
+        thread->releaseTail=true;destroyer.join();assert(destroyed&&slot->hostReturned&&slot->hostJoined);
+        assert(slot->state==0); // real Guest TLS/signal path; spin is NOT a capture callsite
+        thread.reset();munmap(stack,65536);InstallSignals();
+        assert(diagnostics::Flush(5000));
+    }
+    diagnostics::Stop();
+#endif
+    // Writer is blocked BEFORE loading, hence owns no Module when KProcess dies.
+    for(bool rollover:{false,true}){
+        auto dir=out/(rollover?"launch-rollover":"stop-final-drain");Begin(dir,rollover?"launch-rollover":"stop-final-drain");
+        writerBlocked=false;releaseWriter=false;diagnostics::testing::hook=&PauseWriter;
+        diagnostics::Emit("lifecycle","LIFECYCLE_WRITER_BARRIER");Until([]{return writerBlocked.load(std::memory_order_acquire);});
+        Fixture fixture;std::weak_ptr<r::Module>weak;
+        {
+            auto process=fixture.Load();auto module=process->diagnosticObservation.Binding();weak=module;
+            auto slot=process->diagnosticObservation.AttachThread(101);assert(slot);
+            // Consumer input only: no claim that these payloads came from an executed stub.
+            slot->x0=module->noCallbackPc;slot->lr=module->callPc+4;slot->sp=0x100000000;slot->observerPc=module->observerPatch.stubPc;
+            slot->retired=true;slot->hostReturned=true;slot->hostJoined=true;slot->state.store(2,std::memory_order_release);
+        }
+        assert(!weak.expired()); // bounded final handoff, no thread/process local strong owner
+        releaseWriter.store(true,std::memory_order_release);
+        if(rollover)diagnostics::SetLaunchId("new-launch",true);
+        diagnostics::Stop();diagnostics::testing::hook=nullptr;
+        auto text=Read(dir);auto pos=text.find("NVN_ABORT_CALLSITE_OBSERVED");assert(pos!=std::string::npos&&text.find("NVN_ABORT_CALLSITE_OBSERVED",pos+1)==std::string::npos);
+        assert(text.find("old-launch",pos)!=std::string::npos);assert(weak.expired());
+    }
+    Begin(out/"lifetime-capacity","lifetime-capacity");
+    {
+        Fixture fixture;auto process=fixture.Load();std::weak_ptr<r::Module>weak=process->diagnosticObservation.Binding();
+        std::vector<std::shared_ptr<r::GuestSlot>>slots;
+        for(unsigned n{};n<256;++n){auto slot=process->diagnosticObservation.AttachThread(n);assert(slot);if(n)assert(slot.get()!=slots.back().get());slots.push_back(slot);}
+        slots[0]->state=1;assert(diagnostics::Flush(5000));assert(!slots[0]->retired&&!slots[0]->hostJoined&&slots[0]->state==1);
+        for(auto&s:slots){s->retired=true;s->hostReturned=true;s->hostJoined=true;}
+        assert(!process->diagnosticObservation.AttachThread(257)); // never reuse an old slot address
+        process.reset();assert(diagnostics::Flush(5000));
+        assert(Read(out/"lifetime-capacity").find("MODULE_RUNTIME_RETIREMENT")!=std::string::npos);
+        assert(slots[0]->state==1); // worker did not read/reset an interrupted payload
+        r::ConfigureIdentity(false);assert(diagnostics::Flush(5000));
+        assert(!weak.expired()&&slots[0]->moduleActive->load()==0); // aliased handle pins raw gate target
+        slots.clear();assert(weak.expired());
+    }
+    diagnostics::Stop();
+    std::puts("PASS real extracted KThread entry/Start/Kill/longjmp/exit-tail/join and KProcess destructor; asynchronous POSIX SIGINT; source-executed SvcBreak id0 and C++/signal-exception catch. Controlled scheduler/mapping, NOT Android lifecycle. Consumer handoff/capacity states are injected, not executed producer captures.");
+}

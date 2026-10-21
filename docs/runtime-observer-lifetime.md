@@ -1,0 +1,53 @@
+# PR25 runtime ownership and identity boundaries
+
+This change starts at the successfully built `8e659d8a725e96c3101386552e67a26926e0ff6b`. Production installation stays CLOSED. It does not produce another APK or enable a real capture. The default category/verbose gates, original BL, PLT/GOT traversal, 208-byte producer, Guest register/stack behavior and ordinary scheduling policy are unchanged.
+
+## Implemented production wiring
+
+`AttachThread` returns an aliasing `shared_ptr<GuestSlot>` whose control block owns Module. Module owns the actual slot allocation. Thus a thread pins both its slot and the raw `moduleActive` gate target through real host completion, without a Module/slot ownership cycle. The worker separately snapshots strong Module and slot handles. No worker reads a mapping or a KThread/ThreadContext pointer.
+
+The existing common `setjmp` return branch already marked a slot retired; it covers SvcBreak's direct longjmp as well as NCE signal/SVC and caught exception returns. It is preserved. SvcBreak ID 0 bypasses Process::Kill; current CreateThread actually starts IDs at 1, so the test of ID 0 is a branch boundary, not a claim about the real first thread. `retired` means Guest cannot resume that entry. A Writing slot paused by the scheduler has no such proof. `DiagnosticHostReturned` runs only after the whole ThreadEntrypoint exit tail, including Signal and thread-name restoration. `hostJoined` is published only after a backing `std::thread::join`, or after synchronous Start(true)'s entrypoint has returned. `running=false`, Flush success, and `hostReturned` alone are not a backing-thread join.
+
+KProcess destruction still disables creation and performs the original Kill(true) loop. It then releases `threadMutex` and waits for observed host completion before any process mapping/member teardown. KNceThread destruction repeats the idempotent fence before destroying its derived ctx and clears its slot pointer. Kill, Process::Kill(false), SvcBreak, longjmp, exceptions and scheduler behavior are not replaced. A thread with no slot takes no additional join/wait. Concurrent destruction/restart of the same KThread is not newly authorized.
+
+KNceThread Init queries `sigaltstack(nullptr, ...)` only when a slot exists. It neither configures a stack nor makes a fault-time call. Enabled/disabled/unknown status and enabled size remain owned metadata; final retirement reports aggregate counts/minimum enabled size. An enabled stack is not proof of adequate capacity, guard placement, bionic sigchain routing or successful asynchronous fault delivery. With production interception closed there are no production capture slots, so this probe is dormant there.
+
+The registry has 16 preallocated final-drain handles corresponding to the entries admitted before code mutation. ProcessObservation destruction transfers Module ownership into its existing entry, so OS destruction before JNI EndLaunch cannot erase an undrained Ready slot. After process teardown and all attached hosts have joined, the writer reports retirement without reading Writing payloads and releases its final handle. Slot addresses/state are never reset or reused. The 256-slot total remains a hard bound; the 257th attach returns empty even when old threads have exited.
+
+Diagnostics Stop and SetLaunchId first close module admission, then request a bounded (250 ms) worker drain under the old sink/session/launch owner before changing ownerEpoch/closing the sink. The lifecycle thread never serializes slot payloads. Timeout is reported as `runtime_final_drain_timeouts`; this is not a promise to preserve records after a disk/admission failure, or after a producer finishes later. Flush/drain still does not wait for Writing or prove Guest quiescence. Explicit option disable immediately revokes its epoch and may discard old records; cleanup callbacks remain installed after first use so stale final holds can be released. Teardown after sink close does not create an undrainable new hold. Live thread handles independently keep gate storage alive.
+
+## Four identity phases and the RWX blocker
+
+| Phase | Retained evidence | Guarantee |
+| --- | --- | --- |
+| Original NSO | Raw 32-byte Build ID, decompressed unpadded segment hashes/layout/windows | Owned pre-NCE input only |
+| After NCE | Copies/hashes of the actual mapped requested text/ro windows before the observer | Load-time window comparison only |
+| After observer | Separate copies/hashes of those windows and owned 208-byte stub copy/hash | Synchronous controlled installation only; production unavailable |
+| Running Guest | `runtime_identity_continuity=unqualified_unmediated_rwx_writers` | No continuous protection or deployment qualification |
+
+BeforeMappingMutation now includes the entire installed NCE/observer patch reservation as well as text/ro (therefore callsite, PLT and assertion windows). The two SVC map/unmap memcpy destinations explicitly revoke before writing. These are revocation hooks, **not** mapping leases or permission to release/reuse pages. `active=0` neither ejects a thread already in the stub nor prevents its tail branch into PLT. No permissions or global CPU/GPU behavior are changed.
+
+Existing mechanisms cannot close these write/reuse sources:
+
+* Guest CPU stores to current RWX code/ro/patch aliases; a store does not call MemoryManager.
+* Mutable GetHostSpan/raw Guest pointers, mirrors acquired before identity publication, and later host/GPU users of those aliases.
+* Loader/NCE/HLE/rtld/direct-pointer patches and resolver/GOT writes without a common write epoch/protocol.
+* Mapping free, mprotect or address reuse after revocation but before all old Guest PCs, stub tail branches and PLT accesses have quiesced.
+
+The minimum missing engineering interfaces are an enforced write protocol for **every** executable/identity alias (including Guest writes), a mapping-generation/code-window lease covering patch/text/ro/PLT/assertions, and revoke-and-quiesce acknowledgement before mutation/free/reuse. These interfaces do not currently exist. Known-write notifications or periodic hashing cannot substitute for them. Adding unverified permission trapping globally is outside this change.
+
+Route B remains sdk+0x2D64E0 (`c04c0494`, architectural LR sdk+0x2D64E4), tailing through the untouched sdk+0x3E97E0 PLT. Only X16/X17 are scratch, justified by its exact overwrite. Post-load hashes do not qualify real Horizon rtld binding/GOT publication or concurrent relocations. No live GOT target is read and no GNU fixture resolver is treated as Horizon evidence.
+
+The original non-SIGINT NCE fault path still formats stack/context/logs and may call Process::Kill/JVM. This change adds no fault-scene allocation, I/O, wait or JNI, but does not certify that existing path as an allocation-free observer fault protocol. Device qualification also still needs genuine interrupted-producer, original Guest state and asynchronous signal-stack/exit checks. Production Gate cannot be opened from these tests.
+
+## New boundary tests and their limits
+
+`tools/tests/test-runtime-lifecycle.py` extracts current KThread destructor/entry/Start/Kill/completion, KProcess destructor, KNce Init/Run, SvcBreak, NCE SignalHandler/TLS restorer and GuestSafeSignalHandler bodies verbatim, recording per-body SHA256 plus generated source, commands, source SHA/dirty status and JSONL hashes. Dependencies for scheduler/JVM/logging and load mapping are controlled. Linux/Bionic sigevent field layout is adapted only in the glibc fixture; the actual OS timer_create result is preserved.
+
+The host executable runs real POSIX pthreads/timers/SIGINT, setjmp/longjmp and std::thread joins. It holds the exit tail after running=false and verifies asynchronous/synchronous completion fences. Main SvcBreak bypasses Process::Kill; C++ and signal-exception catch paths use the production common return. On AArch64 it additionally executes actual KNce Run into an owned spin entry with real Guest TLS, then the original TLS-restorer/signal-wrapper/NCE SIGINT rewrite/longjmp sequence. Process destruction must wait for that thread's held exit tail. This spin has no capture callsite and produces no capture payload.
+
+Other cases block the actual writer before module load, destroy the last process owner, and prove a consumer-injected Ready is emitted once under the old launch during Stop/launch rollover. Separate owned phase copies, patch-reservation revocation, alias lifetime, full capacity, Writing unreadability and final retirement counters are asserted. The Ready/Writing inputs in these consumer cases are explicitly injected. They are **not** evidence of an asynchronously interrupted 208-byte producer. No such new producer qualification is claimed.
+
+The same source compiles with pinned Android NDK 27.3.13750724/API29 ARM64 at O2 against Bionic; compile-only is labeled and not executed through the Linux QEMU loader. CI runs Linux-user AArch64 boundaries and NDK compilation without an APK task. This still excludes actual Android scheduler/Kill interactions, bionic sigchain/signal-stack delivery, Android map teardown and Horizon rtld. Existing 14 pipeline cases/263 JVM tests remain prior evidence/regressions, not new NVN results.
+
+Relative to PR22: default interception remains absent, category remains unselected, no new Guest patch/reservation/slot or memory/scheduling policy is admitted; LoggerHistory and the PR22 APK/symbol rollback remain unchanged. Optional readonly identity gains explicit phase/continuity metadata and bounded final writer handoff. Future controlled attachments gain real completion ownership fences. These changes do not qualify an NVN debugging APK. No additional Owner crash reproduction is requested; code-level lease/write/binding gaps precede device capture acceptance.

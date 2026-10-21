@@ -34,12 +34,12 @@ namespace skyline::kernel {
              * @brief Entry function of any guest threads, sets up necessary context and jumps into guest code from the calling thread
              */
             void ThreadEntrypoint();
+            void DiagnosticHostReturned();
 
           protected:
             /**
              * @brief Initializes the thread's execution-mode-specific host object
              */
-            void JoinBeforeDiagnosticContextDestruction();
             virtual void Init() = 0;
 
             /**
@@ -57,7 +57,7 @@ namespace skyline::kernel {
             KHandle handle;
             size_t id; //!< Index of thread in parent process's KThread vector
 
-            std::shared_ptr<diagnostics::runtime::GuestSlot> diagnosticSlotStorage; // base owns until join
+            std::shared_ptr<diagnostics::runtime::GuestSlot> diagnosticSlotStorage; // aliases/pins Module until actual join
             diagnostics::PendingGuestSignal pendingGuestSignal{};
             jmp_buf originalCtx{}; //!< The context of the host thread prior to jumping into guest code
 
@@ -115,6 +115,11 @@ namespace skyline::kernel {
              * @param join Return after the thread has joined rather than instantly
              */
             void Kill(bool join);
+
+            // Observer-only ownership fence. Kill(true) still has its original
+            // running=false semantics; this additionally waits for the host
+            // exit tail, before KProcess memory or derived NCE ctx destruction.
+            void JoinBeforeDiagnosticContextDestruction();
 
             /**
              * @brief Sends a host OS signal to the thread which is running this KThread

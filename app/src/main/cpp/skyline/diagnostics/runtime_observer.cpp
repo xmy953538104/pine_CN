@@ -20,7 +20,13 @@ constexpr image::Digest D(const char *hex) {
 std::atomic<uint64_t> threadSerial{};
 std::atomic<uint64_t> optionEpoch{}; // odd is on; every configure advances, no ABA/reuse
 thread_local ScopedLoad *currentLoad{};
-struct Registry {std::mutex mutex;std::array<std::weak_ptr<Module>,16> modules;};
+struct Registry {
+    std::mutex mutex;
+    std::array<std::weak_ptr<Module>,16> modules;
+    // Reserved with the weak entry BEFORE any code mutation. Process teardown
+    // hands off to the writer without allocating or needing another slot.
+    std::array<std::shared_ptr<Module>,16> finalDrain;
+};
 // One bounded process-lifetime registry; avoids static teardown racing the sink.
 Registry &Get(){static Registry *registry=new Registry;return *registry;}
 std::string Hex(uint64_t value){char text[19];std::snprintf(text,sizeof(text),"0x%016llx",static_cast<unsigned long long>(value));return text;}
@@ -39,9 +45,10 @@ bool DrainModules() noexcept {
             }
             if(!module->identityExported){
                 auto base=Hex(module->moduleBase),ro=Hex(module->roBase),build=DigestText(module->input.buildId);
-                std::string preHashes,loadedHashes,layout;
+                std::string preHashes,loadedHashes,installedHashes,layout;
                 for(const auto&segment:module->input.segments){preHashes+=DigestText(segment.computedHash)+";";layout+=Hex(segment.va)+":"+Hex(segment.size)+";";}
                 for(size_t i{};i<module->input.windowCount;++i){const auto&w=module->loadedWindows[i];loadedHashes+=Hex(w.va)+":"+DigestText(w.hash)+";";}
+                if(module->observerInstalled)for(size_t i{};i<module->input.windowCount;++i){const auto&w=module->installedWindows[i];installedHashes+=Hex(w.va)+":"+DigestText(w.hash)+";";}
                 const auto installedHash=module->observerInstalled?DigestText(module->observerPatch.stubHash):"unavailable_not_installed";
                 const auto installedWord=module->observerInstalled?Hex(module->observerPatch.installed):"unavailable_not_installed";
                 const std::pair<std::string_view,std::string_view> fields[]{
@@ -53,7 +60,11 @@ bool DrainModules() noexcept {
                     {"loaded_windows_verified","true"},{"instruction_cache_published",module->cachePublished?"true":"false"},
                     {"guest_call_observed","false"},{"interception_status",module->observerInstalled?"controlled_only_installed":"execution_safety_gate_closed"},
                     {"live_got","unavailable_not_read"},{"preimage_segment_hashes",preHashes},{"preimage_layout_va_size",layout},
-                    {"post_nce_preobserver_window_hashes",loadedHashes},{"installed_stub_hash",installedHash},{"installed_callsite_word",installedWord}};
+                    {"post_nce_preobserver_window_hashes",loadedHashes},
+                    {"post_observer_window_hashes",module->observerInstalled?std::string_view(installedHashes):"unavailable_not_installed"},
+                    {"runtime_identity_continuity","unqualified_unmediated_rwx_writers"},
+                    {"mapping_revocation_is_quiescence","false"},
+                    {"installed_stub_hash",installedHash},{"installed_callsite_word",installedWord}};
                 module->identityExported=EmitForModuleOwner(module->input.owner,"module_runtime","MODULE_RUNTIME_IDENTITY",fields,&optionEpoch,module->optionEpoch);
                 if(!module->identityExported)complete=false;
             }
@@ -86,10 +97,67 @@ bool DrainModules() noexcept {
                 complete=false;break; // retry admission on worker, never on Guest
             }
         }
+        // A final handoff keeps records alive after KProcess/OS destruction.
+        // Do not discard a potentially resumable Writing slot. An aliased
+        // thread handle independently pins Module through actual host join.
+        {auto&r=Get();std::unique_lock lock(r.mutex,std::try_to_lock);if(!lock)return false;
+         for(size_t i{};i<r.finalDrain.size();++i)if(auto m=r.finalDrain[i]){
+             const bool stale=ownerEpoch.load(std::memory_order_acquire)!=m->input.owner.runtimeOwnerEpoch||optionEpoch.load(std::memory_order_acquire)!=m->optionEpoch;
+             if(stale){r.finalDrain[i].reset();continue;}
+             if(!m->identityExported)continue;
+             std::unique_lock slots(m->threadMutex,std::try_to_lock);if(!slots){complete=false;continue;}
+             bool finished=true;
+             size_t joined{},interrupted{},ready{},consumed{},disabledStack{},unknownStack{},enabledStack{};
+             uint64_t minStackBytes=UINT64_MAX;
+             for(auto&s:m->threads)if(s){
+                 const bool hostJoined=s->hostJoined.load(std::memory_order_acquire);
+                 const auto state=s->state.load(std::memory_order_acquire);
+                 if(!hostJoined||(state==2&&!m->eventPublished))finished=false;
+                 if(hostJoined){
+                     ++joined;if(state==1)++interrupted; // no payload read, never reset
+                     if(s->signalStack==GuestSlot::SignalStack::Disabled)++disabledStack;
+                     if(s->signalStack==GuestSlot::SignalStack::Unknown)++unknownStack;
+                     if(s->signalStack==GuestSlot::SignalStack::Available){++enabledStack;minStackBytes=std::min(minStackBytes,s->signalStackBytes);}
+                 }
+                 if(state==2)++ready;
+                 if(state==3)++consumed;
+             }
+             if(finished&&!m->retirementExported){
+                 const auto joinedText=std::to_string(joined),writingText=std::to_string(interrupted),readyText=std::to_string(ready),consumedText=std::to_string(consumed);
+                 const auto disabledText=std::to_string(disabledStack),unknownText=std::to_string(unknownStack);
+                 const auto enabledText=std::to_string(enabledStack),stackBytesText=enabledStack?std::to_string(minStackBytes):"unavailable";
+                 const std::pair<std::string_view,std::string_view> fields[]{
+                     {"retirement_scope","owned_module_after_process_teardown"},{"host_joined_slots",joinedText},
+                     {"interrupted_writing_slots",writingText},{"unexported_ready_slots",readyText},{"consumed_slots",consumedText},
+                     {"signal_stack_disabled_slots",disabledText},{"signal_stack_unknown_slots",unknownText},
+                     {"signal_stack_enabled_slots",enabledText},{"signal_stack_min_enabled_bytes",stackBytesText},
+                     {"signal_stack_qualification","read_only_probe_not_fault_delivery_proof"},
+                     {"writing_payload_read","false"},{"slot_address_reused","false"},{"mapping_quiescence_proven","false"}};
+                 m->retirementExported=EmitForModuleOwner(m->input.owner,"module_runtime","MODULE_RUNTIME_RETIREMENT",fields,&optionEpoch,m->optionEpoch);
+                 if(!m->retirementExported)complete=false;
+             }
+             if(finished&&m->retirementExported)r.finalDrain[i].reset();
+         }}
         return complete;
     }catch(...){return false;}
 }
 bool Register(const std::shared_ptr<Module> &module){auto&r=Get();std::unique_lock lock(r.mutex,std::try_to_lock);if(!lock)return false;for(auto&w:r.modules)if(w.expired()){w=module;return true;}return false;}
+void FinalHandoff(const std::shared_ptr<Module> &module) noexcept {
+    if(!module)return;
+    auto&r=Get();std::lock_guard lock(r.mutex);
+    // Stop/opt-out already closed this sink: do not create an undrainable hold.
+    // Running threads still pin Module with their aliased slot handles.
+    if(module->input.owner.runtimeOwnerEpoch!=ownerEpoch.load(std::memory_order_acquire)||module->optionEpoch!=optionEpoch.load(std::memory_order_acquire))return;
+    for(size_t i{};i<r.modules.size();++i)if(r.modules[i].lock()==module){r.finalDrain[i]=module;return;}
+}
+void CloseModulesForOwner() noexcept {
+    auto&r=Get();std::lock_guard lock(r.mutex);
+    const auto owner=ownerEpoch.load(std::memory_order_acquire);
+    for(auto&w:r.modules)if(auto m=w.lock();m&&m->input.owner.runtimeOwnerEpoch==owner){
+        m->stopReason.store(uint64_t(StopReason::OwnerChanged),std::memory_order_relaxed);
+        m->active.store(0,std::memory_order_release);
+    }
+}
 bool Overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m){return n&&m&&(UINT64_MAX-a<n||UINT64_MAX-b<m||(a<b+m&&b<a+n));}
 }
 const Profile &SdkProfile() noexcept {
@@ -111,7 +179,7 @@ std::array<std::shared_ptr<Module>,16> FillRegistryForTest() {
     std::array<std::shared_ptr<Module>,16> owners;
     for(auto &owner:owners)owner=std::make_shared<Module>();
     auto &registry=Get();std::lock_guard lock(registry.mutex);
-    for(size_t i{};i<owners.size();++i)registry.modules[i]=owners[i];
+    for(size_t i{};i<owners.size();++i){registry.finalDrain[i].reset();registry.modules[i]=owners[i];}
     return owners;
 }
 void HoldRegistryForTest(std::atomic<bool> &entered,const std::atomic<bool> &release) {
@@ -125,14 +193,17 @@ void ConfigureIdentity(bool enabled) noexcept {
     while(!optionEpoch.compare_exchange_weak(old,((old+2)&~uint64_t(1))|(enabled?1:0),std::memory_order_acq_rel)) {}
     const auto &profile=SdkProfile();
     image::Configure(enabled,{profile.requests.data(),profile.preimage.windowCount});
-    drainCallback.store(enabled?&DrainModules:nullptr,std::memory_order_release);
+    // Once used, retain cleanup callbacks across opt-out so final handoffs are
+    // discarded/retired on the writer instead of leaking an old generation.
+    // Never-enabled production sessions retain the original null fast path.
+    if(enabled){closeOwnerCallback.store(&CloseModulesForOwner,std::memory_order_release);drainCallback.store(&DrainModules,std::memory_order_release);}
 }
 bool IdentityRequested() noexcept{return optionEpoch.load(std::memory_order_acquire)&1;}
 ProcessObservation::ProcessObservation() noexcept:profile(&SdkProfile()){}
 #ifdef PINE_DIAG_RUNTIME_TEST
 ProcessObservation::ProcessObservation(const Profile &p,Domain d,bool enabled) noexcept:profile(&p),domain(d),controlledExecution(enabled){}
 #endif
-ProcessObservation::~ProcessObservation(){Invalidate(StopReason::ProcessExit);}
+ProcessObservation::~ProcessObservation(){Invalidate(StopReason::ProcessExit);FinalHandoff(storage);}
 void ProcessObservation::Invalidate(StopReason reason) noexcept {
     admission.exchange(2,std::memory_order_acq_rel);
     closed.store(true,std::memory_order_release);
@@ -140,7 +211,8 @@ void ProcessObservation::Invalidate(StopReason reason) noexcept {
 }
 void ProcessObservation::BeforeMappingMutation(uint64_t start,uint64_t size) noexcept {
     if(auto*m=published.load(std::memory_order_acquire);m&&m->active.load(std::memory_order_acquire)==1)
-        if(Overlap(start,size,m->moduleBase,m->textSize)||Overlap(start,size,m->roBase,m->roSize))Invalidate(StopReason::MappingChanged);
+        if(Overlap(start,size,m->moduleBase,m->textSize)||Overlap(start,size,m->roBase,m->roSize)||
+           Overlap(start,size,m->patchBase,m->patchSize))Invalidate(StopReason::MappingChanged);
 }
 bool ProcessObservation::Validated()const noexcept {auto*m=published.load(std::memory_order_acquire);return !closed.load(std::memory_order_acquire)&&admission.load(std::memory_order_acquire)==1&&m&&m->active.load(std::memory_order_acquire)==1&&m->optionEpoch==optionEpoch.load(std::memory_order_acquire)&&m->input.owner.runtimeOwnerEpoch==ownerEpoch.load(std::memory_order_acquire);}
 ScopedLoad::ScopedLoad(ProcessObservation &p,const image::Record *record,std::string_view name) noexcept {
@@ -179,7 +251,8 @@ std::shared_ptr<GuestSlot> ProcessObservation::AttachThread(uint64_t id) noexcep
             const auto serial=threadSerial.fetch_add(1,std::memory_order_relaxed)+1;if(!serial)return {};
             auto slot=std::make_shared<GuestSlot>();slot->optionGate=&optionEpoch;slot->expectedOption=module.optionEpoch;
             slot->ownerGate=&ownerEpoch;slot->expectedOwner=module.input.owner.runtimeOwnerEpoch;slot->moduleActive=&module.active;
-            slot->guestThread=id;slot->threadGeneration=serial;entry=slot;return slot;
+            slot->guestThread=id;slot->threadGeneration=serial;entry=slot;
+            return std::shared_ptr<GuestSlot>(storage,slot.get());
         }
     }catch(...){}
     return {};
@@ -215,7 +288,7 @@ void ScopedLoad::Mapped(std::span<uint8_t> text,std::span<const uint8_t> ro,uint
         if(beforePublication)beforePublication(*module);
 #endif
         // Admission may fail on capacity or try-lock contention. Reserve it
-        // before touching either text or stub. The worker ignores this weak
+        // before touching either text or stub. The worker ignores this
         // pending entry until all immutable fields are release-published below.
         if(!Register(module))throw StopReason::Capacity;
         if(load->reservation){
@@ -229,6 +302,13 @@ void ScopedLoad::Mapped(std::span<uint8_t> text,std::span<const uint8_t> ro,uint
             __builtin___clear_cache(reinterpret_cast<char*>(text.data()),reinterpret_cast<char*>(text.data()+text.size()));
             __builtin___clear_cache(reinterpret_cast<char*>(base),reinterpret_cast<char*>(base+text.size()));
             module->observerInstalled=true;
+            module->patchBase=reservation;module->patchSize=patch.size();
+            std::copy_n(stub.begin(),module->installedStub.size(),module->installedStub.begin());
+            for(size_t i{};i<source.windowCount;++i){
+                auto&copy=module->installedWindows[i];copy=module->loadedWindows[i];
+                const auto bytes=copy.va<module->textSize?std::span<const uint8_t>(text).subspan(copy.va,copy.size):ro.subspan(copy.va-source.segments[1].va,copy.size);
+                std::copy(bytes.begin(),bytes.end(),copy.bytes.begin());copy.hash=image::Sha256(bytes);
+            }
         }
         p.storage=module;p.published.store(module.get(),std::memory_order_release);
         uint64_t pending=0;

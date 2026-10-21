@@ -6,7 +6,8 @@
 namespace skyline::diagnostics::runtime {
 // Written only by the owning Guest thread. Never reset/reused, even after exit.
 // A normal worker may read payload only after acquire state==2. Interrupted
-// Writing is not a snapshot. Both gate atomics and module storage outlive join.
+// Writing is not a snapshot. The aliased thread handle pins its Module through
+// actual host completion; running=false and a scheduler pause prove neither.
 struct alignas(64) GuestSlot {
     std::atomic<uint64_t> state{}; // 0 empty,1 writing,2 release-ready,3 consumed
     const std::atomic<uint64_t> *optionGate{};
@@ -16,9 +17,15 @@ struct alignas(64) GuestSlot {
     const std::atomic<uint64_t> *moduleActive{};
     uint64_t x0{},lr{},sp{},observerPc{};
     uint64_t guestThread{},threadGeneration{};
-    std::atomic<bool> retired{};
+    std::atomic<bool> retired{}; // Guest cannot resume: common longjmp return/Run loop exit
+    std::atomic<bool> hostReturned{}; // ThreadEntrypoint AND its exit tail have returned
+    std::atomic<bool> hostJoined{}; // backing std::thread joined, or synchronous Start returned
+    uint64_t signalStackBytes{}; // observed at ordinary Init, never configured in a fault
+    enum class SignalStack : uint64_t { Unknown, Disabled, Available };
+    SignalStack signalStack{SignalStack::Unknown};
 };
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
+static_assert(std::atomic<bool>::is_always_lock_free);
 static_assert(offsetof(GuestSlot,optionGate)==8&&offsetof(GuestSlot,expectedOption)==16);
 static_assert(offsetof(GuestSlot,ownerGate)==24&&offsetof(GuestSlot,expectedOwner)==32);
 static_assert(offsetof(GuestSlot,moduleActive)==40&&offsetof(GuestSlot,x0)==48);

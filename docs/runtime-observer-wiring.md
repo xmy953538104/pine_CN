@@ -1,5 +1,7 @@
 # Load-owned NSO identity and a gated NCE callsite observer
 
+The next ownership/identity changes on the built 8e659d8a baseline are described in [runtime-observer-lifetime.md](runtime-observer-lifetime.md), including actual host completion fences, final writer ownership, new boundary tests and the still-open RWX/Android/rtld gates.
+
 This PR extends accepted PR24. It does not replace the PR22 APK or modify an NSP.
 
 The production `LoadNso` → `LoadExecutable` path retains owned full 32-byte Build ID, original unpadded segment hashes/layout, and bounded windows. After NCE patching and mapping, it separately verifies actual mapped text/rodata windows while loading synchronously, before Guest admission. Export explicitly distinguishes preimage, post-NCE/pre-observer windows and any installed observer bytes. Existing symbol spans are never used for identity.

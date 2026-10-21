@@ -149,8 +149,9 @@ namespace skyline::kernel::type {
             if (self) {
                 lock.unlock();
                 ThreadEntrypoint();
+                DiagnosticHostReturned();
             } else {
-                thread = std::thread(&KThread::ThreadEntrypoint, this);
+                thread = std::thread([this] { ThreadEntrypoint(); DiagnosticHostReturned(); });
             }
         }
     }
@@ -268,18 +269,39 @@ namespace skyline::kernel::type {
         }
     }
 
+    void KThread::DiagnosticHostReturned() {
+        if(!diagnosticSlotStorage)return;
+        std::scoped_lock lock{statusMutex};
+        diagnosticSlotStorage->retired.store(true,std::memory_order_release);
+        diagnosticSlotStorage->hostReturned.store(true,std::memory_order_release);
+        statusCondition.notify_all();
+    }
     void KThread::JoinBeforeDiagnosticContextDestruction() {
         if(!diagnosticSlotStorage)return; // exact existing teardown when disabled
         Kill(true);
         if(thread.joinable())thread.join();
+        else {
+            // Start(true) has no std::thread to join. running=false precedes
+            // Signal/name restoration; wait until its caller actually returns.
+            std::unique_lock lock{statusMutex};
+            statusCondition.wait(lock,[this]{return diagnosticSlotStorage->hostReturned.load(std::memory_order_acquire);});
+        }
         diagnosticSlotStorage->retired.store(true,std::memory_order_release);
+        diagnosticSlotStorage->hostJoined.store(true,std::memory_order_release);
     }
-    KNceThread::~KNceThread(){JoinBeforeDiagnosticContextDestruction();}
+    KNceThread::~KNceThread(){JoinBeforeDiagnosticContextDestruction();ctx.diagnosticSlot=nullptr;}
     void KNceThread::Init() {
         ctx.tpidrroEl0 = tlsRegion;
         ctx.state = &state;
         diagnosticSlotStorage=process.diagnosticObservation.AttachThread(id);
         ctx.diagnosticSlot=diagnosticSlotStorage.get();
+        if(diagnosticSlotStorage){
+            stack_t stack{};
+            if(!sigaltstack(nullptr,&stack)){
+                diagnosticSlotStorage->signalStackBytes=stack.ss_size;
+                diagnosticSlotStorage->signalStack=(stack.ss_flags&SS_DISABLE)?diagnostics::runtime::GuestSlot::SignalStack::Disabled:diagnostics::runtime::GuestSlot::SignalStack::Available;
+            }
+        }
     }
 
     void KNceThread::Run() {

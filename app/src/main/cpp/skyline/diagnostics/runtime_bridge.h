@@ -7,6 +7,10 @@ namespace skyline::diagnostics::runtime {
 // Normal diagnostics worker only; no Guest callback ever invokes formatting.
 using Drain = bool (*)() noexcept;
 inline std::atomic<Drain> drainCallback{};
+using CloseOwner = void (*)() noexcept;
+// Ordinary diagnostics lifecycle only. Revokes admission before the OLD owner
+// is drained; no signal/Guest producer calls or waits on this callback.
+inline std::atomic<CloseOwner> closeOwnerCallback{};
 // Never reset/reused; Guest slots compare the owner generation seeded at Init.
 inline std::atomic<uint64_t> ownerEpoch{};
 inline std::atomic<uint64_t> drainRequested{},drainCompleted{};

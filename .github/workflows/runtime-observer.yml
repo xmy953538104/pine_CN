@@ -37,6 +37,8 @@ jobs:
           dpkg-query -W qemu-user g++-aarch64-linux-gnu
       - name: Production identity lifecycle and admission regressions
         run: python3 tools/tests/test-runtime-observer.py
+      - name: Execute production thread and owner retirement boundaries
+        run: python3 tools/tests/test-runtime-lifecycle.py --aarch64 --output lifecycle-evidence
       - name: Assemble exact producer and compare production words
         run: |
           aarch64-linux-gnu-gcc -c app/src/main/cpp/skyline/nce/observation_stub.S -o /tmp/producer.o
@@ -58,7 +60,12 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+      - name: Compile the same boundaries against Android bionic without building an APK
+        run: >-
+          python3 tools/tests/test-runtime-lifecycle.py --aarch64 --compile-only
+          --cxx "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++"
+          --output lifecycle-ndk-evidence
       - uses: gradle/actions/setup-gradle@v4
       - name: Actual Diagnostics exporter preserves controlled runtime rows
         env:
@@ -75,6 +82,7 @@ jobs:
           if test -f runtime-evidence/export.json; then cat runtime-evidence/export.json; fi
           find runtime-evidence -type f -exec sha256sum {} + > runtime-evidence-sha256.txt
           cat runtime-evidence-sha256.txt
+          find lifecycle-evidence lifecycle-ndk-evidence -type f -exec sha256sum {} + > lifecycle-evidence-sha256.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -86,4 +94,7 @@ jobs:
             runtime-evidence/*.zip
             runtime-evidence/unit-task-graph.txt
             runtime-evidence-sha256.txt
+            lifecycle-evidence/
+            lifecycle-ndk-evidence/
+            lifecycle-evidence-sha256.txt
             app/build/test-results/testFullDebugUnitTest/

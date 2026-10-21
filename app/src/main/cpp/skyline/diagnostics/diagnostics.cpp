@@ -63,6 +63,7 @@ struct Sink {
     std::atomic<bool> verbose{};
     std::atomic<uint64_t> accepted{}, dropped{}, written{}, diskErrors{};
     std::atomic<uint64_t> completedTicket{};
+    std::atomic<uint64_t> runtimeOwnerDrainTimeouts{};
     uint32_t producerGeneration{}; // lifecycle mutex; prevents Start/Stop ABA for late registration
     LegacyErrorBudget audioErrors, shaderErrors, guestProtocol;
     std::atomic<uint64_t> guestProtocolSuppressed{};
@@ -629,6 +630,7 @@ void Run(Sink &s) noexcept {
             {"resource_window_last_failure_reason", ResourceWindowFailureReasonName(resources.lastWindowFailure.reason)},
             {"resource_window_last_error_code", ResourceWindowErrnoName(resources.lastWindowFailure.error)},
             {"resource_window_last_errno", std::to_string(resources.lastWindowFailure.error)},
+            {"runtime_final_drain_timeouts", std::to_string(s.runtimeOwnerDrainTimeouts.load())},
             {"admission_policy", "bounded_mpsc_64_cas_and_64_context_attempts_no_mutex_wait"}};
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
@@ -650,7 +652,20 @@ void Run(Sink &s) noexcept {
         }
     }
 }
+// lifecycle held, mutex NOT held. Close the module gate, then let the existing
+// writer acquire/serialize owned Ready records under the old sink owner. This
+// bounded ordinary-thread drain is not a Guest quiescence or Writing proof.
+void DrainRuntimeOwner(Sink &s) {
+    if(auto close=runtime::closeOwnerCallback.load(std::memory_order_acquire))close();
+    if(!IsEnabled(s)||!s.worker.joinable()||!runtime::drainCallback.load(std::memory_order_acquire))return;
+    const auto request=runtime::drainRequested.fetch_add(1,std::memory_order_acq_rel)+1;
+    std::unique_lock lock(s.progressMutex);
+    s.wake.notify_one();
+    if(!s.progress.wait_for(lock,std::chrono::milliseconds(250),[&]{return runtime::drainCompleted.load(std::memory_order_acquire)>=request||s.diskErrors;}))
+        ++s.runtimeOwnerDrainTimeouts;
+}
 void StopLocked(Sink &s) {
+    DrainRuntimeOwner(s);
     runtime::ownerEpoch.fetch_add(1,std::memory_order_acq_rel);
     resourceEnabled.store(false, std::memory_order_relaxed);
     // Emit is bounded and never waits for the writer. Only this ordinary-thread
@@ -895,7 +910,7 @@ bool Start(const Config &config) noexcept {
         if (config.directory.empty() || config.sessionId.empty() || !config.queueCapacity || config.queueCapacity > 65536 || config.maxFiles < 1 || config.maxFiles > 16 || config.maxFileBytes < 65536) return false;
         try {
             { std::lock_guard lock(s.mutex); s.config = config; s.config.sessionId = Sanitize(config.sessionId, 128); s.config.processRunId = Sanitize(config.processRunId, 128); s.queue.Reset(config.queueCapacity); s.stage.clear(); s.stopping = false; PublishContext(s); }
-            s.accepted = 0; s.dropped = 0; s.written = 0; s.completedTicket = 0; s.diskErrors = 0;
+            s.accepted = 0; s.dropped = 0; s.written = 0; s.completedTicket = 0; s.diskErrors = 0; s.runtimeOwnerDrainTimeouts = 0;
             s.droppedContention = 0; s.droppedFull = 0; s.droppedAllocation = 0; s.droppedDisk = 0;
             s.criticalDropped = 0; s.snapshotErrors = 0; s.snapshotEvictions = 0;
             s.audioErrors.Reset(); s.shaderErrors.Reset(); s.guestProtocol.Reset(); s.guestProtocolSuppressed = 0; s.legacySuppressed = 0; s.verbose = config.verbose;
@@ -1010,7 +1025,10 @@ void SetEffectiveExeFs(std::string_view programId, std::string_view contentId, s
 }
 void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
     try {
-        auto value = Sanitize(launchId, 128); auto &s = Get(); std::lock_guard lock(s.mutex);
+        auto value = Sanitize(launchId, 128); auto &s = Get();
+        std::lock_guard life(s.lifecycle);
+        DrainRuntimeOwner(s);
+        std::lock_guard lock(s.mutex);
         runtime::ownerEpoch.fetch_add(1,std::memory_order_acq_rel);
         s.observationEpoch.fetch_add(1); // Reject a timer snapshot during the reset/publication boundary.
         try {

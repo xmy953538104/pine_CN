@@ -24,10 +24,17 @@ namespace skyline::kernel::type {
 
     KProcess::~KProcess() {
         diagnosticObservation.Invalidate(diagnostics::runtime::StopReason::ProcessExit);
-        std::scoped_lock guard{threadMutex};
-        disableThreadCreation = true;
+        {
+            std::scoped_lock guard{threadMutex};
+            disableThreadCreation = true;
+            for (const auto &thread : threads)
+                thread->Kill(true);
+        }
+        // Kill(true) only observes running=false. Do not hold threadMutex while
+        // waiting for an observed thread's Signal/name-restoration exit tail.
+        // No slot => original teardown; no scheduling/join policy change there.
         for (const auto &thread : threads)
-            thread->Kill(true);
+            thread->JoinBeforeDiagnosticContextDestruction();
     }
 
     void KProcess::Kill(bool join, bool all, bool disableCreation) {

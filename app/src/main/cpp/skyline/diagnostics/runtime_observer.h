@@ -42,10 +42,15 @@ public:
     ProcessObservation(const ProcessObservation &) = delete;
     void SealLoads() noexcept { loadsSealed.store(true, std::memory_order_release); }
     void Invalidate(StopReason reason) noexcept;
+    // Revocation only, NOT a mapping lease/quiescence acknowledgement. Existing
+    // RWX aliases and Guest stores remain unmediated; production stays closed.
     void BeforeMappingMutation(uint64_t start, uint64_t size) noexcept;
+    void BeforeHostWrite(uint64_t start, uint64_t size) noexcept { BeforeMappingMutation(start, size); }
     bool Validated() const noexcept;
     // No runtime address read: owned metadata only.
     std::shared_ptr<Module> Binding() const noexcept { return storage; }
+    // Aliases the Module's control block, keeping moduleActive and its slot
+    // alive even when KProcess/ProcessObservation has already been destroyed.
     std::shared_ptr<GuestSlot> AttachThread(uint64_t guestThread) noexcept;
 };
 // Only exists on the synchronous NsoLoader -> LoadExecutable call stack. It
@@ -77,15 +82,20 @@ void HoldRegistryForTest(std::atomic<bool> &entered,const std::atomic<bool> &rel
 struct Module {
     image::Record input;
     std::array<image::Window,image::MaxWindows> loadedWindows;
+    std::array<image::Window,image::MaxWindows> installedWindows;
+    std::array<uint8_t,208> installedStub{};
     uint64_t moduleBase{}, textSize{}, roBase{}, roSize{}, optionEpoch{};
+    uint64_t patchBase{}, patchSize{}; // includes NCE/observer patch reservation
     Domain domain{};
     std::atomic<uint64_t> active{2}, stopReason{}, publishedReady{}; // 2 pending,1 active,0 closed
     bool cachePublished{}, identityExported{};
     bool observerInstalled{}, eventPublished{};
+    bool retirementExported{}; // writer only
     uint64_t callPc{},pltPc{},noCallbackPc{},insufficientPc{};
     std::mutex threadMutex;
     std::array<std::shared_ptr<GuestSlot>,256> threads;
     nce::ObservationPatch observerPatch;
-    // Post-NCE/pre-observer loaded copies, never a retained host mapping.
+    // Separate pre-NCE input, post-NCE/pre-observer and post-observer copies.
+    // None establish continuous integrity while Guest/host RWX writes bypass us.
 };
 }

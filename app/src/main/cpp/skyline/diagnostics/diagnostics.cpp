@@ -703,8 +703,10 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
 bool TryModuleOwner(ModuleOwner &output) noexcept {
     try {
         auto &s = Get();
-        Producer producer(s); // pin configuration against Stop/Start
-        if (!producer) return false;
+        // Ordinary loader thread only. Both locks are try-only: this metadata
+        // read never joins a producer retry loop or waits for lifecycle I/O.
+        std::unique_lock life(s.lifecycle, std::try_to_lock);
+        if (!life) return false;
         std::unique_lock lock(s.mutex, std::try_to_lock);
         if (!lock || !IsEnabled(s) || s.config.sessionId.empty() ||
             s.config.processRunId.empty() || s.activeLaunchId.empty()) return false;

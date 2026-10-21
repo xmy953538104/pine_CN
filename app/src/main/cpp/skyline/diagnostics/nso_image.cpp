@@ -27,6 +27,30 @@ bool NameValid(std::string_view name) {
 }
 }
 bool Enabled() noexcept { return enabled.load(std::memory_order_relaxed); }
+PreimageMatch VerifyPreimage(const Record &record, const ExpectedPreimage &expected) noexcept {
+    const auto known = [](const Digest &hash) {
+        return std::any_of(hash.begin(), hash.end(), [](uint8_t byte) { return byte != 0; });
+    };
+    if (!known(expected.buildId) || !expected.windowCount || expected.windowCount > MaxWindows)
+        return PreimageMatch::UnknownExpected;
+    for (const auto &hash : expected.segmentHashes)
+        if (!known(hash)) return PreimageMatch::UnknownExpected;
+    for (size_t i{}; i < expected.windowCount; ++i)
+        if (!known(expected.windows[i].hash) || !expected.windows[i].size || expected.windows[i].size > MaxWindowBytes)
+            return PreimageMatch::UnknownExpected;
+    if (record.buildId != expected.buildId) return PreimageMatch::BuildIdMismatch;
+    for (size_t i{}; i < 3; ++i)
+        if (record.segments[i].computedHash != expected.segmentHashes[i]) return PreimageMatch::SegmentMismatch;
+    if (record.windowCount != expected.windowCount) return PreimageMatch::WindowMismatch;
+    for (size_t i{}; i < expected.windowCount; ++i) {
+        const auto &actual = record.windows[i];
+        const auto &target = expected.windows[i];
+        if (actual.va != target.va || actual.size != target.size || actual.hash != target.hash)
+            return PreimageMatch::WindowMismatch;
+    }
+    if (!record.moduleBase || !record.loadReservationSize) return PreimageMatch::Unpublished;
+    return PreimageMatch::MatchOnly;
+}
 Result Configure(bool value, std::span<const WindowRequest> windows) noexcept {
     if (windows.size() > MaxWindows) return Result::WindowBounds;
     for (auto request : windows)

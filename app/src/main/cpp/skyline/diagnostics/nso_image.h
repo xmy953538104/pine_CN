@@ -46,6 +46,18 @@ struct Record {
     // These bytes are not proof of the later patched/relocated Guest mapping.
     bool decompressionResultObserved{false}, liveBytesVerified{false};
 };
+struct ExpectedWindow { uint32_t va{}, size{}; Digest hash{}; };
+struct ExpectedPreimage {
+    Digest buildId{};
+    std::array<Digest, 3> segmentHashes;
+    std::array<ExpectedWindow, MaxWindows> windows;
+    size_t windowCount{};
+};
+enum class PreimageMatch { MatchOnly, UnknownExpected, BuildIdMismatch, SegmentMismatch, WindowMismatch, Unpublished };
+// MatchOnly authenticates the retained input against caller-supplied evidence,
+// never the live relocated text/GOT or an actual function traversal. It is NOT
+// a runtime patch authorization. No expected game identity is bundled here.
+PreimageMatch VerifyPreimage(const Record &record, const ExpectedPreimage &expected) noexcept;
 enum class Result {
     Ok, Disabled, Busy, OwnerUnavailable, InvalidName, HashBudget,
     SegmentBounds, WindowBounds, StaleOwner, MappingBounds, Full, NotFound,

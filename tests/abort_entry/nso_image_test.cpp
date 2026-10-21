@@ -48,6 +48,16 @@ int main(int argc,char **argv) {
     CHECK(Publish(std::move(pending),process,0x7100000000,0x4000,0x7100001000)==Result::Ok);
     Record record;CHECK(Snapshot(owner,process,"sdk",record)==Result::Ok);
     CHECK(record.moduleBase==0x7100001000&&record.segments[1].mappedStart==0x7100002000);
+    ExpectedPreimage expected;expected.buildId=input.buildId;expected.windowCount=record.windowCount;
+    for(size_t i{};i<3;++i)expected.segmentHashes[i]=copied.segments[i].computedHash;
+    for(size_t i{};i<record.windowCount;++i)expected.windows[i]={record.windows[i].va,record.windows[i].size,record.windows[i].hash};
+    CHECK(VerifyPreimage(record,expected)==PreimageMatch::MatchOnly);
+    auto changed=expected;changed.buildId={};CHECK(VerifyPreimage(record,changed)==PreimageMatch::UnknownExpected);
+    changed=expected;changed.buildId[0]^=1;CHECK(VerifyPreimage(record,changed)==PreimageMatch::BuildIdMismatch);
+    changed=expected;changed.segmentHashes[1][0]^=1;CHECK(VerifyPreimage(record,changed)==PreimageMatch::SegmentMismatch);
+    changed=expected;changed.windows[0].va+=4;CHECK(VerifyPreimage(record,changed)==PreimageMatch::WindowMismatch);
+    changed=expected;changed.windows[0].hash[0]^=1;CHECK(VerifyPreimage(record,changed)==PreimageMatch::WindowMismatch);
+    CHECK(VerifyPreimage(copied,expected)==PreimageMatch::Unpublished);
     CHECK(LiveGotCapability()==Result::ResolverProtocolUnavailable);
     auto otherProcess=std::make_shared<int>(42);CHECK(Snapshot(owner,otherProcess,"sdk",record)==Result::NotFound);
     storage[0]=saved; // pending spans remain caller-owned; only the record owns evidence

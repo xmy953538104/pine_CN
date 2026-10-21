@@ -300,6 +300,26 @@ int main(int argc,char**argv){
         auto text=Read(dir);auto pos=text.find("NVN_ABORT_CALLSITE_OBSERVED");assert(pos!=std::string::npos&&text.find("NVN_ABORT_CALLSITE_OBSERVED",pos+1)==std::string::npos);
         assert(text.find("old-launch",pos)!=std::string::npos);assert(weak.expired());
     }
+    // The writer cannot finish its old-owner drain. Stop must keep a bounded
+    // admission wait, report the loss, and never relabel the late old Ready.
+    Begin(out/"stop-drain-timeout","stop-drain-timeout");
+    {
+        writerBlocked=false;releaseWriter=false;diagnostics::testing::hook=&PauseWriter;
+        diagnostics::Emit("lifecycle","LIFECYCLE_WRITER_BARRIER");Until([]{return writerBlocked.load(std::memory_order_acquire);});
+        Fixture fixture;std::weak_ptr<r::Module>weak;
+        {
+            auto process=fixture.Load();auto module=process->diagnosticObservation.Binding();weak=module;
+            auto slot=process->diagnosticObservation.AttachThread(102);assert(slot);
+            slot->x0=module->noCallbackPc;slot->lr=module->callPc+4;
+            slot->retired=true;slot->hostReturned=true;slot->hostJoined=true;slot->state.store(2,std::memory_order_release);
+        }
+        const auto oldOwner=r::ownerEpoch.load(std::memory_order_acquire);
+        std::thread stopper([]{diagnostics::Stop();});
+        Until([&]{return r::ownerEpoch.load(std::memory_order_acquire)!=oldOwner;}); // only after the bounded drain times out
+        releaseWriter.store(true,std::memory_order_release);stopper.join();diagnostics::testing::hook=nullptr;
+        assert(weak.expired());auto text=Read(out/"stop-drain-timeout");
+        assert(text.find("NVN_ABORT_CALLSITE_OBSERVED")==std::string::npos&&text.find("runtime_final_drain_timeouts")!=std::string::npos);
+    }
     Begin(out/"lifetime-capacity","lifetime-capacity");
     {
         Fixture fixture;auto process=fixture.Load();std::weak_ptr<r::Module>weak=process->diagnosticObservation.Binding();

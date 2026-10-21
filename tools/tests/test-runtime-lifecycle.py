@@ -89,6 +89,10 @@ def main():
         assert retirement[0]['fields']['writing_payload_read'] == 'false'
         assert not any(row['event'] == 'NVN_ABORT_CALLSITE_OBSERVED' for row in rows)
         metadata['writer_assertions'] = cases | {'lifetime-capacity': retirement[0]['fields']}
+        rows = [json.loads(line) for line in (out / 'logs/stop-drain-timeout/diagnostics-0.jsonl').read_text().splitlines()]
+        assert not any(row['event'] == 'NVN_ABORT_CALLSITE_OBSERVED' for row in rows)
+        assert any(row['fields'].get('runtime_final_drain_timeouts') == '1' for row in rows)
+        metadata['writer_assertions']['stop-drain-timeout'] = {'old_ready_discarded': True, 'reported_timeouts': 1}
     metadata['execution'] = 'NDK compile only' if args.compile_only else 'QEMU Linux-user AArch64' if args.aarch64 else 'Linux POSIX host'
     metadata['binary_sha256'] = hashlib.sha256((out / 'lifecycle').read_bytes()).hexdigest()
     metadata['writer_jsonl_sha256'] = {str(path.relative_to(out)): hashlib.sha256(path.read_bytes()).hexdigest()

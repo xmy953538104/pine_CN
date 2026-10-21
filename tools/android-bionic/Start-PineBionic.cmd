@@ -9,7 +9,7 @@ if errorlevel 1 (
   pause
   exit /b 73
 )
-"%~dp0host\node.exe" "%~dp0host\run-once.js" --bundle "%~dp0" --output "%PINE_BOUNDARY_BOOT%" 2>"%PINE_BOUNDARY_BOOT%\launcher-stderr.log"
+"%~dp0host\node.exe" "%~dp0host\run-once.js" --bundle "%~dp0." --output "%PINE_BOUNDARY_BOOT%" 2>"%PINE_BOUNDARY_BOOT%\launcher-stderr.log"
 set "PINE_BOUNDARY_EXIT=%ERRORLEVEL%"
 >"%PINE_BOUNDARY_BOOT%\bootstrap.json" echo {"schema":1,"status":"HOST_COLLECTOR_EXIT_RECORDED","collector_exit_code":%PINE_BOUNDARY_EXIT%,"android_result":"consult nested result.json; bootstrap is not device proof"}
 echo.

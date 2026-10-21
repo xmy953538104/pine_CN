@@ -34,5 +34,28 @@ if ($bootstrap.Count -ne 1) { throw 'No unique wrapper failure directory' }
 if ($recorded -cnotcontains $bootstrap[0].FullName) { throw 'Output bootstrap path was not preserved' }
 $failure = Get-Content (Join-Path $bootstrap[0].FullName 'bootstrap.json') -Raw | ConvertFrom-Json
 if ($failure.collector_exit_code -ne 37) { throw 'Structured startup evidence lost exit37' }
+if ($env:OS -eq 'Windows_NT') {
+    $launcher = Join-Path $temp 'Start-PineBionic.cmd'
+    Copy-Item (Join-Path $PSScriptRoot '../android-bionic/Start-PineBionic.cmd') $launcher
+    $child = New-Object Diagnostics.Process
+    try {
+        $child.StartInfo.FileName = $env:ComSpec
+        $child.StartInfo.Arguments = '/d /s /c ""' + $launcher + '""'
+        $child.StartInfo.UseShellExecute = $false
+        $child.StartInfo.RedirectStandardInput = $true
+        $child.StartInfo.RedirectStandardOutput = $true
+        $child.StartInfo.RedirectStandardError = $true
+        [void]$child.Start()
+        $stdout = $child.StandardOutput.ReadToEndAsync(); $stderr = $child.StandardError.ReadToEndAsync()
+        $child.StandardInput.WriteLine('x'); $child.StandardInput.Close()
+        if (-not $child.WaitForExit(10000)) { $child.Kill(); throw 'CMD launcher did not finish' }
+        if ($child.ExitCode -ne 37) { throw ('CMD launcher lost exit37: ' + $stderr.Result + $stdout.Result) }
+    } finally { $child.Dispose() }
+    $recorded = [IO.File]::ReadAllLines($env:PINE_BOUNDARY_WRAPPER_TEST_ARGS, [Text.Encoding]::UTF8)
+    $index = [array]::IndexOf($recorded, '--bundle')
+    if ($index -lt 0 -or [IO.Path]::GetFullPath($recorded[$index + 1]) -cne $temp) { throw 'CMD trailing-backslash quoting corrupted bundle argv' }
+    $cmdResult = @(Get-ChildItem (Join-Path $temp 'results') -Filter 'bootstrap.json' -Recurse)
+    if ($cmdResult.Count -ne 1 -or (Get-Content $cmdResult[0].FullName -Raw | ConvertFrom-Json).collector_exit_code -ne 37) { throw 'CMD startup failure evidence missing' }
+}
 Write-Output 'PASS PowerShell AST, paths/argv and failure exit37; transport-only validation, NOT Android execution'
 exit 0

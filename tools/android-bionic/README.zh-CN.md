@@ -29,7 +29,7 @@ ADB 路径和输出位置可含空格。只有多设备/指定连接才需要 `-
 
 ## 回传结果
 
-窗口末尾会显示完整 `result.json` 路径和原始退出码。把该文件所在的整个 `results\pine-bionic-*` 随机子目录压缩后回传即可。它包含：
+窗口末尾会显示完整 `result.json` 路径和原始退出码。把显示的整个 `results\bootstrap-*` 随机目录压缩后回传即可；其中包含本次 `pine-bionic-*` 收集子目录。`bootstrap.json` 只记录 Windows 启动退出，不是设备通过证明；即使 Windows 运行时未能启动，也会保留它和错误。原生/传输结果在子目录中，包含：
 
 * `result.json`：设备/源码/哈希校验、唯一 run ID、ADB 与原生退出码、是否确实启动过、收集成功/失败及最终状态。
 * `device\android-result.json`：设备原生父进程的结果、各子进程退出码/信号和是否达到限时。

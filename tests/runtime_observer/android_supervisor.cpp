@@ -49,7 +49,9 @@ int Run(Outcome&test,const char*executable,const char*directory,const char*argum
         close(out);close(err);
         // Deadline belongs to this isolated child only. Never signal another
         // app or retry a crashed child. SIGALRM remains the default disposition.
-        signal(SIGALRM,SIG_DFL);alarm(ChildDeadline);
+        signal(SIGALRM,SIG_DFL);sigset_t deadlineSignal;sigemptyset(&deadlineSignal);sigaddset(&deadlineSignal,SIGALRM);
+        if(sigprocmask(SIG_UNBLOCK,&deadlineSignal,nullptr))_exit(125);
+        alarm(ChildDeadline);
         if(argument)execl(executable,executable,directory,argument,static_cast<char*>(nullptr));
         else execl(executable,executable,directory,static_cast<char*>(nullptr));
         _exit(127);

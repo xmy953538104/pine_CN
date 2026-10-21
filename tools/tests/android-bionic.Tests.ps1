@@ -26,8 +26,13 @@ $output = Join-Path $temp 'results with spaces'
 & $shellExecutable -NoLogo -NoProfile -File $collector -AdbPath $adb -Serial 'SERIAL:5555' -OutputDirectory $output
 if ($LASTEXITCODE -ne 37) { throw 'Wrapper swallowed the native process exit code' }
 $recorded = [IO.File]::ReadAllLines($env:PINE_BOUNDARY_WRAPPER_TEST_ARGS, [Text.Encoding]::UTF8)
-foreach ($expected in @($adb, 'SERIAL:5555', $output, '--bundle', $temp)) {
+foreach ($expected in @($adb, 'SERIAL:5555', '--bundle', $temp)) {
     if ($recorded -cnotcontains $expected) { throw ('Argument was not preserved: ' + $expected) }
 }
+$bootstrap = @(Get-ChildItem $output -Directory -Filter 'bootstrap-*')
+if ($bootstrap.Count -ne 1) { throw 'No unique wrapper failure directory' }
+if ($recorded -cnotcontains $bootstrap[0].FullName) { throw 'Output bootstrap path was not preserved' }
+$failure = Get-Content (Join-Path $bootstrap[0].FullName 'bootstrap.json') -Raw | ConvertFrom-Json
+if ($failure.collector_exit_code -ne 37) { throw 'Structured startup evidence lost exit37' }
 Write-Output 'PASS PowerShell AST, paths/argv and failure exit37; transport-only validation, NOT Android execution'
 exit 0

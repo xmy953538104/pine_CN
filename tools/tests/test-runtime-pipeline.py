@@ -22,9 +22,10 @@ def main():
     cxx=a.cxx or ('aarch64-linux-gnu-g++' if a.aarch64 else os.environ.get('CXX','c++'))
     assembly=CPP/'nce/guest.S' if a.aarch64 else out/'host-stubs.S'
     if not a.aarch64:assembly.write_text('.text\n.global SaveCtx\nSaveCtx:\n.fill 38,4,0xd503201f\n.global LoadCtx\nLoadCtx:\n.fill 36,4,0xd503201f\n.section .note.GNU-stack,"",@progbits\n')
-    command=[cxx,'-std=c++20','-O2','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-reorder','-pthread','-DPINE_DIAG_RUNTIME_TEST','-I'+str(ROOT/'tests/runtime_observer/stubs'),'-I'+str(CPP),'-I'+str(CPP/'diagnostics'),str(generated),str(CPP/'diagnostics/runtime_observer.cpp'),str(CPP/'diagnostics/nso_image.cpp'),str(CPP/'diagnostics/diagnostics.cpp'),str(CPP/'nce/observation.cpp'),str(assembly)]
+    command=[cxx,'-std=c++20','-O2','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-reorder','-pthread','-DPINE_DIAG_RUNTIME_TEST','-I'+str(ROOT/'tests/runtime_observer/stubs'),'-I'+str(ROOT/'tests/runtime_observer'),'-I'+str(CPP),'-I'+str(CPP/'diagnostics'),str(generated),str(CPP/'diagnostics/runtime_observer.cpp'),str(CPP/'diagnostics/nso_image.cpp'),str(CPP/'diagnostics/diagnostics.cpp'),str(CPP/'nce/observation.cpp'),str(assembly)]
+    command.append('-DPINE_BOUNDARY_SOURCE_COMMIT="'+subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()+'"')
     if a.aarch64:command.append(str(ROOT/'tests/runtime_observer/runtime_fixture.S'))
-    if 'android' in cxx:command.append('-llog')
+    if 'android' in cxx:command+=['-llog','-Wl,-z,max-page-size=16384']
     command+=['-o',str(out/'pipeline')]
     subprocess.run(command,check=True)
     run=['qemu-aarch64','-L',a.qemu_ld_prefix] if a.aarch64 else []

@@ -8,6 +8,7 @@
 #include <diagnostics/pending_signal.h>
 #include <diagnostics/runtime_bridge.h>
 #include <diagnostics/test_hooks.h>
+#include "fixture_report.h"
 #include <cxxabi.h>
 #include <csetjmp>
 #include <condition_variable>
@@ -27,6 +28,11 @@
 #define LOGE(...) ((void)0)
 #define LOGENF(...) ((void)0)
 #define TRACE_EVENT(...) ((void)0)
+namespace interrupted_fixture {
+inline std::atomic<bool>enabled{},faulted{},escapePrepared{},unprotected{},onAltStack{};
+inline std::atomic<uint64_t>faultPc{};
+inline uintptr_t guardedAddress{},altBegin{},altEnd{};
+}
 namespace fmt {template<class...A>std::string format(const char*,A...){return "HOS-test";}}
 namespace skyline {
 namespace r=diagnostics::runtime;
@@ -53,7 +59,18 @@ struct DeviceState {
     static inline thread_local std::shared_ptr<kernel::type::KThread>thread;
     kernel::Scheduler*scheduler{};kernel::type::KProcess*process{};Loader*loader{};
 };
-struct TrapManager {static inline bool handled{};static bool TrapHandler(u8*,bool){return handled;}};
+struct TrapManager {static inline bool handled{};static bool TrapHandler(u8*address,bool){
+    if(interrupted_fixture::enabled.load(std::memory_order_relaxed)&&uintptr_t(address)==interrupted_fixture::guardedAddress){
+        uint8_t marker{};const auto here=uintptr_t(&marker);
+        interrupted_fixture::onAltStack.store(here>=interrupted_fixture::altBegin&&here<interrupted_fixture::altEnd,std::memory_order_relaxed);
+        interrupted_fixture::faulted.store(true,std::memory_order_release);
+        // Deterministic test-only pause in an owned guard-page trap. No helper,
+        // allocation/IO/JNI/lock: main sends real asynchronous SIGINT, which
+        // abandons this frame through the extracted NCE longjmp path.
+        for(;;)asm volatile("":::"memory");
+    }
+    return handled;
+}};
 namespace nce {
 class NCE {public:struct ExitException:std::runtime_error{ExitException():std::runtime_error("exit"){} };
     static void SignalHandler(int,siginfo_t*,ucontext_t*,void**);
@@ -207,6 +224,34 @@ static void InstallActualGuestSignals(){
     action.sa_flags=SA_SIGINFO|SA_ONSTACK;
     assert(!sigaction(SIGINT,&action,nullptr));
 }
+static void GuardedGuestSignal(int number,siginfo_t*info,ucontext_t*context,void**tls){
+    if(number==SIGSEGV)interrupted_fixture::faultPc.store(context->uc_mcontext.pc,std::memory_order_relaxed);
+    nce::NCE::SignalHandler(number,info,context,tls);
+}
+static void NestedStop(int number,siginfo_t*info,ucontext_t*context){
+    auto*thread=static_cast<KNceThread*>(DeviceState::thread.get());void*tls=&thread->ctx;
+    nce::NCE::SignalHandler(number,info,context,&tls);
+    interrupted_fixture::escapePrepared.store(true,std::memory_order_release);
+    while(!interrupted_fixture::unprotected.load(std::memory_order_acquire))asm volatile("":::"memory");
+}
+static size_t GuardPage{};static uint8_t*GuardStorage{};
+static std::shared_ptr<r::GuestSlot>AllocateGuardedSlot(){
+    GuardStorage=static_cast<uint8_t*>(mmap(nullptr,GuardPage*2,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0));assert(GuardStorage!=MAP_FAILED);
+    auto*slot=new(GuardStorage+GuardPage-64)r::GuestSlot;
+    return {slot,[](r::GuestSlot*p){p->~GuestSlot();munmap(reinterpret_cast<uint8_t*>(p)+64-GuardPage,GuardPage*2);}};
+}
+class InterruptedThread:public KNceThread {
+public:
+    void*alternate{};size_t alternateSize{};
+    using KNceThread::KNceThread;
+    void Init()override{
+        stack_t stack{.ss_sp=alternate,.ss_flags=0,.ss_size=alternateSize};assert(!sigaltstack(&stack,nullptr));
+        r::slotAllocatorForTest=&AllocateGuardedSlot;KNceThread::Init();r::slotAllocatorForTest=nullptr;
+        interrupted_fixture::guardedAddress=uintptr_t(diagnosticSlotStorage.get())+64;
+        assert(diagnosticSlotStorage->signalStack==r::GuestSlot::SignalStack::Available);
+        assert(!mprotect(GuardStorage+GuardPage,GuardPage,PROT_NONE));
+    }
+};
 #endif
 static void Begin(const std::filesystem::path&dir,const char*session){
     diagnostics::Config c;c.directory=dir.string();c.sessionId=session;c.processRunId="controlled-pthread";
@@ -220,7 +265,7 @@ static void PauseWriter(diagnostics::testing::Point point,std::string_view event
     }
 }
 int main(int argc,char**argv){
-    assert(argc==2);std::filesystem::path out=argv[1];InstallSignals();
+    assert(argc==2);pine_fixture::ValidateOutput(argv[1],"lifecycle-logs");std::filesystem::path out=argv[1];InstallSignals();
     Begin(out/"thread-exits","thread-exits");
     {
         Fixture fixture;auto process=fixture.Load();kernel::Scheduler scheduler;Loader loader;DeviceState state{&scheduler,process.get(),&loader};
@@ -257,6 +302,7 @@ int main(int argc,char**argv){
         process->diagnosticObservation.BeforeMappingMutation(uint64_t(fixture.mapping)+1024,1);
         assert(!process->diagnosticObservation.Validated()&&m->active==0); // NCE/observer reservation, outside text/ro
         assert(diagnostics::Flush(5000));
+        pine_fixture::Checkpoint(out,"pthread_exit_join_svcbreak_and_exception_paths");
     }
     diagnostics::Stop();
 #ifdef __aarch64__
@@ -294,6 +340,48 @@ int main(int argc,char**argv){
         assert(slot->state==0); // real Guest TLS/signal path; spin is NOT a capture callsite
         thread.reset();munmap(stack,65536);InstallSignals();
         assert(diagnostics::Flush(5000));
+        pine_fixture::Checkpoint(out,"actual_guest_tls_native_sp_and_asynchronous_sigint");
+    }
+    diagnostics::Stop();
+    Begin(out/"actual-writing-interruption","actual-writing-interruption");
+    {
+        InstallActualGuestSignals();signal::GuestHandlers[SIGSEGV]=&GuardedGuestSignal;signal::DefaultHandlers[SIGINT].function=&NestedStop;
+        struct sigaction action{};sigemptyset(&action.sa_mask);action.sa_sigaction=reinterpret_cast<void(*)(int,siginfo_t*,void*)>(&signal::GuestSafeSignalHandler);action.sa_flags=SA_SIGINFO|SA_ONSTACK;
+        assert(!sigaction(SIGSEGV,&action,nullptr));
+        GuardPage=size_t(sysconf(_SC_PAGESIZE));const size_t altSize=GuardPage*16;
+        auto alt=mmap(nullptr,altSize+GuardPage*2,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(alt!=MAP_FAILED);
+        assert(!mprotect(static_cast<uint8_t*>(alt)+GuardPage,altSize,PROT_READ|PROT_WRITE));
+        interrupted_fixture::altBegin=uintptr_t(alt)+GuardPage;interrupted_fixture::altEnd=interrupted_fixture::altBegin+altSize;
+        interrupted_fixture::faulted=false;interrupted_fixture::escapePrepared=false;interrupted_fixture::unprotected=false;interrupted_fixture::onAltStack=false;interrupted_fixture::enabled=true;
+        Fixture fixture;auto process=fixture.Load();auto module=process->diagnosticObservation.Binding();kernel::Scheduler scheduler;Loader loader;
+        DeviceState state{&scheduler,process.get(),&loader};auto thread=std::make_shared<InterruptedThread>(state,*process,0);process->threads.push_back(thread);
+        auto stack=mmap(nullptr,GuardPage*16,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(stack!=MAP_FAILED);
+        thread->alternate=reinterpret_cast<void*>(interrupted_fixture::altBegin);thread->alternateSize=altSize;
+        thread->stackTop=static_cast<uint8_t*>(stack)+GuardPage*16;thread->entry=fixture.mapping+4096;thread->entryArgument=module->noCallbackPc;
+        // The real installed BL/stub runs; its SP store faults after Writing,
+        // X0 and LR have been stored. State is never injected in this case.
+        thread->Start();Until([]{return interrupted_fixture::faulted.load(std::memory_order_acquire);});
+        auto slot=thread->diagnosticSlotStorage;assert(slot&&slot->state.load(std::memory_order_acquire)==1);
+        const auto pc=interrupted_fixture::faultPc.load();assert(pc>=module->observerPatch.stubPc&&pc<module->observerPatch.stubPc+module->installedStub.size());
+        assert(interrupted_fixture::onAltStack&&diagnostics::Flush(5000));assert(slot->state==1);
+        std::thread killer([&]{thread->Kill(true);});Until([]{return interrupted_fixture::escapePrepared.load(std::memory_order_acquire);});
+        // Only the ordinary controller changes the owned test page. The fault
+        // handler never configures mappings or signal stacks.
+        assert(!mprotect(GuardStorage+GuardPage,GuardPage,PROT_READ|PROT_WRITE));interrupted_fixture::unprotected.store(true,std::memory_order_release);
+        killer.join();thread->JoinBeforeDiagnosticContextDestruction();assert(slot->hostJoined&&slot->retired&&slot->state==1);
+        assert(slot->x0==module->noCallbackPc&&slot->lr==module->callPc+4&&slot->sp==0); // partial payload, never consumed
+        {
+            std::ofstream proof(out/"actual-writing-interruption"/"producer-proof.json");
+            proof<<"{\"state_injected\":false,\"exact_installed_producer\":true,\"fault_pc_offset\":"<<(pc-module->observerPatch.stubPc)
+                 <<",\"altstack_delivery\":true,\"asynchronous_nested_sigint\":true,\"state_after_host_join\":1,\"payload_consumed\":false,\"native_host_joined\":true}\n";
+            proof.flush();assert(proof.good());
+        }
+        assert(diagnostics::Flush(5000));auto text=Read(out/"actual-writing-interruption");assert(text.find("NVN_ABORT_CALLSITE_OBSERVED")==std::string::npos);
+        std::weak_ptr<r::Module>weak=module;process.reset();thread.reset();module.reset();assert(diagnostics::Flush(5000));assert(!weak.expired());
+        slot.reset();assert(weak.expired());interrupted_fixture::enabled=false;
+        munmap(stack,GuardPage*16);munmap(alt,altSize+GuardPage*2);
+        signal::DefaultHandlers[SIGINT].function=nullptr;InstallSignals();
+        pine_fixture::Checkpoint(out,"exact_producer_writing_interrupted_on_altstack_unread_and_retired");
     }
     diagnostics::Stop();
 #endif
@@ -353,5 +441,7 @@ int main(int argc,char**argv){
         slots.clear();assert(weak.expired());
     }
     diagnostics::Stop();
+    pine_fixture::Checkpoint(out,"final_writer_ownership_capacity_and_bounded_shutdown");
+    pine_fixture::Complete(out,"lifecycle");
     std::puts("PASS real extracted KThread entry/Start/Kill/longjmp/exit-tail/join and KProcess destructor; asynchronous POSIX SIGINT; source-executed SvcBreak id0 and C++/signal-exception catch. Controlled scheduler/mapping, NOT Android lifecycle. Consumer handoff/capacity states are injected, not executed producer captures.");
 }

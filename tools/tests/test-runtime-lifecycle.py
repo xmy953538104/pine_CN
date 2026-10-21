@@ -50,12 +50,14 @@ def main():
     cxx = args.cxx or ('aarch64-linux-gnu-g++' if args.aarch64 else os.environ.get('CXX', 'c++'))
     command = [cxx, '-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
                '-Wno-unused-variable', '-Wno-clobbered', '-pthread', '-DPINE_DIAG_RUNTIME_TEST', '-DPINE_DIAG_TEST_HOOKS',
-               '-I' + str(ROOT / 'tests/runtime_observer/stubs'), '-I' + str(CPP),
+               '-I' + str(ROOT / 'tests/runtime_observer/stubs'), '-I' + str(ROOT / 'tests/runtime_observer'), '-I' + str(CPP),
                str(generated), str(CPP / 'diagnostics/runtime_observer.cpp'), str(CPP / 'diagnostics/nso_image.cpp'),
                str(CPP / 'diagnostics/diagnostics.cpp'), str(CPP / 'nce/observation.cpp')]
     if 'android' in cxx:
         # Existing Pine/Bionic sigevent uses the NDK's nested designator macro.
-        command += ['-llog', '-Wno-unknown-warning-option', '-Wno-c99-designator', '-Wno-missing-field-initializers']
+        command += ['-llog', '-Wno-unknown-warning-option', '-Wno-c99-designator', '-Wno-missing-field-initializers', '-Wl,-z,max-page-size=16384']
+    source_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    command.append('-DPINE_BOUNDARY_SOURCE_COMMIT="' + source_sha + '"')
     if args.fortify:
         if 'android' in cxx:
             parser.error('--fortify is a Linux/glibc boundary check, not an Android execution claim')

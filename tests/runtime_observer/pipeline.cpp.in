@@ -18,6 +18,7 @@
 #include <thread>
 #include <iomanip>
 #include <stdexcept>
+#include "fixture_report.h"
 namespace skyline {
 struct exception:std::runtime_error{template<class...A>exception(const char*m,A...):std::runtime_error(m){}};
 namespace nce {
@@ -153,7 +154,8 @@ CaseResult RunCase(const std::filesystem::path&output,bool enabled,bool unresolv
  kernel::type::KNceThread thread(*process);thread.entry=info.entry;thread.entryArgument=unknown?0xfedcba9876543210:result.base+fixture.profile.noCallbackVa;
  process->diagnosticObservation.SealLoads();thread.Init();assert(bool(thread.ctx.diagnosticSlot)==enabled);
  result.threadContext=uint64_t(&thread.ctx);
- auto*stack=static_cast<u8*>(mmap(nullptr,8192,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0));assert(stack!=MAP_FAILED);assert(mprotect(stack+4096,4096,PROT_READ|PROT_WRITE)==0);thread.stackTop=stack+4096;
+ const auto hostPage=size_t(sysconf(_SC_PAGESIZE));
+ auto*stack=static_cast<u8*>(mmap(nullptr,hostPage*2,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0));assert(stack!=MAP_FAILED);assert(mprotect(stack+hostPage,hostPage,PROT_READ|PROT_WRITE)==0);thread.stackTop=stack+hostPage;
  RuntimeNoReturn=noreturn;RuntimeResolverLr=RuntimeResolverIp=0;
  if(enabled){auto slot=thread.diagnosticSlotStorage;assert(slot);
  if(gateCase==1)slot->expectedOption^=2;
@@ -164,19 +166,38 @@ CaseResult RunCase(const std::filesystem::path&output,bool enabled,bool unresolv
  }
 
 #ifdef __aarch64__
- Execute(thread);std::memcpy(&result.image,stack+4096,sizeof(Image));
- assert(result.image.sp==uint64_t(stack+4096));assert(result.image.x[0]==thread.entryArgument&&result.image.x[30]==result.callPc+4);
+ uint64_t nativeSpBefore{},nativeTlsBefore{},nativeSpAfter{},nativeTlsAfter{};
+ asm volatile("mov %0,sp\n\tmrs %1,tpidr_el0":"=r"(nativeSpBefore),"=r"(nativeTlsBefore));
+ Execute(thread);
+ asm volatile("mov %0,sp\n\tmrs %1,tpidr_el0":"=r"(nativeSpAfter),"=r"(nativeTlsAfter));
+ assert(nativeSpBefore==nativeSpAfter&&nativeTlsBefore==nativeTlsAfter);
+ std::memcpy(&result.image,stack+hostPage,sizeof(Image));
+ assert(result.image.sp==uint64_t(stack+hostPage));assert(result.image.x[0]==thread.entryArgument&&result.image.x[30]==result.callPc+4);
  assert(result.image.x[16]==result.base+0x2100&&result.image.x[17]==uint64_t(&RuntimeCallee));assert(result.image.tls==uint64_t(&thread.ctx));
  assert(result.image.nzcv==0xa0000000);
  if(unresolved)assert(RuntimeResolverLr==result.callPc+4&&RuntimeResolverIp==result.base+0x2100);
- if(enabled&&gateCase==0){auto slot=thread.diagnosticSlotStorage;assert(slot&&(slot->state.load(std::memory_order_acquire)==2||slot->state.load(std::memory_order_acquire)==3)&&slot->x0==thread.entryArgument&&slot->lr==result.callPc+4&&slot->sp==uint64_t(stack+4096));}
+ if(enabled&&gateCase==0){auto slot=thread.diagnosticSlotStorage;assert(slot&&(slot->state.load(std::memory_order_acquire)==2||slot->state.load(std::memory_order_acquire)==3)&&slot->x0==thread.entryArgument&&slot->lr==result.callPc+4&&slot->sp==uint64_t(stack+hostPage));}
 #endif
  if(gateCase){auto slot=thread.diagnosticSlotStorage;assert(slot->state==(gateCase==2?3:gateCase==4?1:0));}
- assert(Flush(5000));process->diagnosticObservation.Invalidate(r::StopReason::ProcessExit);r::ConfigureIdentity(false);Stop();munmap(stack,8192);
+ assert(Flush(5000));
+ if(enabled&&gateCase==0)assert(thread.diagnosticSlotStorage->state.load()==3);
+ process->diagnosticObservation.Invalidate(r::StopReason::ProcessExit);r::ConfigureIdentity(false);Stop();munmap(stack,hostPage*2);
  return result;
 }
-int main(int argc,char**argv){assert(argc==2);std::filesystem::create_directories(argv[1]);
+int main(int argc,char**argv){assert(argc==2||argc==3);pine_fixture::ValidateOutput(argv[1],"register-logs");std::filesystem::create_directories(argv[1]);
 #ifdef __aarch64__
+ if(argc==3){
+   assert(std::string_view(argv[2])=="device-once");
+   for(bool noReturn:{false,true}){
+     const auto suffix=noReturn?"nonreturn":"return";
+     auto plain=RunCase(std::filesystem::path(argv[1])/(std::string("baseline-")+suffix),false,false,noReturn);
+     auto seen=RunCase(std::filesystem::path(argv[1])/(std::string("observed-")+suffix),true,false,noReturn);
+     for(unsigned i{};i<31;++i)if(i!=0&&i!=16&&i!=30)assert(plain.image.x[i]==seen.image.x[i]);
+     assert(plain.image.q==seen.image.q&&plain.image.nzcv==seen.image.nzcv&&plain.image.fpcr==seen.image.fpcr&&plain.image.fpsr==seen.image.fpsr);
+     pine_fixture::Checkpoint(argv[1],noReturn?"existing_nonreturn_callee_full_record_consumed":"existing_register_flags_simd_sp_tls_and_original_plt");
+   }
+   pine_fixture::Complete(argv[1],"registers");return 0;
+ }
  for(bool resolver:{false,true})for(bool noReturn:{false,true}){
    const auto suffix=std::string(resolver?"unresolved":"resolved")+(noReturn?"-nonreturn":"-return");
    auto plain=RunCase(std::filesystem::path(argv[1])/("baseline-"+suffix),false,resolver,noReturn);

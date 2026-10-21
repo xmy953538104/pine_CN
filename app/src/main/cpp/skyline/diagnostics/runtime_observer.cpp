@@ -249,7 +249,13 @@ std::shared_ptr<GuestSlot> ProcessObservation::AttachThread(uint64_t id) noexcep
         auto&module=*storage;std::unique_lock lock(module.threadMutex,std::try_to_lock);if(!lock)return {};
         for(auto&entry:module.threads)if(!entry){
             const auto serial=threadSerial.fetch_add(1,std::memory_order_relaxed)+1;if(!serial)return {};
-            auto slot=std::make_shared<GuestSlot>();slot->optionGate=&optionEpoch;slot->expectedOption=module.optionEpoch;
+            std::shared_ptr<GuestSlot> slot;
+#ifdef PINE_DIAG_RUNTIME_TEST
+            if(slotAllocatorForTest)slot=slotAllocatorForTest();else
+#endif
+            slot=std::make_shared<GuestSlot>();
+            if(!slot)return {};
+            slot->optionGate=&optionEpoch;slot->expectedOption=module.optionEpoch;
             slot->ownerGate=&ownerEpoch;slot->expectedOwner=module.input.owner.runtimeOwnerEpoch;slot->moduleActive=&module.active;
             slot->guestThread=id;slot->threadGeneration=serial;entry=slot;
             return std::shared_ptr<GuestSlot>(storage,slot.get());

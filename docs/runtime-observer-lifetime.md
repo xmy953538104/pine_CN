@@ -1,5 +1,7 @@
 # PR25 runtime ownership and identity boundaries
 
+The current finite deployment decision and layered route-B contract are in [runtime-observer-decision.md](runtime-observer-decision.md). Final GOT/AbortImpl evidence is not a prerequisite for an unclassified callsite X0/LR snapshot; RWX/mapping lifetime still blocks that layer. The independent Windows/ADB handoff is [README.zh-CN.md](../tools/android-bionic/README.zh-CN.md).
+
 This change starts at the successfully built `8e659d8a725e96c3101386552e67a26926e0ff6b`. Production installation stays CLOSED. It does not produce another APK or enable a real capture. The default category/verbose gates, original BL, PLT/GOT traversal, 208-byte producer, continuing Guest execution and ordinary scheduling policy are unchanged. Only a thread with an attached observer slot takes the saved-native-SP escape described below. Production CLOSED/OFF creates no slots and retains the original terminal SP path.
 
 ## Implemented production wiring

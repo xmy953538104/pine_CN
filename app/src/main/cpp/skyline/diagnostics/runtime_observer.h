@@ -76,6 +76,9 @@ public:
 #ifdef PINE_DIAG_RUNTIME_TEST
 inline thread_local void (*beforeActivation)(ProcessObservation &){};
 inline thread_local void (*beforePublication)(Module &) noexcept{};
+// Test allocation seam only: guard-page storage for an actually interrupted
+// producer. Absent from production, and set before KNceThread Init/Guest entry.
+inline thread_local std::shared_ptr<GuestSlot> (*slotAllocatorForTest)(){};
 std::array<std::shared_ptr<Module>,16> FillRegistryForTest();
 void HoldRegistryForTest(std::atomic<bool> &entered,const std::atomic<bool> &release);
 #endif

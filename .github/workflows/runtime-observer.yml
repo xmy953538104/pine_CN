@@ -38,7 +38,7 @@ jobs:
       - name: Production identity lifecycle and admission regressions
         run: python3 tools/tests/test-runtime-observer.py
       - name: Execute production thread and owner retirement boundaries
-        run: python3 tools/tests/test-runtime-lifecycle.py --aarch64 --output lifecycle-evidence
+        run: python3 tools/tests/test-runtime-lifecycle.py --aarch64 --fortify --output lifecycle-evidence
       - name: Assemble exact producer and compare production words
         run: |
           aarch64-linux-gnu-gcc -c app/src/main/cpp/skyline/nce/observation_stub.S -o /tmp/producer.o
@@ -80,9 +80,12 @@ jobs:
         run: |
           if test -f runtime-evidence/result.json; then cat runtime-evidence/result.json; fi
           if test -f runtime-evidence/export.json; then cat runtime-evidence/export.json; fi
-          find runtime-evidence -type f -exec sha256sum {} + > runtime-evidence-sha256.txt
+          if test -d runtime-evidence; then find runtime-evidence -type f -exec sha256sum {} + > runtime-evidence-sha256.txt; else : > runtime-evidence-sha256.txt; fi
           cat runtime-evidence-sha256.txt
-          find lifecycle-evidence lifecycle-ndk-evidence -type f -exec sha256sum {} + > lifecycle-evidence-sha256.txt
+          : > lifecycle-evidence-sha256.txt
+          for directory in lifecycle-evidence lifecycle-ndk-evidence; do
+            if test -d "$directory"; then find "$directory" -type f -exec sha256sum {} + >> lifecycle-evidence-sha256.txt; fi
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

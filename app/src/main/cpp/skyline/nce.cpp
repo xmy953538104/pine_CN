@@ -167,7 +167,8 @@ namespace skyline::nce {
 
     void NCE::SignalHandler(int signal, siginfo *info, ucontext *ctx, void **tls) {
         auto &mctx{ctx->uc_mcontext};
-        const auto &state{*reinterpret_cast<ThreadContext *>(*tls)->state};
+        const auto *threadContext{reinterpret_cast<ThreadContext *>(*tls)};
+        const auto &state{*threadContext->state};
 
         if (signal == SIGSEGV)
             // If we get a guest access violation then we want to handle any accesses that may be from a trapped region
@@ -196,6 +197,15 @@ namespace skyline::nce {
             }
         }
 
+        // We are escaping Guest execution, not resuming it. TLS was restored
+        // by GuestSafeSignalHandler; the native longjmp entry also needs the
+        // native stack saved by KNceThread::Run, rather than the interrupted
+        // Guest SP (which may be guarded and fails fortified libc's checks).
+        // Keep fault formatting above on the original Guest context. During
+        // the initial Run transition hostSp may not yet have been published;
+        // its interrupted SP is still native, so leave that value untouched.
+        if (threadContext->hostSp)
+            mctx.sp = reinterpret_cast<u64>(threadContext->hostSp);
         mctx.pc = reinterpret_cast<u64>(&std::longjmp);
         mctx.regs[0] = reinterpret_cast<u64>(state.thread->originalCtx);
         mctx.regs[1] = true;

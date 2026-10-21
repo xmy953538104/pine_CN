@@ -53,7 +53,7 @@ struct DeviceState {
     static inline thread_local std::shared_ptr<kernel::type::KThread>thread;
     kernel::Scheduler*scheduler{};kernel::type::KProcess*process{};Loader*loader{};
 };
-struct TrapManager {static bool TrapHandler(u8*,bool){return false;}};
+struct TrapManager {static inline bool handled{};static bool TrapHandler(u8*,bool){return handled;}};
 namespace nce {
 class NCE {public:struct ExitException:std::runtime_error{ExitException():std::runtime_error("exit"){} };
     static void SignalHandler(int,siginfo_t*,ucontext_t*,void**);
@@ -264,6 +264,18 @@ int main(int argc,char**argv){
     {
         InstallActualGuestSignals();Fixture fixture;auto process=fixture.Load();kernel::Scheduler scheduler;Loader loader;
         DeviceState state{&scheduler,process.get(),&loader};auto thread=std::make_shared<KNceThread>(state,*process,0);process->threads.push_back(thread);
+        // Direct context regression checks are NOT asynchronous execution.
+        // A resumable trap must retain its complete original context; a native
+        // escape restores saved Host SP, including the pre-publication null case.
+        thread->ctx.state=&state;DeviceState::thread=thread;
+        ucontext_t interrupted{};interrupted.uc_mcontext.sp=0x123456780;interrupted.uc_mcontext.pc=0x234567890;
+        const auto original=interrupted;siginfo_t info{};void*tls=&thread->ctx;
+        TrapManager::handled=true;nce::NCE::SignalHandler(SIGSEGV,&info,&interrupted,&tls);TrapManager::handled=false;
+        assert(!std::memcmp(&interrupted,&original,sizeof(original))&&tls==&thread->ctx);
+        nce::NCE::SignalHandler(SIGINT,&info,&interrupted,&tls);assert(interrupted.uc_mcontext.sp==original.uc_mcontext.sp);
+        thread->ctx.hostSp=reinterpret_cast<u8*>(0x3456789a0);tls=&thread->ctx;
+        nce::NCE::SignalHandler(SIGINT,&info,&interrupted,&tls);assert(interrupted.uc_mcontext.sp==uint64_t(thread->ctx.hostSp));
+        thread->ctx.hostSp=nullptr;DeviceState::thread.reset();
         auto stack=mmap(nullptr,65536,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(stack!=MAP_FAILED);
         thread->stackTop=static_cast<u8*>(stack)+65536;thread->entry=reinterpret_cast<void*>(&LifecycleSpin);thread->releaseTail=false;
         LifecycleGuestEntered=0;thread->Start();Until([]{return LifecycleGuestEntered.load(std::memory_order_acquire)==1;});

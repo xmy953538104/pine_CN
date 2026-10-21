@@ -21,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--aarch64', action='store_true')
     parser.add_argument('--compile-only', action='store_true')
+    parser.add_argument('--fortify', action='store_true', help='Enable glibc FORTIFY_SOURCE=3 for the Linux execution boundary')
     parser.add_argument('--cxx')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--qemu-ld-prefix', default=os.environ.get('QEMU_LD_PREFIX', '/usr/aarch64-linux-gnu'))
@@ -55,6 +56,10 @@ def main():
     if 'android' in cxx:
         # Existing Pine/Bionic sigevent uses the NDK's nested designator macro.
         command += ['-llog', '-Wno-unknown-warning-option', '-Wno-c99-designator', '-Wno-missing-field-initializers']
+    if args.fortify:
+        if 'android' in cxx:
+            parser.error('--fortify is a Linux/glibc boundary check, not an Android execution claim')
+        command.append('-D_FORTIFY_SOURCE=3')
     if args.aarch64:
         command.append(str(ROOT / 'tests/runtime_observer/lifecycle_spin.S'))
     command += ['-o', str(out / 'lifecycle')]
@@ -65,6 +70,7 @@ def main():
                 'compile_command': command, 'android_execution': False, 'real_game_records': 0,
                 'dependencies': 'controlled scheduler/JVM/logging; real OS pthreads/signals/timer/setjmp/longjmp/std::thread::join',
                 'injected_states': 'consumer-only Ready/Writing/capacity fixtures; no claim of executed producer payload',
+                'fortify_source': 3 if args.fortify else 'toolchain_default',
                 'execution': 'not started'}
     metadata['compiler_version'] = subprocess.check_output([cxx, '--version'], text=True).splitlines()[0]
     if args.aarch64 and not args.compile_only:
@@ -74,7 +80,17 @@ def main():
     run = (['qemu-aarch64', '-L', args.qemu_ld_prefix] if args.aarch64 else []) + [str(out / 'lifecycle'), 'logs']
     metadata['run_command'] = None if args.compile_only else run
     if not args.compile_only:
-        subprocess.run(run, cwd=out, check=True, timeout=60)
+        metadata['execution'] = 'actual binary execution started'
+        (out / 'result.json').write_text(json.dumps(metadata, indent=2) + '\n')
+        try:
+            subprocess.run(run, cwd=out, check=True, timeout=60)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            metadata['execution'] = 'actual execution failed'
+            metadata['execution_error'] = str(error)
+            (out / 'result.json').write_text(json.dumps(metadata, indent=2) + '\n')
+            raise
+        metadata['execution'] = 'binary returned zero; validating writer output'
+        (out / 'result.json').write_text(json.dumps(metadata, indent=2) + '\n')
         cases = {}
         for case in ('stop-final-drain', 'launch-rollover'):
             rows = [json.loads(line) for line in (out / 'logs' / case / 'diagnostics-0.jsonl').read_text().splitlines()]

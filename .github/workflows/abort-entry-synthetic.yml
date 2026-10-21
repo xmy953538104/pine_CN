@@ -1,0 +1,54 @@
+name: Abort entry synthetic execution
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'tests/abort_entry/**'
+      - 'tools/run-abort-entry-prototype.py'
+      - 'tools/tests/test-abort-entry-host.py'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - '.github/workflows/abort-entry-synthetic.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'tests/abort_entry/**'
+      - 'tools/run-abort-entry-prototype.py'
+      - 'tools/tests/test-abort-entry-host.py'
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - '.github/workflows/abort-entry-synthetic.yml'
+permissions:
+  contents: read
+concurrency:
+  group: abort-entry-synthetic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  aarch64:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Signed official Ubuntu cross toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user g++-aarch64-linux-gnu
+          dpkg-query -W qemu-user g++-aarch64-linux-gnu
+      - name: Execute actual owned AArch64 fixture and unchanged Diagnostics core
+        run: python3 tools/run-abort-entry-prototype.py --require-aarch64 --output entry-evidence
+      - name: Retain explicit execution scope
+        if: always()
+        run: |
+          if test -f entry-evidence/result.json; then cat entry-evidence/result.json; fi
+          if test -f entry-evidence/aarch64-run.log; then cat entry-evidence/aarch64-run.log; fi
+          if test -f entry-evidence/aarch64-build.log; then tail -n 80 entry-evidence/aarch64-build.log; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: abort-entry-synthetic-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            entry-evidence/*.json
+            entry-evidence/*.log
+            entry-evidence/aarch64/**/*.jsonl
+          if-no-files-found: error

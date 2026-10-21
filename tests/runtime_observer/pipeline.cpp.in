@@ -114,7 +114,8 @@ struct Fixture {
   auto&ro=backing->segments[1];ro.resize(4096,0x31);auto&data=backing->segments[2];data.resize(4096);
   profile.callVa=0x400;profile.pltVa=0x500;profile.noCallbackVa=0x1020;profile.insufficientVa=0x1040;profile.originalBl=Bl(profile.callVa,profile.pltVa);
   size_t cursor{};
-  for(unsigned reg=2;reg<30;++reg)for(auto word:nce::instructions::MoveRegister(nce::registers::X(reg),uint64_t(0xa500000000000000ULL+reg*0x10101))){Put(text,cursor,word);cursor+=4;}
+  // MoveRegister returns zero for omitted halfwords; zero is UDF, not a NOP.
+  for(unsigned reg=2;reg<30;++reg)for(auto word:nce::instructions::MoveRegister(nce::registers::X(reg),uint64_t(0xa500000000000000ULL+reg*0x10101)))if(word){Put(text,cursor,word);cursor+=4;}
   // Nonzero SIMD/NZCV canaries in own NSO; no TLS or SVC instruction here.
   for(unsigned reg{};reg<32;++reg){const unsigned imm=reg+1;Put(text,cursor,0x4f00e400u|((imm&0xe0)<<11)|((imm&31)<<5)|reg);cursor+=4;}
   Put(text,cursor,0xd2b40002);cursor+=4;Put(text,cursor,0xd51b4202); // MOVZ X2,#A000,LSL16; MSR NZCV,X2
@@ -176,8 +177,9 @@ CaseResult RunCase(const std::filesystem::path&output,bool enabled,bool unresolv
 int main(int argc,char**argv){assert(argc==2);std::filesystem::create_directories(argv[1]);
 #ifdef __aarch64__
  for(bool resolver:{false,true})for(bool noReturn:{false,true}){
-   auto plain=RunCase(std::filesystem::path(argv[1])/"baseline",false,resolver,noReturn);
-   auto seen=RunCase(std::filesystem::path(argv[1])/"observed",true,resolver,noReturn);
+   const auto suffix=std::string(resolver?"unresolved":"resolved")+(noReturn?"-nonreturn":"-return");
+   auto plain=RunCase(std::filesystem::path(argv[1])/("baseline-"+suffix),false,resolver,noReturn);
+   auto seen=RunCase(std::filesystem::path(argv[1])/("observed-"+suffix),true,resolver,noReturn);
    for(unsigned i{};i<31;++i)if(i!=0&&i!=16&&i!=30)assert(plain.image.x[i]==seen.image.x[i]);
    assert(plain.image.q==seen.image.q&&plain.image.nzcv==seen.image.nzcv&&plain.image.fpcr==seen.image.fpcr&&plain.image.fpsr==seen.image.fpsr);
  }

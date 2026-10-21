@@ -359,7 +359,7 @@ namespace skyline::kernel::type {
             "RET"
             :
             : "r"(&ctx), "r"(stackTop), "r"(entry), "r"(entryArgument), "r"(handle)
-            : "x0", "x1", "lr"
+            : "x0", "x1", "x30"
             );
 
         __builtin_unreachable();

@@ -7,8 +7,8 @@ CPP=ROOT/'app/src/main/cpp/skyline'
 def extract(path,start,end):
     text=(CPP/path).read_text();return text[text.index(start):text.index(end,text.index(start))]
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--aarch64',action='store_true');p.add_argument('--output',type=Path);p.add_argument('--compile-only',action='store_true');p.add_argument('--cxx');a=p.parse_args()
-    out=a.output or Path(tempfile.mkdtemp(prefix='pine-runtime-pipeline-'));out.mkdir(parents=True,exist_ok=True)
+    p=argparse.ArgumentParser();p.add_argument('--aarch64',action='store_true');p.add_argument('--output',type=Path);p.add_argument('--compile-only',action='store_true');p.add_argument('--cxx');p.add_argument('--qemu-ld-prefix',default=os.environ.get('QEMU_LD_PREFIX','/usr/aarch64-linux-gnu'),help='AArch64 Linux loader/library root for QEMU');a=p.parse_args()
+    out=(a.output or Path(tempfile.mkdtemp(prefix='pine-runtime-pipeline-'))).resolve();out.mkdir(parents=True,exist_ok=True)
     source=(ROOT/'tests/runtime_observer/pipeline.cpp.in').read_text()
     bodies={
       'ACTUAL_NCE_BODIES':extract(Path('nce.cpp'),'    constexpr size_t TrampolineSize','    size_t NCE::GetHookSectionSize'),
@@ -27,8 +27,26 @@ def main():
     if 'android' in cxx:command.append('-llog')
     command+=['-o',str(out/'pipeline')]
     subprocess.run(command,check=True)
-    run=['qemu-aarch64','-L','/usr/aarch64-linux-gnu'] if a.aarch64 else []
-    if not a.compile_only:subprocess.run([*run,str(out/'pipeline'),str(out/'logs')],check=True,timeout=90)
-    result={'source_sha':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'source_body_sha256':{k:hashlib.sha256(v.encode()).hexdigest() for k,v in bodies.items()},'execution':'compile only, not executed' if a.compile_only else 'QEMU Linux-user AArch64 on x86_64' if a.aarch64 else 'host mapping only','runtime_connected':False,'android_lifecycle':False,'original_dependencies':'controlled VFS/mapping/HLE; actual extracted Loader/NCE/KNce Init+Run bodies'}
+    run=['qemu-aarch64','-L',a.qemu_ld_prefix] if a.aarch64 else []
+    # QEMU -L can remap an absolute open("/") into its library root. Keep the
+    # production resource-window component walk relative to the output cwd.
+    run_command=[*run,str(out/'pipeline'),'logs']
+    writer_cases={}
+    if not a.compile_only:
+        subprocess.run(run_command,cwd=out,check=True,timeout=90)
+        if a.aarch64:
+            cases=[f'{mode}-{binding}-{transfer}' for mode in ('baseline','observed') for binding in ('resolved','unresolved') for transfer in ('return','nonreturn')]+[f'gate-{i}' for i in range(1,6)]+['unknown']
+            for case in cases:
+                folder=out/'logs'/case
+                log=[json.loads(line) for line in (folder/'diagnostics-0.jsonl').read_text().splitlines() if line]
+                window=[json.loads(line) for line in (folder/'resource-window.jsonl').read_text().splitlines() if line]
+                assert not any(row.get('event')=='RESOURCE_WINDOW_PERSIST_FAILED' for row in log),case
+                captured=[row for row in log if row.get('event')=='NVN_ABORT_CALLSITE_OBSERVED']
+                assert len(captured)==int(case.startswith('observed-') or case=='unknown'),case
+                for row in captured:
+                    assert row['fields']['runtime_connected']=='false' and row['fields']['outer_abort_entry_observed']=='false',case
+                    assert sum(candidate==row for candidate in window)==1,case
+                writer_cases[case]={'callsite_rows':len(captured),'resource_window_written':True}
+    result={'source_sha':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'source_dirty':bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True).strip()),'source_body_sha256':{k:hashlib.sha256(v.encode()).hexdigest() for k,v in bodies.items()},'generated_source_sha256':hashlib.sha256(generated.read_bytes()).hexdigest(),'execution':'compile only, not executed' if a.compile_only else 'QEMU Linux-user AArch64 on x86_64' if a.aarch64 else 'host mapping only','runtime_connected':False,'android_lifecycle':False,'original_dependencies':'controlled VFS/mapping/HLE; actual extracted Loader/NCE/KNce Init+Run bodies','compile_command':command,'run_command':None if a.compile_only else run_command,'run_cwd':str(out),'writer_cases':writer_cases}
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 if __name__=='__main__':main()

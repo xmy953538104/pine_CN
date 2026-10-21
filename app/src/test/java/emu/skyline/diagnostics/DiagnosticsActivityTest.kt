@@ -328,10 +328,16 @@ class DiagnosticsActivityTest {
         button("Diagnostic categories").performClick()
         shadowOf(Looper.getMainLooper()).idle()
         val dialog = latestDialog()
-        for (index in 0 until dialog.listView.count) {
-            assertTrue(dialog.listView.isItemChecked(index))
-            dialog.listView.performItemClick(dialog.listView.getChildAt(index), index, index.toLong())
+        val list = dialog.listView
+        val moduleRuntime = (0 until list.count).single { list.getItemAtPosition(it) == "module_runtime" }
+        assertFalse("Experimental runtime identity must require explicit selection", list.isItemChecked(moduleRuntime))
+        val selected = (0 until list.count).filter { list.isItemChecked(it) }
+        assertEquals(setOf("content", "storage", "guest", "exception", "resource"),
+            selected.map { list.getItemAtPosition(it) }.toSet())
+        for (index in selected) {
+            list.performItemClick(list.getChildAt(index), index, index.toLong())
         }
+        assertTrue((0 until list.count).all { !list.isItemChecked(it) })
         dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
         await("explicit none category configuration") { configurations.lastOrNull()?.categories == "none" }
         assertEquals("none", app.getSharedPreferences("diagnostics", Context.MODE_PRIVATE).getString("categories", ""))

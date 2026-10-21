@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string_view>
 #include <span>
+#include <atomic>
 #include <utility>
 
 namespace skyline::diagnostics {
@@ -18,7 +19,8 @@ struct ModuleOwner {
 bool TryModuleOwner(ModuleOwner &output) noexcept;
 // Normal consumer only; rejects a stale sink/process/launch generation.
 bool EmitForModuleOwner(const ModuleOwner &owner, std::string_view category, std::string_view event,
-    std::span<const std::pair<std::string_view,std::string_view>> fields) noexcept;
+    std::span<const std::pair<std::string_view,std::string_view>> fields,
+    const std::atomic<uint64_t> *admissionGate = nullptr, uint64_t expectedAdmission = 0) noexcept;
 inline std::string_view OwnerText(const std::array<char, 129> &text) noexcept {
     size_t size{};
     while (size < text.size() && text[size]) ++size;

@@ -136,7 +136,8 @@ Result Publish(std::unique_ptr<Pending> pending, const std::shared_ptr<const voi
     if (!pending || !processOwner) return Result::OwnerUnavailable;
     try {
         ModuleOwner owner;
-        if (!TryModuleOwner(owner) || owner != pending->record.owner) return Result::StaleOwner;
+        if (!TryModuleOwner(owner)) return Result::OwnerUnavailable;
+        if (owner != pending->record.owner) return Result::StaleOwner;
         if (!moduleBase || !reservationSize || UINT64_MAX - reservationBase < reservationSize ||
             moduleBase < reservationBase || moduleBase >= reservationBase + reservationSize)
             return Result::MappingBounds;

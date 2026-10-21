@@ -81,7 +81,7 @@ namespace skyline::loader {
             }
             observation = image::Capture(input);
         }
-        diagnostics::runtime::ScopedLoad runtimeLoad(process->diagnosticObservation, observation ? &observation->record : nullptr);
+        diagnostics::runtime::ScopedLoad runtimeLoad(process->diagnosticObservation, observation ? &observation->record : nullptr, name);
         auto info{loader->LoadExecutable(process, state, executable, offset, name, dynamicallyLinked)};
         if (observation) {
             const auto textAddress{reinterpret_cast<uintptr_t>(info.entry)};

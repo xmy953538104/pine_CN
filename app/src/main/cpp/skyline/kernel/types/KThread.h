@@ -5,6 +5,7 @@
 
 #include <csetjmp>
 #include <diagnostics/pending_signal.h>
+#include <diagnostics/guest_slot.h>
 #include <nce/guest.h>
 #include <jit/thread_context32.h>
 #include <kernel/scheduler.h>
@@ -38,6 +39,7 @@ namespace skyline::kernel {
             /**
              * @brief Initializes the thread's execution-mode-specific host object
              */
+            void JoinBeforeDiagnosticContextDestruction();
             virtual void Init() = 0;
 
             /**
@@ -55,6 +57,7 @@ namespace skyline::kernel {
             KHandle handle;
             size_t id; //!< Index of thread in parent process's KThread vector
 
+            std::shared_ptr<diagnostics::runtime::GuestSlot> diagnosticSlotStorage; // base owns until join
             diagnostics::PendingGuestSignal pendingGuestSignal{};
             jmp_buf originalCtx{}; //!< The context of the host thread prior to jumping into guest code
 
@@ -156,6 +159,7 @@ namespace skyline::kernel {
             void Run() override;
 
           public:
+            ~KNceThread();
             nce::ThreadContext ctx{}; //!< The context of the guest thread during the last SVC
 
             using KThread::KThread;

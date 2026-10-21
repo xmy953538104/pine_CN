@@ -256,7 +256,7 @@ uint64_t MonotonicUs() {
 }
 bool Enqueue(Sink &, std::string_view, std::string_view,
     std::span<const std::pair<std::string_view, std::string_view>>, std::string_view,
-    const std::string_view *, std::string_view, std::string_view = {}, const ModuleOwner * = nullptr) noexcept;
+    const std::string_view *, std::string_view, std::string_view = {}, const ModuleOwner * = nullptr, const std::atomic<uint64_t> * = nullptr, uint64_t = 0) noexcept;
 bool EmitProgress(Sink &s, std::string_view event, std::string_view expectedLaunch = {}) {
     const auto epoch = s.observationEpoch.load();
     if (epoch & 1) return false;
@@ -510,7 +510,10 @@ void Run(Sink &s) noexcept {
         }
         rotate();
         while (true) {
-            runtime::DrainOnWriter(); // normal worker only, never Guest code
+            const auto drainRequest=runtime::drainRequested.load(std::memory_order_acquire);
+            if(runtime::DrainOnWriter()&&drainRequest>runtime::drainCompleted.load(std::memory_order_relaxed)){
+                runtime::drainCompleted.store(drainRequest,std::memory_order_release);s.progress.notify_all();
+            } // normal worker only, never Guest code
             if (!s.stopping && IsEnabled(s)) {
                 // Resource sampling may allocate on this background thread.
                 // Failure must not stop the existing diagnostic sink.
@@ -670,12 +673,13 @@ bool CategorySelected(std::string_view selected, std::string_view category) {
 bool Enqueue(Sink &s, std::string_view category, std::string_view event,
              std::span<const std::pair<std::string_view, std::string_view>> fields,
              std::string_view level, const std::string_view *stage = nullptr, std::string_view expectedLaunch = {}, std::string_view expectedSession,
-             const ModuleOwner *moduleOwner) noexcept {
+             const ModuleOwner *moduleOwner, const std::atomic<uint64_t> *admissionGate, uint64_t expectedAdmission) noexcept {
     const bool critical = CriticalEvent(category, event, level);
     auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
     Producer producer(s);
     if (!producer) return false;
     if (!expectedSession.empty() && s.config.sessionId != expectedSession) return false;
+    if (admissionGate && admissionGate->load(std::memory_order_acquire) != expectedAdmission) return false;
     if (moduleOwner && ((s.producers.load(std::memory_order_relaxed) & ProducerGenerationMask) != moduleOwner->sinkGeneration ||
         s.config.processRunId != OwnerText(moduleOwner->process) || s.observationEpoch.load(std::memory_order_acquire) != moduleOwner->launchEpoch ||
         runtime::ownerEpoch.load(std::memory_order_acquire) != moduleOwner->runtimeOwnerEpoch)) return false;
@@ -696,6 +700,7 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         size_t budget = 4096;
         for (auto &[key, value] : fields) { if (r.fields.size() == 24 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
         if (!IsEnabled(s) || s.stopping) return false;
+        if (admissionGate && admissionGate->load(std::memory_order_acquire) != expectedAdmission) return false;
         if (moduleOwner && (s.observationEpoch.load(std::memory_order_acquire) != moduleOwner->launchEpoch ||
             runtime::ownerEpoch.load(std::memory_order_acquire) != moduleOwner->runtimeOwnerEpoch)) return false;
         CopyDropCounts(r, s);
@@ -739,8 +744,9 @@ bool ResourceObservationEnabled() noexcept {
     return resourceEnabled.load(std::memory_order_relaxed) && Enabled();
 }
 bool EmitForModuleOwner(const ModuleOwner &owner, std::string_view category, std::string_view event,
-    std::span<const std::pair<std::string_view,std::string_view>> fields) noexcept {
-    return Enqueue(Get(),category,event,fields,"INFO",nullptr,OwnerText(owner.launch),OwnerText(owner.session),&owner);
+    std::span<const std::pair<std::string_view,std::string_view>> fields,
+    const std::atomic<uint64_t> *admissionGate, uint64_t expectedAdmission) noexcept {
+    return Enqueue(Get(),category,event,fields,"INFO",nullptr,OwnerText(owner.launch),OwnerText(owner.session),&owner,admissionGate,expectedAdmission);
 }
 void ResourceAdd(ResourceMetric metric, uint64_t value) noexcept {
     if (!ResourceObservationEnabled()) return;
@@ -918,9 +924,15 @@ bool Flush(uint32_t timeoutMilliseconds) noexcept {
         if (!life.owns_lock()) return false;
         // A count can lag publication on one producer while another has already
         // returned. Reservation tickets follow actual ring/flush order instead.
-        const auto target = s.queue.ReservedTicket();
         const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMilliseconds);
+        const auto drain = IsEnabled(s)&&runtime::drainCallback.load(std::memory_order_acquire) ? runtime::drainRequested.fetch_add(1,std::memory_order_acq_rel)+1 : 0;
         std::unique_lock lock(s.progressMutex);
+        if(drain){
+            s.wake.notify_one();
+            s.progress.wait_until(lock,deadline,[&]{return runtime::drainCompleted.load(std::memory_order_acquire)>=drain||s.diskErrors;});
+            if(runtime::drainCompleted.load(std::memory_order_acquire)<drain)return false;
+        }
+        const auto target = s.queue.ReservedTicket();
         s.progress.wait_until(lock, deadline, [&] { return s.completedTicket >= target || s.diskErrors; });
         return !s.diskErrors && s.completedTicket >= target;
     } catch (...) { return false; }

@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: MPL-2.0
+// Actual source bodies are substituted below; platform/VFS/HLE dependencies
+// are controlled. This is not an Android app or Horizon linker implementation.
+#include <common.h>
+#include <nce/guest.h>
+#include <nce/instructions.h>
+#include <diagnostics/runtime_observer.h>
+#include <diagnostics/diagnostics.h>
+#include <linux/elf.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <csetjmp>
+#include <cstdio>
+#include <fstream>
+#include <filesystem>
+#include <atomic>
+#include <thread>
+#include <iomanip>
+#include <stdexcept>
+namespace skyline {
+struct exception:std::runtime_error{template<class...A>exception(const char*m,A...):std::runtime_error(m){}};
+namespace nce {
+class NCE {public:
+ struct PatchData{size_t size;std::vector<size_t> offsets;};
+ static PatchData GetPatchData(const std::vector<u8>&);
+ static void PatchCode(std::vector<u8>&,u32*,size_t,const std::vector<size_t>&,size_t=0);
+ static size_t GetHookSectionSize(auto){return 0;}
+ static void WriteHookSection(auto,auto){}
+ static void SvcHandler(u16,ThreadContext*){std::abort();}
+};
+/* ACTUAL_NCE_BODIES */
+}
+namespace kernel::type {struct KProcess;}
+struct DeviceState {nce::NCE *nce{};};
+namespace memory {enum class AddressSpaceType{AddressSpace36Bit,AddressSpace39Bit};struct Permission{bool r{},w{},x{};};}
+namespace kernel::type {
+struct Memory {
+ struct Code{std::span<u8> host,guest;}code;
+ memory::AddressSpaceType addressSpaceType{memory::AddressSpaceType::AddressSpace39Bit};
+ size_t allocation{65536};u8*data{};
+ Memory(){data=static_cast<u8*>(mmap(nullptr,allocation,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0));assert(data!=MAP_FAILED);code={std::span(data,allocation),std::span(data,allocation)};}
+ ~Memory(){munmap(data,allocation);}
+ void MapHeapMemory(auto){}void SetRegionPermission(auto,memory::Permission){}void Reserve(auto){}
+ void MapCodeMemory(auto,memory::Permission){}void MapMutableCodeMemory(auto){}
+};
+struct KProcess {
+ diagnostics::runtime::ProcessObservation diagnosticObservation;
+ Memory memory;struct {struct {struct {bool is64Bit{true};}flags;}meta;}npdm;
+ explicit KProcess(const diagnostics::runtime::Profile&p,bool enabled):diagnosticObservation(p,diagnostics::runtime::Domain::ControlledSynthetic,enabled){}
+};
+}
+namespace hle {
+struct HookedSymbolEntry{};
+inline std::vector<HookedSymbolEntry> GetExecutableSymbols(auto,auto){return {};}
+}
+namespace vfs {struct Backing {
+ std::array<u8,256> header{};std::array<std::vector<u8>,3> segments;
+ template<class T>T Read(){T v;std::memcpy(&v,header.data(),sizeof(v));return v;}
+};}
+namespace loader {
+struct Executable{struct Segment{std::vector<u8>contents;u32 offset{};}text,ro,data;struct Sub{u32 offset{},size{};}dynsym,dynstr;size_t bssSize{};};
+class Loader {struct ExecutableSymbolicInfo{
+ void *patchStart{},*hookStart{},*programStart{},*programEnd{};std::string name,patchName,hookName;
+ span<u8>symbols;span<char>symbolStrings;
+};std::vector<ExecutableSymbolicInfo>executables;public:
+ struct ExecutableLoadInfo{u8*base;size_t size;void*entry;};
+ ExecutableLoadInfo LoadExecutable(const std::shared_ptr<kernel::type::KProcess>&,const DeviceState&,Executable&,size_t,const std::string&,bool);
+};
+/* ACTUAL_LOAD_EXECUTABLE */
+struct NsoLoader:Loader {
+/* ACTUAL_NSO_HEADER */
+ static std::vector<u8>GetSegment(const std::shared_ptr<vfs::Backing>&b,const NsoSegmentHeader&s,u32 compressed){assert(compressed==0);return b->segments[s.fileOffset-1];}
+ static void PrintRoContentsInfo(const std::vector<u8>&){}
+ static ExecutableLoadInfo LoadNso(Loader*,const std::shared_ptr<vfs::Backing>&,const std::shared_ptr<kernel::type::KProcess>&,const DeviceState&,size_t,const std::string&,bool);
+};
+/* ACTUAL_LOAD_NSO */
+}
+namespace kernel::type {
+class KNceThread {public:
+ KProcess &process;size_t id{17};void *stackTop{},*entry{};u8 *tlsRegion{};u64 entryArgument{},handle{0x77};
+ DeviceState state;std::shared_ptr<diagnostics::runtime::GuestSlot>diagnosticSlotStorage;nce::ThreadContext ctx;
+ explicit KNceThread(KProcess&p):process(p){}
+ void Init();
+#ifdef __aarch64__
+ void Run();
+#endif
+};
+/* ACTUAL_NCE_INIT */
+#ifdef __aarch64__
+/* ACTUAL_NCE_RUN */
+#endif
+}
+}
+using namespace skyline;
+namespace r=skyline::diagnostics::runtime;namespace image=skyline::diagnostics::image;
+#ifdef __aarch64__
+extern "C" void RuntimeCallee(),RuntimeResolver(),RuntimeFinish();
+extern "C" {uint64_t RuntimeNoReturn{},RuntimeResolverLr{},RuntimeResolverIp{};}
+thread_local std::jmp_buf returnContext;
+extern "C" [[noreturn]] void RuntimeFinishCpp(){std::longjmp(returnContext,1);}
+#else
+extern "C" void RuntimeCallee(){}extern "C" void RuntimeResolver(){}extern "C" void RuntimeFinish(){}
+extern "C" {uint64_t RuntimeNoReturn{},RuntimeResolverLr{},RuntimeResolverIp{};}
+#endif
+struct alignas(16) Image {uint64_t x[31],sp,nzcv,fpcr,fpsr,tls,tlsro,padding;std::array<uint8_t,512>q;};
+static_assert(offsetof(Image,q)==304&&sizeof(Image)==816);
+uint32_t Bl(uint32_t from,uint32_t to){return 0x94000000|((to-from)/4&0x3ffffff);}
+void Put(std::vector<u8>&bytes,size_t at,uint32_t value){std::memcpy(bytes.data()+at,&value,4);}
+void Put64(std::vector<u8>&bytes,size_t at,uint64_t value){std::memcpy(bytes.data()+at,&value,8);}
+struct Fixture {
+ std::shared_ptr<vfs::Backing>backing=std::make_shared<vfs::Backing>();r::Profile profile;
+ Fixture(){
+  auto&text=backing->segments[0];text.resize(4096);for(size_t i{};i<4096;i+=4)Put(text,i,0xd503201f);
+  auto&ro=backing->segments[1];ro.resize(4096,0x31);auto&data=backing->segments[2];data.resize(4096);
+  profile.callVa=0x400;profile.pltVa=0x500;profile.noCallbackVa=0x1020;profile.insufficientVa=0x1040;profile.originalBl=Bl(profile.callVa,profile.pltVa);
+  size_t cursor{};
+  for(unsigned reg=2;reg<30;++reg)for(auto word:nce::instructions::MoveRegister(nce::registers::X(reg),uint64_t(0xa500000000000000ULL+reg*0x10101))){Put(text,cursor,word);cursor+=4;}
+  // Nonzero SIMD/NZCV canaries in own NSO; no TLS or SVC instruction here.
+  for(unsigned reg{};reg<32;++reg){const unsigned imm=reg+1;Put(text,cursor,0x4f00e400u|((imm&0xe0)<<11)|((imm&31)<<5)|reg);cursor+=4;}
+  Put(text,cursor,0xd2b40002);cursor+=4;Put(text,cursor,0xd51b4202); // MOVZ X2,#A000,LSL16; MSR NZCV,X2
+  Put(text,profile.callVa,profile.originalBl);Put(text,profile.callVa+4,0x58000070);Put(text,profile.callVa+8,0xd61f0200);Put64(text,profile.callVa+16,uint64_t(&RuntimeFinish));
+  Put(text,profile.pltVa,0xd0000010);Put(text,profile.pltVa+4,0xf9408211);Put(text,profile.pltVa+8,0x91040210);Put(text,profile.pltVa+12,0xd61f0220);
+  Put64(data,0x100,uint64_t(&RuntimeCallee));
+  profile.preimage.buildId[0]=0x55;profile.preimage.buildId[31]=0xa5;profile.preimage.windowCount=3;
+  profile.requests[0]={profile.callVa,32};profile.requests[1]={profile.pltVa,16};profile.requests[2]={0x1020,64};
+  for(size_t i{};i<3;++i){profile.segments[i]={uint32_t(i*4096),4096};profile.preimage.segmentHashes[i]=image::Sha256(backing->segments[i]);
+    const auto request=profile.requests[i];const auto &source=backing->segments[request.va/4096];
+    profile.preimage.windows[i]={request.va,request.size,image::Sha256(std::span(source).subspan(request.va%4096,request.size))};}
+  loader::NsoLoader::NsoHeader header{};header.magic=util::MakeMagic<u32>("NSO0");header.text={1,0,4096};header.ro={2,4096,4096};header.data={3,8192,4096};
+  std::memcpy(header.buildId.data(),profile.preimage.buildId.data(),32);std::memcpy(backing->header.data(),&header,sizeof(header));
+ }
+};
+struct CaseResult{Image image{};uint64_t base{},threadContext{},callPc{};bool installed{};};
+__attribute__((noinline)) void Execute(kernel::type::KNceThread &thread){
+#ifdef __aarch64__
+ if(setjmp(returnContext)==0)thread.Run();
+#else
+ (void)thread;
+#endif
+}
+CaseResult RunCase(const std::filesystem::path&output,bool enabled,bool unresolved,bool noreturn,bool unknown=false,unsigned gateCase=0){
+ using namespace diagnostics;
+ Fixture fixture;auto&data=fixture.backing->segments[2];if(unresolved){Put64(data,0x100,uint64_t(&RuntimeResolver));fixture.profile.preimage.segmentHashes[2]=image::Sha256(data);}
+ Config config;config.directory=output.string();static unsigned caseId{};config.sessionId="production-pipeline-synthetic-"+std::to_string(++caseId);config.processRunId="controlled-process";assert(Start(config));SetLaunchId("controlled-launch",true);
+ r::ConfigureIdentity(true);image::Configure(true,{fixture.profile.requests.data(),fixture.profile.preimage.windowCount});
+ auto process=std::make_shared<kernel::type::KProcess>(fixture.profile,enabled);nce::NCE nce;DeviceState state{&nce};loader::Loader loader;
+ auto info=loader::NsoLoader::LoadNso(&loader,fixture.backing,process,state,0,"sdk.nso",true);
+ auto module=process->diagnosticObservation.Binding();assert(module&&process->diagnosticObservation.Validated());
+ assert(module->observerInstalled==enabled);assert(info.entry==info.base+(enabled?8192:4096)); // default old layout
+ CaseResult result;result.base=uint64_t(info.entry);result.callPc=result.base+fixture.profile.callVa;result.installed=enabled;
+ kernel::type::KNceThread thread(*process);thread.entry=info.entry;thread.entryArgument=unknown?0xfedcba9876543210:result.base+fixture.profile.noCallbackVa;
+ process->diagnosticObservation.SealLoads();thread.Init();assert(bool(thread.ctx.diagnosticSlot)==enabled);
+ result.threadContext=uint64_t(&thread.ctx);
+ auto*stack=static_cast<u8*>(mmap(nullptr,8192,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0));assert(stack!=MAP_FAILED);assert(mprotect(stack+4096,4096,PROT_READ|PROT_WRITE)==0);thread.stackTop=stack+4096;
+ RuntimeNoReturn=noreturn;RuntimeResolverLr=RuntimeResolverIp=0;
+ if(enabled){auto slot=thread.diagnosticSlotStorage;assert(slot);
+ if(gateCase==1)slot->expectedOption^=2;
+ if(gateCase==2)slot->state=3;
+ if(gateCase==3)slot->expectedOwner^=2;
+ if(gateCase==4)slot->state=1;
+ if(gateCase==5)module->active=2;
+ }
+
+#ifdef __aarch64__
+ Execute(thread);std::memcpy(&result.image,stack+4096,sizeof(Image));
+ assert(result.image.sp==uint64_t(stack+4096));assert(result.image.x[0]==thread.entryArgument&&result.image.x[30]==result.callPc+4);
+ assert(result.image.x[16]==result.base+0x2100&&result.image.x[17]==uint64_t(&RuntimeCallee));assert(result.image.tls==uint64_t(&thread.ctx));
+ assert(result.image.nzcv==0xa0000000);
+ if(unresolved)assert(RuntimeResolverLr==result.callPc+4&&RuntimeResolverIp==result.base+0x2100);
+ if(enabled&&gateCase==0){auto slot=thread.diagnosticSlotStorage;assert(slot&&(slot->state.load(std::memory_order_acquire)==2||slot->state.load(std::memory_order_acquire)==3)&&slot->x0==thread.entryArgument&&slot->lr==result.callPc+4&&slot->sp==uint64_t(stack+4096));}
+#endif
+ if(gateCase){auto slot=thread.diagnosticSlotStorage;assert(slot->state==(gateCase==2?3:gateCase==4?1:0));}
+ assert(Flush(5000));process->diagnosticObservation.Invalidate(r::StopReason::ProcessExit);r::ConfigureIdentity(false);Stop();munmap(stack,8192);
+ return result;
+}
+int main(int argc,char**argv){assert(argc==2);std::filesystem::create_directories(argv[1]);
+#ifdef __aarch64__
+ for(bool resolver:{false,true})for(bool noReturn:{false,true}){
+   auto plain=RunCase(std::filesystem::path(argv[1])/"baseline",false,resolver,noReturn);
+   auto seen=RunCase(std::filesystem::path(argv[1])/"observed",true,resolver,noReturn);
+   for(unsigned i{};i<31;++i)if(i!=0&&i!=16&&i!=30)assert(plain.image.x[i]==seen.image.x[i]);
+   assert(plain.image.q==seen.image.q&&plain.image.nzcv==seen.image.nzcv&&plain.image.fpcr==seen.image.fpcr&&plain.image.fpsr==seen.image.fpsr);
+ }
+ for(unsigned gateCase=1;gateCase<=5;++gateCase)RunCase(std::filesystem::path(argv[1])/("gate-"+std::to_string(gateCase)),true,true,true,false,gateCase);
+ RunCase(std::filesystem::path(argv[1])/"unknown",true,false,true,true);
+ std::puts("PASS controlled QEMU: actual LoadNso/LoadExecutable/NCE planner+patcher/KNceThread Init+Run bodies; guarded no-redzone SP; original resolved/unresolved PLT and post-BL LR; original return/nonreturn; raw GP/SIMD/flags with explicit relocated-address assertions; actual source dependencies controlled, not Android lifecycle");
+#else
+ RunCase(std::filesystem::path(argv[1])/"host-layout",false,false,false);
+ std::puts("PASS actual Loader/NCE source mapping and default layout on host; no Guest execution");
+#endif
+}

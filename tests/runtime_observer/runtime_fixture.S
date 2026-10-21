@@ -1,0 +1,71 @@
+// Own content-free helper; never part of NSO or Android app.
+.text
+.p2align 2
+.global RuntimeCallee
+RuntimeCallee:
+ stp x0,x1,[sp,#0]
+ stp x2,x3,[sp,#16]
+ stp x4,x5,[sp,#32]
+ stp x6,x7,[sp,#48]
+ stp x8,x9,[sp,#64]
+ stp x10,x11,[sp,#80]
+ stp x12,x13,[sp,#96]
+ stp x14,x15,[sp,#112]
+ stp x16,x17,[sp,#128]
+ stp x18,x19,[sp,#144]
+ stp x20,x21,[sp,#160]
+ stp x22,x23,[sp,#176]
+ stp x24,x25,[sp,#192]
+ stp x26,x27,[sp,#208]
+ stp x28,x29,[sp,#224]
+ str x30,[sp,#240]
+ mov x16,sp
+ str x16,[sp,#248]
+ mrs x16,nzcv
+ str x16,[sp,#256]
+ mrs x16,fpcr
+ str x16,[sp,#264]
+ mrs x16,fpsr
+ str x16,[sp,#272]
+ mrs x16,tpidr_el0
+ str x16,[sp,#280]
+ mrs x16,tpidrro_el0
+ str x16,[sp,#288]
+ stp q0,q1,[sp,#304]
+ stp q2,q3,[sp,#336]
+ stp q4,q5,[sp,#368]
+ stp q6,q7,[sp,#400]
+ stp q8,q9,[sp,#432]
+ stp q10,q11,[sp,#464]
+ stp q12,q13,[sp,#496]
+ stp q14,q15,[sp,#528]
+ stp q16,q17,[sp,#560]
+ stp q18,q19,[sp,#592]
+ stp q20,q21,[sp,#624]
+ stp q22,q23,[sp,#656]
+ stp q24,q25,[sp,#688]
+ stp q26,q27,[sp,#720]
+ stp q28,q29,[sp,#752]
+ stp q30,q31,[sp,#784]
+ ldr x16,=RuntimeNoReturn
+ ldr x16,[x16]
+ cbnz x16,RuntimeFinish
+ ret
+.global RuntimeResolver
+RuntimeResolver:
+ ldr x17,=RuntimeResolverLr
+ str x30,[x17]
+ ldr x17,=RuntimeResolverIp
+ str x16,[x17]
+ ldr x17,=RuntimeCallee
+ str x17,[x16]
+ br x17
+.global RuntimeFinish
+RuntimeFinish:
+ mrs x16,tpidr_el0
+ ldr x17,[x16,#0x2a0]
+ msr tpidr_el0,x17
+ ldr x16,[x16,#0x2a8]
+ mov sp,x16
+ b RuntimeFinishCpp
+.section .note.GNU-stack,"",%progbits

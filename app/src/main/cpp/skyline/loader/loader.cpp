@@ -110,7 +110,7 @@ namespace skyline::loader {
             __builtin___clear_cache(reinterpret_cast<char *>(executableBase), reinterpret_cast<char *>(executableBase + textSize));
             __builtin___clear_cache(reinterpret_cast<char *>(executableGuestBase), reinterpret_cast<char *>(executableGuestBase + textSize));
             diagnostics::runtime::ScopedLoad::Mapped({executableBase,textSize},{executableBase+executable.ro.offset,roSize},
-                reinterpret_cast<uintptr_t>(executableGuestBase),reinterpret_cast<uintptr_t>(guestBase),size,true);
+                reinterpret_cast<uintptr_t>(executableGuestBase),reinterpret_cast<uintptr_t>(guestBase),size,true,{base,patch.size});
         }
 
         return {guestBase, size, executableGuestBase + executable.text.offset};

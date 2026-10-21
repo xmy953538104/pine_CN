@@ -1,0 +1,23 @@
+# Load-owned NSO identity and a gated NCE callsite observer
+
+This PR extends accepted PR24. It does not replace the PR22 APK or modify an NSP.
+
+The production `LoadNso` → `LoadExecutable` path retains owned full 32-byte Build ID, original unpadded segment hashes/layout, and bounded windows. After NCE patching and mapping, it separately verifies actual mapped text/rodata windows while loading synchronously, before Guest admission. Export explicitly distinguishes preimage, post-NCE/pre-observer windows and any installed observer bytes. Existing symbol spans are never used for identity.
+
+Route B is selected: one authenticated callsite BL establishes the original caller LR, a dedicated stackless producer uses only X16/X17, and a B tail transfer traverses the untouched original PLT. Its admission verifies that the PLT unconditionally overwrites both scratch registers. It neither reads the GOT nor asserts the eventual AbortImpl target or a true outer-function entry hit. Route A requires additional authenticated entry displacement and dynamic-binding evidence. Existing later SVC context is not entry evidence.
+
+Actual NCE patch-size planning reserves the stub before layout only in an explicitly typed controlled test build. Actual `ThreadContext` appends the slot pointer while asserting all assembly offsets. Actual `KNceThread::Init` attaches a lifecycle-owned slot; teardown joins before the derived context dies. The producer writes a fixed single-owner POD slot without Guest stack access, allocation, flags changes, helper calls, scheduling, I/O, JNI, or locks. Failed epochs/inactive/full slots tail-transfer. An interrupted Writing slot is not a record and is never reused. Existing Diagnostics worker drains completed records, pins sink/session/process/launch/option generations, and admits at most one event for the module/Launch. Event timestamps describe worker recording; capture clock is explicitly unavailable.
+
+## Deployment gate remains closed
+
+Production `Domain::Guest` cannot reserve/install the observer: the only constructor granting controlled installation is excluded without `PINE_DIAG_RUNTIME_TEST`. Readonly identity requires verbose diagnostics plus explicit `module_runtime`, default unselected. Disabled execution preserves the original patch layout and creates no slots. The physical RWX mapping in Pine does not prove continuous runtime code/rodata integrity. This PR does not alter that memory policy. Consequently no actual game interception or experimental APK is authorized by these tests.
+
+Opening the gate requires a qualified immutable-code/assertion lifetime mechanism compatible with existing mappings; executed Android/Pine process/thread teardown, interrupted producer and original error propagation tests; and review of actual binding/target provenance for any outer-entry claim. No hot unpatch is attempted: close epochs and retain storage until producers quiesce. Rollback helper applies only during quiescent loading and rejects conflicting text/stub bytes.
+
+## Verification and scope
+
+Run `python3 tools/tests/test-runtime-observer.py`, `python3 tools/tests/test-nso-image-observation.py`, and `python3 tools/tests/test-runtime-pipeline.py` for host lifecycle/emitter/actual Loader/NCE mapping checks. The new CI installs signed Ubuntu cross tools and QEMU, reassembles every producer byte, and runs `test-runtime-pipeline.py --aarch64 --output runtime-evidence`.
+
+The pipeline extracts current production LoadNso, LoadExecutable, NCE planner/patcher and KNceThread Init/Run bodies verbatim. VFS/decompression, mapping, HLE and process/kernel dependencies remain controlled. Its own NSO-like content and PLT/resolver have no commercial bytes. Guarded Guest SP has no writable redzone. Resolved/unresolved own PLT, return/nonreturn, register/flags/SIMD, stale/full/Writing/inactive slot paths are exercised under QEMU Linux-user on x86_64, not Android or native ARM64 hardware. The own resolver is not Horizon rtld. Register comparisons explicitly allow relocated module-dependent values and assert their formulas. Actual DiagnosticExport receives real pipeline-writer files and must retain raw 64-bit strings and `runtime_connected=false` exactly once in its ZIP/resource window.
+
+All source-body hashes and execution domain are written to CI evidence. No performance, complete Pine scheduler/longjmp teardown, real game branch identity, actual Host SIGSEGV stack or Android APK execution is implied.

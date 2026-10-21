@@ -1,0 +1,89 @@
+name: Runtime observer controlled pipeline
+on:
+  push:
+    branches: [feat/nce-runtime-observation]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/src/main/cpp/skyline/nce*'
+      - 'app/src/main/cpp/skyline/nce/**'
+      - 'app/src/main/cpp/skyline/loader/**'
+      - 'app/src/main/cpp/skyline/kernel/**'
+      - 'tests/runtime_observer/**'
+      - 'tools/tests/test-runtime*'
+      - '.github/workflows/runtime-observer.yml'
+permissions:
+  contents: read
+concurrency:
+  group: runtime-observer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  controlled:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      IS_BUILD_SIGNED: 'false'
+      SIGNING_STORE_PATH: unused.jks
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Official signed Ubuntu AArch64 tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user g++-aarch64-linux-gnu
+          dpkg-query -W qemu-user g++-aarch64-linux-gnu
+      - name: Production identity lifecycle and admission regressions
+        run: python3 tools/tests/test-runtime-observer.py
+      - name: Assemble exact producer and compare production words
+        run: |
+          aarch64-linux-gnu-gcc -c app/src/main/cpp/skyline/nce/observation_stub.S -o /tmp/producer.o
+          aarch64-linux-gnu-objcopy -O binary --only-section=.text /tmp/producer.o /tmp/producer.bin
+          python3 - <<'PY'
+          import re,struct
+          from pathlib import Path
+          s=Path('app/src/main/cpp/skyline/nce/observation_words.h').read_text()
+          words=[int(x,16) for x in re.findall(r'0x([0-9a-fA-F]{8})',s)]
+          assert words and Path('/tmp/producer.bin').read_bytes()==struct.pack('<'+'I'*len(words),*words)
+          print('PASS assembled production producer byte equality',len(words)*4)
+          PY
+      - name: Execute actual source pipeline under controlled QEMU AArch64
+        run: python3 tools/tests/test-runtime-pipeline.py --aarch64 --output runtime-evidence
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Actual Diagnostics exporter preserves controlled runtime rows
+        env:
+          PINE_RUNTIME_PIPELINE_CAPTURE: ${{ github.workspace }}/runtime-evidence/logs/unknown
+          PINE_RUNTIME_PIPELINE_REPORT: ${{ github.workspace }}/runtime-evidence/export.json
+        run: |
+          ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --dry-run > runtime-evidence/unit-task-graph.txt
+          python3 tools/ci/verify-jvm-only.py runtime-evidence/unit-task-graph.txt
+          ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --tests emu.skyline.diagnostics.RuntimePipelineExportTest --rerun-tasks --stacktrace
+      - name: Evidence scope and hashes
+        if: always()
+        run: |
+          if test -f runtime-evidence/result.json; then cat runtime-evidence/result.json; fi
+          if test -f runtime-evidence/export.json; then cat runtime-evidence/export.json; fi
+          find runtime-evidence -type f -exec sha256sum {} + > runtime-evidence-sha256.txt
+          cat runtime-evidence-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-observer-controlled-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            runtime-evidence/result.json
+            runtime-evidence/logs/**/*.jsonl
+            runtime-evidence/*.json
+            runtime-evidence/*.zip
+            runtime-evidence/unit-task-graph.txt
+            runtime-evidence-sha256.txt
+            app/build/test-results/testFullDebugUnitTest/

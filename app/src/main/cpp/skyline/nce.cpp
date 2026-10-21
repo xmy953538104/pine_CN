@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright © 2020 Skyline Team and Contributors (https://github.com/skyline-emu/)
 
+#include <diagnostics/runtime_observer.h>
 #include <fstream>
 #include <diagnostics/exception.h>
 #include <diagnostics/resource_observer.h>
@@ -393,7 +394,7 @@ namespace skyline::nce {
                 offsets.push_back(instructionOffset);
             }
         }
-        return {util::AlignUp(size * sizeof(u32), constant::PageSize), offsets};
+        return {util::AlignUp(size * sizeof(u32), constant::PageSize) + diagnostics::runtime::ScopedLoad::ReservationBytes(), offsets};
     }
 
     void NCE::PatchCode(std::vector<u8> &text, u32 *patch, size_t patchSize, const std::vector<size_t> &offsets, size_t textOffset) {
@@ -519,6 +520,7 @@ namespace skyline::nce {
                 patch++;
             }
         }
+        diagnostics::runtime::ScopedLoad::RecordPatchUsage(static_cast<size_t>(patch - start) * sizeof(u32));
     }
 
     size_t NCE::GetHookSectionSize(span<hle::HookedSymbolEntry> entries) {

@@ -53,6 +53,7 @@ namespace skyline::kernel::type {
         state.thread = shared_from_this();
 
         if (setjmp(originalCtx)) { // Returns 1 if it's returning from guest, 0 otherwise
+            if(diagnosticSlotStorage)diagnosticSlotStorage->retired.store(true,std::memory_order_release);
             pendingGuestSignal.Drain();
             state.scheduler->RemoveThread();
 
@@ -267,9 +268,18 @@ namespace skyline::kernel::type {
         }
     }
 
+    void KThread::JoinBeforeDiagnosticContextDestruction() {
+        if(!diagnosticSlotStorage)return; // exact existing teardown when disabled
+        Kill(true);
+        if(thread.joinable())thread.join();
+        diagnosticSlotStorage->retired.store(true,std::memory_order_release);
+    }
+    KNceThread::~KNceThread(){JoinBeforeDiagnosticContextDestruction();}
     void KNceThread::Init() {
         ctx.tpidrroEl0 = tlsRegion;
         ctx.state = &state;
+        diagnosticSlotStorage=process.diagnosticObservation.AttachThread(id);
+        ctx.diagnosticSlot=diagnosticSlotStorage.get();
     }
 
     void KNceThread::Run() {

@@ -5,6 +5,7 @@
 
 #include <common.h>
 #include <common/wregister.h>
+namespace skyline::diagnostics::runtime { struct GuestSlot; }
 
 namespace skyline {
     struct DeviceState;
@@ -88,7 +89,12 @@ namespace skyline {
             u32 nzcv;
             const DeviceState *state;
             u64 magic{constant::SkyTlsMagic};
+            alignas(16) diagnostics::runtime::GuestSlot *diagnosticSlot{};
         };
+        static_assert(offsetof(ThreadContext,hostTpidrEl0)==0x2a0);
+        static_assert(offsetof(ThreadContext,hostSp)==0x2a8);
+        static_assert(offsetof(ThreadContext,nzcv)==0x2c0);
+        static_assert(offsetof(ThreadContext,diagnosticSlot)==0x2e0);
 
         namespace guest {
             constexpr size_t SaveCtxSize{38}; //!< The size of the SaveCtx function in 32-bit ARMv8 instructions

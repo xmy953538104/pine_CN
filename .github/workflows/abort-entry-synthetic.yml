@@ -5,6 +5,7 @@ on:
     paths:
       - 'tests/abort_entry/**'
       - 'tools/run-abort-entry-prototype.py'
+      - 'tools/abort-entry-elf-control.py'
       - 'tools/tests/test-abort-entry-host.py'
       - 'app/src/main/cpp/skyline/diagnostics/**'
       - '.github/workflows/abort-entry-synthetic.yml'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'tests/abort_entry/**'
       - 'tools/run-abort-entry-prototype.py'
+      - 'tools/abort-entry-elf-control.py'
       - 'tools/tests/test-abort-entry-host.py'
       - 'app/src/main/cpp/skyline/diagnostics/**'
       - '.github/workflows/abort-entry-synthetic.yml'

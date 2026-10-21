@@ -121,7 +121,12 @@ struct Mapping {
 Evidence Describe(Mapping &m,uint64_t generation=1){Evidence e;e.site=Evidence::Site::EntrySub32;e.enabled=e.syntheticOwned=true;e.producersQuiescent=m.quiescent;e.writable=m.writable;e.executable=m.executable;e.base=uintptr_t(m.data);e.generation=generation;e.moduleId=Hash("owned-fixture-not-sdk");e.segmentHash=Sha256(m.Bytes());e.call=m.Offset(fixture_original);e.target=m.Offset(fixture_resume);e.stub=m.Offset(fixture_tap);e.tail=m.Offset(fixture_tail);e.original=Word(m.Bytes(),e.call);e.windowStart=e.call;e.windowSize=32;e.windowHash=Sha256(m.Bytes().subspan(e.windowStart,e.windowSize));return e;}
 __attribute__((noinline)) void Invoke(void *caller){invoke_fixture(caller,&seed);}
 void ResetSlot(uint64_t expected,uint64_t){slot.expectedLr=expected;slot.generation=++nextGeneration;slot.x0=slot.lr=slot.sp=slot.pc=slot.tls=0;slot.state.store(0,std::memory_order_release);}
-void CompareState(){CHECK(std::memcmp(&baselineImage,&observedImage,sizeof(FullState))==0);CHECK(observedImage.x[0]==seed.x[0]);CHECK(observedImage.sp%16==0);}
+void CompareState(){
+    if (std::memcmp(&baselineImage,&observedImage,sizeof(FullState))!=0) {
+        const auto *a=reinterpret_cast<const uint64_t *>(&baselineImage), *b=reinterpret_cast<const uint64_t *>(&observedImage);
+        for(size_t i{};i<sizeof(FullState)/8;++i) if(a[i]!=b[i]) std::fprintf(stderr,"state offset%zu baseline=%s observed=%s\n",i*8,Hex(a[i]).c_str(),Hex(b[i]).c_str());
+    }
+    CHECK(std::memcmp(&baselineImage,&observedImage,sizeof(FullState))==0);CHECK(observedImage.x[0]==seed.x[0]);CHECK(observedImage.sp%16==0);}
 void InvokeNoReturn(void *caller){if(setjmp(jumpTarget)==0){Invoke(caller);CHECK(false);}RestoreFp();CHECK(lateReason==674);CHECK(modeledHostSp==0x123456780000);}
 
 void Aarch64Checks(const std::filesystem::path &output){
@@ -134,16 +139,20 @@ void Aarch64Checks(const std::filesystem::path &output){
         ResetSlot(uintptr_t(map.data+map.Offset(fixture_after)),placement+1);seed.x[0]=0xfedcba9876543210;
         CHECK(Prepare(map.Bytes(),evidence.moduleId,evidence,plan)==Stop::None);map.Seal();
         control.image=&baselineImage;Invoke(map.Caller());CHECK(slot.state.load()==0);
-        CHECK(baselineImage.x[30]==slot.expectedLr);map.Stage();CHECK(Apply(map.Bytes(),evidence,plan)==Stop::None);map.Seal();
+        CHECK(baselineImage.x[30]==slot.expectedLr);
+        const auto returningBaseline=baselineImage;
+        control.callback=fixture_late_break;InvokeNoReturn(map.Caller());
+        const auto nonreturnBaseline=baselineImage;baselineImage=returningBaseline;
+        control.callback=nullptr;map.Stage();CHECK(Apply(map.Bytes(),evidence,plan)==Stop::None);map.Seal();
         control.image=&observedImage;Invoke(map.Caller());CompareState();
         CHECK(slot.state.load(std::memory_order_acquire)==2&&slot.x0==seed.x[0]&&slot.lr==baselineImage.x[30]&&slot.sp==baselineImage.sp+32&&slot.pc==uintptr_t(map.data+map.Offset(fixture_original))&&slot.tls==Tls()&&slot.route==1);
         const auto first=slot.x0;seed.x[0]=0x7777777777777777;Invoke(map.Caller());CHECK(slot.x0==first);seed.x[0]=0xfedcba9876543210;
         for(uint32_t state : {1u,2u,3u,4u}){slot.state=state;slot.x0=0x1122334455667788;control.image=&observedImage;Invoke(map.Caller());CompareState();CHECK(slot.x0==0x1122334455667788&&slot.state==state);}
         ResetSlot(slot.expectedLr,placement+1);control.slot=nullptr;Invoke(map.Caller());CompareState();CHECK(slot.state==0);control.slot=&slot;
         auto expected=slot.expectedLr;slot.expectedLr+=4;Invoke(map.Caller());CompareState();CHECK(slot.state==0);slot.expectedLr=expected;
-        control.callback=fixture_late_break;control.image=&observedImage;
+        control.callback=fixture_late_break;control.image=&observedImage;baselineImage=nonreturnBaseline;
         for(unsigned i{};i<40;++i){ResetSlot(expected,placement+1);const auto count=jumpCount;InvokeNoReturn(map.Caller());CHECK(jumpCount==count+1&&lateHelperLr!=expected&&slot.state==2&&slot.x0==seed.x[0]&&slot.lr==expected);CompareState();}
-        control.callback=nullptr;map.Stage();CHECK(Rollback(map.Bytes(),evidence,plan)==Stop::None);CHECK(std::equal(before.begin(),before.end(),map.data));map.Seal();
+        control.callback=nullptr;baselineImage=returningBaseline;map.Stage();CHECK(Rollback(map.Bytes(),evidence,plan)==Stop::None);CHECK(std::equal(before.begin(),before.end(),map.data));map.Seal();
         ResetSlot(expected,placement+1);control.image=&observedImage;Invoke(map.Caller());CompareState();CHECK(slot.state==0);
     }
     // Contending normal Linux fixture threads: original body performs no shared image writes.
@@ -164,6 +173,7 @@ void Aarch64Checks(const std::filesystem::path &output){
 }
 #endif
 int main(int argc,char **argv){
+    std::setvbuf(stdout,nullptr,_IONBF,0);
     HostChecks();
 #ifdef __aarch64__
     CHECK(argc==2);std::filesystem::create_directories(argv[1]);Aarch64Checks(argv[1]);

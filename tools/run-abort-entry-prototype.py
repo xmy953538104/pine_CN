@@ -33,6 +33,7 @@ def main():
     host = a.output/'host-prototype'
     run([os.environ.get('CXX', 'c++'), *flags, str(source), '-o', str(host)], a.output/'host-build.log')
     run([str(host)], a.output/'host-run.log')
+    run(['python3', str(ROOT/'tools/abort-entry-elf-control.py'), '--output', str(a.output/'host-elf')], a.output/'host-elf.log')
     report = {'schema': 1, 'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
               'scope': 'Owned content-free fixtures only. No NSO/game/Android execution or production hook.',
               'host_controls': 'passed', 'aarch64_execution': 'not_run', 'sdk_authenticated': False,
@@ -61,6 +62,7 @@ def main():
             report.update(aarch64_execution='passed_under_qemu_linux_user_not_android', native_result=objects[-1],
                           native_diagnostics_and_window='actual production writer files parsed',
                           raw_entry_event=observed[0], executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
+            run(['python3', str(ROOT/'tools/abort-entry-elf-control.py'), '--output', str(a.output/'aarch64-elf'), '--cc', compiler.removesuffix('g++')+'gcc', '--qemu', qemu], a.output/'aarch64-elf.log')
             run([qemu, '--version'], a.output/'qemu-version.log')
             run([compiler, '--version'], a.output/'cross-compiler-version.log')
     report['source_sha256'] = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()

@@ -49,8 +49,8 @@ struct Record {
 struct ExpectedWindow { uint32_t va{}, size{}; Digest hash{}; };
 struct ExpectedPreimage {
     Digest buildId{};
-    std::array<Digest, 3> segmentHashes;
-    std::array<ExpectedWindow, MaxWindows> windows;
+    std::array<Digest, 3> segmentHashes{};
+    std::array<ExpectedWindow, MaxWindows> windows{};
     size_t windowCount{};
 };
 enum class PreimageMatch { MatchOnly, UnknownExpected, BuildIdMismatch, SegmentMismatch, WindowMismatch, Unpublished };

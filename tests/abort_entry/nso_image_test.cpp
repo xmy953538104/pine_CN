@@ -52,6 +52,10 @@ int main(int argc,char **argv) {
     for(size_t i{};i<3;++i)expected.segmentHashes[i]=copied.segments[i].computedHash;
     for(size_t i{};i<record.windowCount;++i)expected.windows[i]={record.windows[i].va,record.windows[i].size,record.windows[i].hash};
     CHECK(VerifyPreimage(record,expected)==PreimageMatch::MatchOnly);
+    ExpectedPreimage incomplete;incomplete.buildId=input.buildId;incomplete.windowCount=1;
+    CHECK(VerifyPreimage(record,incomplete)==PreimageMatch::UnknownExpected);
+    auto corrupt=record;corrupt.windows[0].bytes[0]^=1;
+    CHECK(VerifyPreimage(corrupt,expected)==PreimageMatch::WindowMismatch);
     auto changed=expected;changed.buildId={};CHECK(VerifyPreimage(record,changed)==PreimageMatch::UnknownExpected);
     changed=expected;changed.buildId[0]^=1;CHECK(VerifyPreimage(record,changed)==PreimageMatch::BuildIdMismatch);
     changed=expected;changed.segmentHashes[1][0]^=1;CHECK(VerifyPreimage(record,changed)==PreimageMatch::SegmentMismatch);

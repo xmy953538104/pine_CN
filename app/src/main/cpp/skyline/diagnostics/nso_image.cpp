@@ -45,7 +45,8 @@ PreimageMatch VerifyPreimage(const Record &record, const ExpectedPreimage &expec
     for (size_t i{}; i < expected.windowCount; ++i) {
         const auto &actual = record.windows[i];
         const auto &target = expected.windows[i];
-        if (actual.va != target.va || actual.size != target.size || actual.hash != target.hash)
+        if (actual.va != target.va || actual.size != target.size || actual.hash != target.hash ||
+            Sha256(std::span(actual.bytes).first(actual.size)) != target.hash)
             return PreimageMatch::WindowMismatch;
     }
     if (!record.moduleBase || !record.loadReservationSize) return PreimageMatch::Unpublished;

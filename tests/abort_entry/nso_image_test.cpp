@@ -37,11 +37,37 @@ Result PublishObserved(std::unique_ptr<Pending> pending,const std::shared_ptr<co
     } while(std::chrono::steady_clock::now()<deadline);
     return Result::Busy;
 }
+std::unique_ptr<Pending> CaptureObserved(const Input &input,Result *status=nullptr) {
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+    Result result;
+    do {
+        auto value=Capture(input,&result);
+        if(result!=Result::OwnerUnavailable&&result!=Result::Busy){if(status)*status=result;return value;}
+        std::this_thread::yield();
+    } while(std::chrono::steady_clock::now()<deadline);
+    if(status)*status=result;
+    return {};
+}
+Result SnapshotObserved(const ModuleOwner &owner,const std::shared_ptr<const void>&process,std::string_view name,Record &record) {
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+    Result result;
+    do {
+        result=Snapshot(owner,process,name,record);
+        if(result!=Result::OwnerUnavailable&&result!=Result::Busy)return result;
+        std::this_thread::yield();
+    } while(std::chrono::steady_clock::now()<deadline);
+    return result;
+}
+bool OwnerObserved(ModuleOwner &owner){
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+    do {if(TryModuleOwner(owner))return true;std::this_thread::yield();}while(std::chrono::steady_clock::now()<deadline);
+    return false;
+}
 int main(int argc,char **argv) {
     CHECK(argc==2);
     Config config;config.directory=argv[1];config.sessionId="owned-module-session";config.processRunId="owned-process";
     CHECK(Start(config));SetLaunchId("owned-launch",true);
-    ModuleOwner owner;CHECK(TryModuleOwner(owner));CHECK(OwnerText(owner.session)==config.sessionId);
+    ModuleOwner owner;CHECK(OwnerObserved(owner));CHECK(OwnerText(owner.session)==config.sessionId);
     auto process=std::make_shared<int>(42);
     std::array<std::vector<uint8_t>,3> storage{std::vector<uint8_t>(4096,0xa1),std::vector<uint8_t>(4096,0xb2),std::vector<uint8_t>(128,0xc3)};
     Input input; input.name="sdk";
@@ -49,10 +75,10 @@ int main(int argc,char **argv) {
     input.segments[0]={0,117,storage[0]};input.segments[1]={4096,101,storage[1]};input.segments[2]={8192,128,storage[2]};
     for(auto &part:input.segments){part.hashDeclared=true;part.declaredHash=Sha256(part.contents.first(part.size));}
     const auto noAllocBefore=allocations;Result result;
-    CHECK(!Capture(input,&result)&&result==Result::Disabled&&allocations==noAllocBefore);
+    CHECK(!CaptureObserved(input,&result)&&result==Result::Disabled&&allocations==noAllocBefore);
     WindowRequest windows[]{{4,16},{4100,20}};
     CHECK(Configure(true,windows)==Result::Ok);
-    auto pending=Capture(input,&result);CHECK(pending&&result==Result::Ok);
+    auto pending=CaptureObserved(input,&result);CHECK(pending&&result==Result::Ok);
     const auto copied=pending->record;
     CHECK(copied.buildId==input.buildId&&copied.windowCount==2&&copied.segments[0].size==117);
     CHECK(copied.segments[0].hashMatches&&copied.segments[1].hashMatches);
@@ -61,7 +87,7 @@ int main(int argc,char **argv) {
     const auto saved=storage[0];std::fill(storage[0].begin(),storage[0].end(),0xdd); // ordinary later patching
     CHECK(pending->record.windows[0].bytes[0]==0xa1&&pending->record.segments[0].computedHash==copied.segments[0].computedHash);
     CHECK(PublishObserved(std::move(pending),process,0x7100000000,0x4000,0x7100001000)==Result::Ok);
-    Record record;CHECK(Snapshot(owner,process,"sdk",record)==Result::Ok);
+    Record record;CHECK(SnapshotObserved(owner,process,"sdk",record)==Result::Ok);
     CHECK(record.moduleBase==0x7100001000&&record.segments[1].mappedStart==0x7100002000);
     ExpectedPreimage expected;expected.buildId=input.buildId;expected.windowCount=record.windowCount;
     for(size_t i{};i<3;++i)expected.segmentHashes[i]=copied.segments[i].computedHash;
@@ -78,34 +104,34 @@ int main(int argc,char **argv) {
     changed=expected;changed.windows[0].hash[0]^=1;CHECK(VerifyPreimage(record,changed)==PreimageMatch::WindowMismatch);
     CHECK(VerifyPreimage(copied,expected)==PreimageMatch::Unpublished);
     CHECK(LiveGotCapability()==Result::ResolverProtocolUnavailable);
-    auto otherProcess=std::make_shared<int>(42);CHECK(Snapshot(owner,otherProcess,"sdk",record)==Result::NotFound);
+    auto otherProcess=std::make_shared<int>(42);CHECK(SnapshotObserved(owner,otherProcess,"sdk",record)==Result::NotFound);
     storage[0]=saved; // pending spans remain caller-owned; only the record owns evidence
     input.segments[0].contents=storage[0];
-    auto bad=input;bad.name="content://private/rom";CHECK(!Capture(bad,&result)&&result==Result::InvalidName);
-    bad=input;bad.segments[0].size=4097;CHECK(!Capture(bad,&result)&&result==Result::SegmentBounds);
-    bad=input;bad.segments[0].va=UINT32_MAX-4;CHECK(!Capture(bad,&result)&&result==Result::SegmentBounds);
+    auto bad=input;bad.name="content://private/rom";CHECK(!CaptureObserved(bad,&result)&&result==Result::InvalidName);
+    bad=input;bad.segments[0].size=4097;CHECK(!CaptureObserved(bad,&result)&&result==Result::SegmentBounds);
+    bad=input;bad.segments[0].va=UINT32_MAX-4;CHECK(!CaptureObserved(bad,&result)&&result==Result::SegmentBounds);
     CHECK(Configure(true,std::array<WindowRequest,1>{{{4090,16}}})==Result::Ok);
-    CHECK(!Capture(input,&result)&&result==Result::WindowBounds);
+    CHECK(!CaptureObserved(input,&result)&&result==Result::WindowBounds);
     CHECK(Configure(true,windows)==Result::Ok);
-    failNext=true;CHECK(!Capture(input,&result)&&result==Result::AllocationFailure&&!failNext);
-    pending=Capture(input);CHECK(bool(pending));SetLaunchId("next-launch",true);
+    failNext=true;CHECK(!CaptureObserved(input,&result)&&result==Result::AllocationFailure&&!failNext);
+    pending=CaptureObserved(input);CHECK(bool(pending));SetLaunchId("next-launch",true);
     CHECK(PublishObserved(std::move(pending),process,0x7100000000,0x4000,0x7100001000)==Result::StaleOwner);
-    CHECK(Snapshot(owner,process,"sdk",record)==Result::StaleOwner);CHECK(TryModuleOwner(owner));
-    pending=Capture(input);CHECK(bool(pending));CHECK(Configure(true,windows)==Result::Ok);
+    CHECK(SnapshotObserved(owner,process,"sdk",record)==Result::StaleOwner);CHECK(OwnerObserved(owner));
+    pending=CaptureObserved(input);CHECK(bool(pending));CHECK(Configure(true,windows)==Result::Ok);
     CHECK(PublishObserved(std::move(pending),process,0x7100000000,0x4000,0x7100001000)==Result::StaleOwner);
-    pending=Capture(input);CHECK(PublishObserved(std::move(pending),process,UINT64_MAX-3,99,UINT64_MAX-2)==Result::MappingBounds);
-    pending=Capture(input);CHECK(PublishObserved(std::move(pending),process,0x7100000000,100,0x7100000010)==Result::MappingBounds);
-    for(unsigned i{};i<MaxModules;++i){pending=Capture(input);CHECK(bool(pending));CHECK(PublishObserved(std::move(pending),process,0x7100000000+i*0x10000,0x4000,0x7100001000+i*0x10000)==Result::Ok);}
-    CHECK(Snapshot(owner,process,"sdk",record)==Result::Ambiguous);
-    pending=Capture(input);CHECK(PublishObserved(std::move(pending),process,0x7200000000,0x4000,0x7200001000)==Result::Full);
+    pending=CaptureObserved(input);CHECK(PublishObserved(std::move(pending),process,UINT64_MAX-3,99,UINT64_MAX-2)==Result::MappingBounds);
+    pending=CaptureObserved(input);CHECK(PublishObserved(std::move(pending),process,0x7100000000,100,0x7100000010)==Result::MappingBounds);
+    for(unsigned i{};i<MaxModules;++i){pending=CaptureObserved(input);CHECK(bool(pending));CHECK(PublishObserved(std::move(pending),process,0x7100000000+i*0x10000,0x4000,0x7100001000+i*0x10000)==Result::Ok);}
+    CHECK(SnapshotObserved(owner,process,"sdk",record)==Result::Ambiguous);
+    pending=CaptureObserved(input);CHECK(PublishObserved(std::move(pending),process,0x7200000000,0x4000,0x7200001000)==Result::Full);
     auto weak=std::weak_ptr<int>(process);process.reset();CHECK(weak.expired()); // registry never pins process
-    process=std::make_shared<int>(99);CHECK(Snapshot(owner,process,"sdk",record)==Result::NotFound);
-    pending=Capture(input);CHECK(PublishObserved(std::move(pending),process,0x7300000000,0x4000,0x7300001000)==Result::Ok);
-    CHECK(Snapshot(owner,process,"sdk",record)==Result::Ok);
+    process=std::make_shared<int>(99);CHECK(SnapshotObserved(owner,process,"sdk",record)==Result::NotFound);
+    pending=CaptureObserved(input);CHECK(PublishObserved(std::move(pending),process,0x7300000000,0x4000,0x7300001000)==Result::Ok);
+    CHECK(SnapshotObserved(owner,process,"sdk",record)==Result::Ok);
     // Same visible IDs after a sink restart must not revive the old token.
-    pending=Capture(input);Stop();CHECK(Start(config));SetLaunchId("next-launch",true);
+    pending=CaptureObserved(input);Stop();CHECK(Start(config));SetLaunchId("next-launch",true);
     CHECK(PublishObserved(std::move(pending),process,0x7300000000,0x4000,0x7300001000)==Result::StaleOwner);
-    CHECK(Configure(false)==Result::Ok);CHECK(Snapshot(owner,process,"sdk",record)==Result::Disabled);
+    CHECK(Configure(false)==Result::Ok);CHECK(SnapshotObserved(owner,process,"sdk",record)==Result::Disabled);
     Stop();CHECK(!TryModuleOwner(owner));
     std::printf("PASS owned NSO input metadata/default-off/lifetime/bounds/hash/allocation/stale-generation/weak-process/budget (%u assertions)\n",checks);
 }

@@ -168,7 +168,9 @@ Result Snapshot(const ModuleOwner &owner, const std::shared_ptr<const void> &pro
     if (!Enabled()) return Result::Disabled;
     try {
         ModuleOwner current;
-        if (!processOwner || !TryModuleOwner(current) || current != owner) return Result::StaleOwner;
+        if (!processOwner) return Result::StaleOwner;
+        if (!TryModuleOwner(current)) return Result::OwnerUnavailable;
+        if (current != owner) return Result::StaleOwner;
         auto &registry = Get();
         std::unique_lock lock(registry.mutex, std::try_to_lock);
         if (!lock) return Result::Busy;

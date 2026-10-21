@@ -80,6 +80,17 @@ jobs:
       - if: always()
         shell: pwsh
         run: ./tools/tests/pine-diag.Tests.ps1
+      - name: One-shot Bionic wrapper syntax and failure propagation (Windows PowerShell)
+        if: always()
+        shell: powershell
+        run: ./tools/tests/android-bionic.Tests.ps1
+      - name: One-shot collector Windows paths, process exit and failure evidence
+        if: always()
+        run: node --test tools/tests/android-bionic.test.js
+      - name: One-shot Bionic wrapper syntax and failure propagation (PowerShell Core)
+        if: always()
+        shell: pwsh
+        run: ./tools/tests/android-bionic.Tests.ps1
   jvm:
     needs: scope
     if: needs.scope.outputs.jvm == 'true'

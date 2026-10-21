@@ -48,7 +48,7 @@ def main():
     generated = out / 'lifecycle.cpp'
     generated.write_text(source)
     cxx = args.cxx or ('aarch64-linux-gnu-g++' if args.aarch64 else os.environ.get('CXX', 'c++'))
-    command = [cxx, '-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
+    command = [cxx, '-std=c++20', '-O2', '-UNDEBUG', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
                '-Wno-unused-variable', '-Wno-clobbered', '-pthread', '-DPINE_DIAG_RUNTIME_TEST', '-DPINE_DIAG_TEST_HOOKS',
                '-I' + str(ROOT / 'tests/runtime_observer/stubs'), '-I' + str(ROOT / 'tests/runtime_observer'), '-I' + str(CPP),
                str(generated), str(CPP / 'diagnostics/runtime_observer.cpp'), str(CPP / 'diagnostics/nso_image.cpp'),
@@ -71,7 +71,7 @@ def main():
                 'generated_source_sha256': hashlib.sha256(generated.read_bytes()).hexdigest(),
                 'compile_command': command, 'android_execution': False, 'real_game_records': 0,
                 'dependencies': 'controlled scheduler/JVM/logging; real OS pthreads/signals/timer/setjmp/longjmp/std::thread::join',
-                'injected_states': 'consumer-only Ready/Writing/capacity fixtures; no claim of executed producer payload',
+                'injected_states': 'legacy consumer handoff/capacity states are injected; actual-writing-interruption executes the exact producer without injected state',
                 'fortify_source': 3 if args.fortify else 'toolchain_default',
                 'execution': 'not started'}
     metadata['compiler_version'] = subprocess.check_output([cxx, '--version'], text=True).splitlines()[0]
@@ -111,6 +111,12 @@ def main():
         assert not any(row['event'] == 'NVN_ABORT_CALLSITE_OBSERVED' for row in rows)
         assert any(row['fields'].get('runtime_final_drain_timeouts') == '1' for row in rows)
         metadata['writer_assertions']['stop-drain-timeout'] = {'old_ready_discarded': True, 'reported_timeouts': 1}
+        if args.aarch64:
+            proof = json.loads((out / 'logs/actual-writing-interruption/producer-proof.json').read_text())
+            assert proof['state_injected'] is False and proof['exact_installed_producer'] is True
+            assert proof['state_after_host_join'] == 1 and proof['payload_consumed'] is False
+            assert proof['altstack_delivery'] is True and proof['asynchronous_nested_sigint'] is True
+            metadata['actual_writing_interruption'] = proof
     metadata['execution'] = 'NDK compile only' if args.compile_only else 'QEMU Linux-user AArch64' if args.aarch64 else 'Linux POSIX host'
     metadata['binary_sha256'] = hashlib.sha256((out / 'lifecycle').read_bytes()).hexdigest()
     metadata['writer_jsonl_sha256'] = {str(path.relative_to(out)): hashlib.sha256(path.read_bytes()).hexdigest()

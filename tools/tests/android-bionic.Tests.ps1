@@ -30,3 +30,4 @@ foreach ($expected in @($adb, 'SERIAL:5555', $output, '--bundle', $temp)) {
     if ($recorded -cnotcontains $expected) { throw ('Argument was not preserved: ' + $expected) }
 }
 Write-Output 'PASS PowerShell AST, paths/argv and failure exit37; transport-only validation, NOT Android execution'
+exit 0

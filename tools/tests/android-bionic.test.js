@@ -7,10 +7,19 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { runOnce } = require('../android-bionic/run-once.js');
+const { runOnce, execute } = require('../android-bionic/run-once.js');
 const source = '55b3fab139e0891d3278715406ed1f843686b687';
 const names = ['pine-boundary', 'pine-lifecycle', 'pine-registers', 'libc++_shared.so'];
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+test('real host process preserves argv/metacharacters, stderr and exit37 without a shell', async () => {
+  const args = ['path with spaces', 'literal"quote', 'semi;colon', '中文', '$(not-a-command)'];
+  const result = await execute(process.execPath, ['-e', 'console.log(JSON.stringify(process.argv.slice(1)));console.error("owned-process");process.exit(37)', ...args], 10000);
+  assert.equal(result.code, 37); assert.deepEqual(JSON.parse(result.stdout), args); assert.match(result.stderr, /owned-process/);
+});
+test('real host process timeout remains uncertain/nonzero and is not retried', async () => {
+  const result = await execute(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], 100);
+  assert.equal(result.code, null); assert.equal(result.timedOut, true);
+});
 async function fixture(mode = 'pass', devices = 'SERIAL device\n') {
   const bundle = await fs.mkdtemp(path.join(os.tmpdir(), 'pine bionic collector '));
   await fs.mkdir(path.join(bundle, 'device'));

@@ -53,7 +53,7 @@ def main():
     shutil.copy2(runtime, kit / 'device/libc++_shared.so')
     shutil.copy2(args.windows_node, kit / 'host/node.exe')
     shutil.copy2(args.node_license, kit / 'licenses/Node-LICENSE')
-    shutil.copy2(ROOT / 'LICENSE', kit / 'licenses/Pine-LICENSE')
+    shutil.copy2(ROOT / 'LICENSE.md', kit / 'licenses/Pine-LICENSE.md')
     ndk = toolchain.parent.parent.parent.parent
     for notice in (ndk / 'NOTICE', ndk / 'NOTICE.toolchain'):
         if notice.exists():shutil.copy2(notice, kit / 'licenses' / notice.name)
@@ -61,9 +61,9 @@ def main():
         shutil.copy2(ROOT / 'tools/android-bionic' / name, kit / name)
     shutil.copy2(ROOT / 'tools/android-bionic/run-once.js', kit / 'host/run-once.js')
     (kit / 'build-evidence/source.patch').write_bytes(subprocess.check_output(['git', 'diff', '55b3fab1..HEAD'], cwd=ROOT))
-    source_paths = ['LICENSE', 'tools/android-bionic', 'tools/tests/test-runtime-lifecycle.py', 'tools/tests/test-runtime-pipeline.py',
+    source_paths = ['LICENSE.md', 'tools/android-bionic', 'tools/tests/test-runtime-lifecycle.py', 'tools/tests/test-runtime-pipeline.py',
                     'tests/runtime_observer', 'app/src/main/cpp/skyline/diagnostics', 'app/src/main/cpp/skyline/nce',
-                    'app/src/main/cpp/skyline/common/base.h', 'app/src/main/cpp/skyline/nce.cpp', 'app/src/main/cpp/skyline/loader',
+                    'app/src/main/cpp/skyline/common', 'app/src/main/cpp/skyline/nce.cpp', 'app/src/main/cpp/skyline/loader',
                     'app/src/main/cpp/skyline/kernel/types/KThread.cpp', 'app/src/main/cpp/skyline/kernel/types/KProcess.cpp']
     (kit / 'corresponding-source.tar').write_bytes(subprocess.check_output(['git', 'archive', 'HEAD', *source_paths], cwd=ROOT))
     metadata = {'schema': 1, 'source_commit': commit, 'source_dirty': dirty, 'baseline': '55b3fab139e0891d3278715406ed1f843686b687',

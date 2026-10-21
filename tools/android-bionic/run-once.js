@@ -37,6 +37,7 @@ async function runOnce(options) {
   const success = (result, stage) => { if (result.code !== 0) throw Object.assign(new Error(stage + ': ' + (result.stderr || result.error || 'ADB failed')), { stage }); return result.stdout.trim(); };
   let created = false;
   try {
+    options.progress?.('Checking local bundle hashes.');
     const manifest = JSON.parse(await fs.readFile(path.join(bundle, 'manifest.json'), 'utf8'));
     if (manifest.schema !== 1 || manifest.source_dirty !== false || !/^[a-f0-9]{40}$/.test(manifest.source_commit)) throw new Error('Invalid/development bundle manifest; exact clean source required');
     report.source_commit = manifest.source_commit;
@@ -66,6 +67,7 @@ async function runOnce(options) {
     const machine = success(await call(args(['shell', 'uname -m'])), 'android_machine');
     if (!/^\d+$/.test(api) || Number(api) < 29 || !abi.split(',').includes('arm64-v8a') || machine !== 'aarch64') throw Object.assign(new Error('Requires Android API29+, arm64-v8a and aarch64 kernel; native test was not started.'), { stage: 'device_capability' });
     report.device = { api: Number(api), abi_list: abi, machine };
+    options.progress?.('Authorized ARM64 API29+ device selected. Preparing one private test directory.');
     success(await call(args(['shell', 'mkdir -m 700 ' + remote])), 'create_unique_directory'); created = true;
     for (const name of payloadNames) success(await call(args(['push', path.join(bundle, 'device', name), remote + '/' + name]), 60000), 'push_' + name);
     success(await call(args(['shell', 'chmod 700 ' + payloadNames.slice(0, 3).map(name => remote + '/' + name).join(' ')])), 'payload_permissions');
@@ -75,6 +77,7 @@ async function runOnce(options) {
       if (!hashes.split(/\r?\n/).some(line => line.trim().split(/\s+/)[0] === expected && line.trim().endsWith(remote + '/' + name))) throw new Error('Device payload hash mismatch: ' + name);
     }
     report.device_hashes_verified = true; report.status = 'ANDROID_EXECUTION_REQUESTED'; report.native_execution_attempts = 1; await persist();
+    options.progress?.('Requesting the native suite exactly once. Wait for collection; do not launch another copy.');
     // The sole execution action. No retry, reboot, adb root, settings change,
     // Pine launch/data access, private logcat or game-file operation exists.
     const result = await call(args(['shell', 'cd ' + remote + ' && LD_LIBRARY_PATH=. ./pine-boundary ' + runId]), options.timeout || 240000);
@@ -86,6 +89,7 @@ async function runOnce(options) {
     report.error = { stage: error.stage || 'preflight_or_execution', message: error.message };
   } finally {
     if (created) {
+      options.progress?.('Collecting only this test directory, including failure evidence.');
       try {
         report.collection = 'attempted';
         const result = await call(['-s', selected.serial, 'pull', remote, path.join(output, 'device')], 60000);
@@ -121,6 +125,7 @@ async function main() {
     options[key] = process.argv[index + 1];
   }
   options.bundle ||= path.resolve(__dirname, '..');
+  options.progress = text => console.log(text);
   if (process.stdin.isTTY) options.chooseDevice = async devices => {
     devices.forEach((device, index) => console.log(`${index + 1}: ${device.serial} (${device.state})`));
     const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });

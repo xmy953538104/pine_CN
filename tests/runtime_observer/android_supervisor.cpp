@@ -17,6 +17,11 @@
 #endif
 
 namespace {
+#ifdef PINE_BOUNDARY_PARENT_TEST
+constexpr unsigned ChildDeadline=1; // host failure-collection test only
+#else
+constexpr unsigned ChildDeadline=90;
+#endif
 std::string Read(const char*name){std::ifstream in(name);return {std::istreambuf_iterator<char>(in),{}};}
 bool HexId(const std::string&value){return value.size()==32&&value.find_first_not_of("0123456789abcdef")==std::string::npos;}
 struct Outcome{const char*name;int code{-1},signal{};bool timeout{};std::string report;};
@@ -44,7 +49,7 @@ int Run(Outcome&test,const char*executable,const char*directory,const char*argum
         close(out);close(err);
         // Deadline belongs to this isolated child only. Never signal another
         // app or retry a crashed child. SIGALRM remains the default disposition.
-        signal(SIGALRM,SIG_DFL);alarm(90);
+        signal(SIGALRM,SIG_DFL);alarm(ChildDeadline);
         if(argument)execl(executable,executable,directory,argument,static_cast<char*>(nullptr));
         else execl(executable,executable,directory,static_cast<char*>(nullptr));
         _exit(127);

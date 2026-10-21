@@ -149,7 +149,9 @@ void Aarch64Checks(const std::filesystem::path &output){
         const auto first=slot.x0;seed.x[0]=0x7777777777777777;Invoke(map.Caller());CHECK(slot.x0==first);seed.x[0]=0xfedcba9876543210;
         for(uint32_t state : {1u,2u,3u,4u}){slot.state=state;slot.x0=0x1122334455667788;control.image=&observedImage;Invoke(map.Caller());CompareState();CHECK(slot.x0==0x1122334455667788&&slot.state==state);}
         ResetSlot(slot.expectedLr,placement+1);control.slot=nullptr;Invoke(map.Caller());CompareState();CHECK(slot.state==0);control.slot=&slot;
-        auto expected=slot.expectedLr;slot.expectedLr+=4;Invoke(map.Caller());CompareState();CHECK(slot.state==0);slot.expectedLr=expected;
+        auto expected=slot.expectedLr;
+        slot.state=0;Invoke(map.data+map.Offset(fixture_other_caller));CHECK(slot.state==0);
+        slot.expectedLr+=4;Invoke(map.Caller());CompareState();CHECK(slot.state==0);slot.expectedLr=expected;
         control.callback=fixture_late_break;control.image=&observedImage;baselineImage=nonreturnBaseline;
         for(unsigned i{};i<40;++i){ResetSlot(expected,placement+1);const auto count=jumpCount;InvokeNoReturn(map.Caller());CHECK(jumpCount==count+1&&lateHelperLr!=expected&&slot.state==2&&slot.x0==seed.x[0]&&slot.lr==expected);CompareState();}
         control.callback=nullptr;baselineImage=returningBaseline;map.Stage();CHECK(Rollback(map.Bytes(),evidence,plan)==Stop::None);CHECK(std::equal(before.begin(),before.end(),map.data));map.Seal();
@@ -161,6 +163,16 @@ void Aarch64Checks(const std::filesystem::path &output){
      for(unsigned i{};i<8;++i)workers.emplace_back([&,i]{auto local=seed;local.x[0]=0x100+i;tls[i]=Tls();for(unsigned j{};j<100;++j){invoke_fixture(map.Caller(),&local);++returned;}});
      for(auto &worker:workers) { worker.join(); }
      map.quiescent=true;CHECK(returned==800&&slot.state.load(std::memory_order_acquire)==2);CHECK(slot.x0>=0x100&&slot.x0<0x108&&slot.tls==tls[slot.x0-0x100]);}
+    // Compare elapsed time only inside this QEMU/Linux fixture, never game FPS.
+    {Mapping map;control.got.store(uintptr_t(map.data+map.Offset(fixture_original)));auto evidence=Describe(map,4);Plan plan;
+     ResetSlot(uintptr_t(map.data+map.Offset(fixture_after)),4);CHECK(Prepare(map.Bytes(),evidence.moduleId,evidence,plan)==Stop::None);
+     map.Seal();control.image=nullptr;control.callback=nullptr;
+     auto measure=[&]{std::array<double,5> samples{};for(auto &sample:samples){const auto begin=std::chrono::steady_clock::now();for(unsigned i{};i<10000;++i)Invoke(map.Caller());sample=std::chrono::duration<double,std::nano>(std::chrono::steady_clock::now()-begin).count()/10000;}std::sort(samples.begin(),samples.end());return samples;};
+     const auto baseline=measure();map.Stage();CHECK(Apply(map.Bytes(),evidence,plan)==Stop::None);map.Seal();
+     control.slot=nullptr;const auto disabled=measure();control.slot=&slot;slot.state=2;const auto full=measure();
+     std::ofstream perf(output/"fixture-performance.json");
+     perf<<"{\"scope\":\"qemu_linux_owned_fixture_only_not_FPS_or_device_cost\",\"loops_per_sample\":10000,\"samples\":5,\"baseline_ns\":["<<baseline[0]<<','<<baseline[2]<<','<<baseline[4]<<"],\"detour_disabled_ns\":["<<disabled[0]<<','<<disabled[2]<<','<<disabled[4]<<"],\"detour_full_ns\":["<<full[0]<<','<<full[2]<<','<<full[4]<<"]}\n";
+    }
     // A real unchanged Diagnostics writer receives one entry record on a normal bridge thread.
     {Mapping map;control.got.store(uintptr_t(map.data+map.Offset(fixture_original)));auto evidence=Describe(map,5);Plan plan;ResetSlot(uintptr_t(map.data+map.Offset(fixture_after)),5);CHECK(Prepare(map.Bytes(),evidence.moduleId,evidence,plan)==Stop::None);CHECK(Apply(map.Bytes(),evidence,plan)==Stop::None);map.Seal();control.image=&observedImage;control.callback=fixture_late_break;seed.x[0]=0xfedcba9876543210;
      skyline::diagnostics::Config config;config.directory=(output/"diagnostics").string();config.sessionId="synthetic-entry-session";config.processRunId="synthetic-process";CHECK(skyline::diagnostics::Start(config));skyline::diagnostics::SetLaunchId("synthetic-launch",true);skyline::diagnostics::ConfigureResourceObservation(true,"owned_synthetic_fixture");

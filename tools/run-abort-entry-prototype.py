@@ -26,6 +26,7 @@ def main():
     p.add_argument('--cross-cxx', default='aarch64-linux-gnu-g++')
     p.add_argument('--qemu', default='qemu-aarch64')
     a = p.parse_args()
+    a.output = a.output.resolve()
     a.output.mkdir(parents=True, exist_ok=True)
     source = ROOT/'tests/abort_entry/prototype.cpp'
     flags = ['-std=c++20', '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-pthread',
@@ -48,6 +49,11 @@ def main():
             run([compiler, *flags, '-static', str(source), str(ROOT/'tests/abort_entry/fixture.S'),
                  str(ROOT/'app/src/main/cpp/skyline/diagnostics/diagnostics.cpp'), '-o', str(executable)], a.output/'aarch64-build.log')
             run([qemu, '-cpu', 'max', str(executable), str(a.output/'aarch64')], a.output/'aarch64-run.log')
+            metadata = a.output/'aarch64-metadata'
+            run([compiler, *flags, '-static', str(ROOT/'tests/abort_entry/nso_image_test.cpp'),
+                 str(ROOT/'app/src/main/cpp/skyline/diagnostics/nso_image.cpp'),
+                 str(ROOT/'app/src/main/cpp/skyline/diagnostics/diagnostics.cpp'), '-o', str(metadata)], a.output/'aarch64-metadata-build.log')
+            run([qemu, '-cpu', 'max', str(metadata), str(a.output/'metadata-logs')], a.output/'aarch64-metadata-run.log')
             log = (a.output/'aarch64-run.log').read_text()
             objects = [json.loads(line) for line in log.splitlines() if line.startswith('{')]
             assert objects[-1]['architecture'] == 'aarch64' and objects[-1]['production_connected'] is False

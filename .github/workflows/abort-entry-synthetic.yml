@@ -8,6 +8,9 @@ on:
       - 'tools/abort-entry-elf-control.py'
       - 'tools/tests/test-abort-entry-host.py'
       - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/src/main/cpp/skyline/loader/nso.cpp'
+      - 'tools/tests/test-nso-image-observation.py'
+      - 'app/src/test/java/emu/skyline/diagnostics/AbortEntryExportTest.kt'
       - '.github/workflows/abort-entry-synthetic.yml'
   pull_request:
     types: [opened, synchronize, reopened]
@@ -17,6 +20,9 @@ on:
       - 'tools/abort-entry-elf-control.py'
       - 'tools/tests/test-abort-entry-host.py'
       - 'app/src/main/cpp/skyline/diagnostics/**'
+      - 'app/src/main/cpp/skyline/loader/nso.cpp'
+      - 'tools/tests/test-nso-image-observation.py'
+      - 'app/src/test/java/emu/skyline/diagnostics/AbortEntryExportTest.kt'
       - '.github/workflows/abort-entry-synthetic.yml'
 permissions:
   contents: read
@@ -28,6 +34,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      IS_BUILD_SIGNED: 'false'
+      SIGNING_STORE_PATH: unused.jks
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,12 +48,34 @@ jobs:
           dpkg-query -W qemu-user g++-aarch64-linux-gnu
       - name: Execute actual owned AArch64 fixture and unchanged Diagnostics core
         run: python3 tools/run-abort-entry-prototype.py --require-aarch64 --output entry-evidence
+      - name: Real LoadNso boundary and owned metadata regressions
+        run: python3 tools/tests/test-nso-image-observation.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Actual executed-entry writer files through production ZIP exporter
+        env:
+          PINE_ABORT_ENTRY_CAPTURE: ${{ github.workspace }}/entry-evidence/aarch64/diagnostics
+          PINE_ABORT_ENTRY_EXPORT_REPORT: ${{ github.workspace }}/entry-evidence/export-result.json
+        run: |
+          ./gradlew --no-daemon --build-cache -PpineNativeDebugOptimization=2 testFullDebugUnitTest --tests emu.skyline.diagnostics.AbortEntryExportTest --rerun-tasks --stacktrace
+          python3 -c 'import json; r=json.load(open("entry-evidence/export-result.json")); assert r["scope"]=="executed_aarch64_fixture_not_game" and r["actual_DiagnosticExport_zip"] and not r["game_observation"]; print(r)'
       - name: Retain explicit execution scope
         if: always()
         run: |
           if test -f entry-evidence/result.json; then cat entry-evidence/result.json; fi
           if test -f entry-evidence/aarch64-run.log; then cat entry-evidence/aarch64-run.log; fi
           if test -f entry-evidence/aarch64-build.log; then tail -n 80 entry-evidence/aarch64-build.log; fi
+          if test -f entry-evidence/export-result.json; then cat entry-evidence/export-result.json; fi
+          if test -f entry-evidence/aarch64-elf.log; then cat entry-evidence/aarch64-elf.log; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -52,5 +83,9 @@ jobs:
           path: |
             entry-evidence/*.json
             entry-evidence/*.log
+            entry-evidence/entry-export.zip
             entry-evidence/aarch64/**/*.jsonl
+            entry-evidence/aarch64/*.json
+            entry-evidence/aarch64-elf/result.json
+            app/build/test-results/testFullDebugUnitTest/
           if-no-files-found: error

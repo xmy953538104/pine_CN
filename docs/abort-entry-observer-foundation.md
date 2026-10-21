@@ -48,7 +48,10 @@ classification.
 
 The fixture compares all X0-X30, Q0-Q31, SP, NZCV, FPCR/FPSR and TLS at the same
 original-body point; it exercises normal return, repeated non-returning longjmp,
-disabled/full/busy states, competing threads, three mapped bases and exact rollback.
+preloaded disabled/full/busy slot states, competing threads, three simultaneously
+live distinct mapped bases and exact rollback. The slot-state preloads are not
+actual nested Guest execution; the 800 contending returns check completion and a
+single winner's payload/TLS, not full machine state for each return.
 These valid-stack, owned-mapping preconditions are **not** proof that an arbitrary
 faulting Guest stack is safe for a production trampoline. A `modeledHostSp` sentinel
 is a fixture invariant, not execution of Pine's Kill/longjmp implementation.
@@ -84,8 +87,10 @@ The metadata owns all bytes it retains, independent of `Executable` lifetime. It
 records the header-declared hashes separately from computed input hashes, and does
 not claim that the old ignored LZ4 return or Backing short reads were validated.
 `VerifyPreimage` compares an explicit expected full Build ID, three input hashes
-and bounded window hashes/locations. `MatchOnly` means **input match only**; it
-never enables a patch or authenticates the subsequent NCE/rtld-mutated mapping.
+and bounded window hashes/locations. `ExpectedPreimage` does not carry expected
+segment VA/size: `MatchOnly` is a preimage hash/window match, not proof of exact
+segment layout or live identity. It never enables a patch or authenticates the
+subsequent NCE/rtld-mutated mapping.
 `liveBytesVerified` stays false. Runtime addresses are the Loader-returned Guest
 placement, not a dereferenced/live range verification.
 
@@ -111,11 +116,26 @@ snapshot would be labeled a current sample, not historical call-chain proof.
 The first successful executed fixture was commit
 `0b9340a5a272ba697b4086f50aa3efb4f4ed25cd`, CI
 [39527527694](https://github.com/xmy953538104/pine_CN/actions/runs/39527527694):
-101 portable assertions and 1007 total ARM64 assertions. Earlier runs failed a
+1007 cumulative assertions, including 101 portable assertions, under controlled
+QEMU Linux-user AArch64 execution on an x86_64 runner, not ARM64 hardware. Earlier runs failed a
 strict compiler warning and then a fixture comparison between different call-stack
 positions. Matching ordinary-return and non-return baseline positions fixed the
 comparison; no register/SP comparison was removed. Later revisions add a genuinely
-different caller, elapsed-time ranges and owned metadata tests.
+different caller, elapsed-time ranges and owned metadata tests. The old
+`c9c8d1ea` result was 1021 cumulative, including 101 portable, not 1021
+ARM64-specific checks. Its "three bases" test used sequential mmap/unmap without
+asserting uniqueness; that earlier result does not establish three distinct bases.
+
+The review repair keeps three allocations simultaneously live without MAP_FIXED,
+asserts pairwise address uniqueness, runs all 3x40 observed longjmp cases at those
+distinct bases and retains their actual addresses in `relocation-bases.json`.
+`Apply` rechecks the current enabled evidence even after `Prepare` succeeded;
+disabled-between-prepare/apply tests cover both supported site kinds and verify
+that text and plan publication hash stay unchanged. Disabling still permits exact
+rollback. This quiescent synthetic staging API is not a concurrent runtime
+revocation protocol. The runner reports portable and post-portable AArch64 counts
+separately. The 85 metadata assertions run separately on host and controlled QEMU;
+the extracted actual LoadNso body uses controlled host dependencies.
 
 `tools/abort-entry-elf-control.py` builds our own GNU shared library and changes
 only one `Elf64_Sym.st_value`. Executed external and internal PLT calls then return

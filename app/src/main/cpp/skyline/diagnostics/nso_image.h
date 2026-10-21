@@ -54,9 +54,11 @@ struct ExpectedPreimage {
     size_t windowCount{};
 };
 enum class PreimageMatch { MatchOnly, UnknownExpected, BuildIdMismatch, SegmentMismatch, WindowMismatch, Unpublished };
-// MatchOnly authenticates the retained input against caller-supplied evidence,
-// never the live relocated text/GOT or an actual function traversal. It is NOT
-// a runtime patch authorization. No expected game identity is bundled here.
+// MatchOnly compares the retained Build ID, input segment hashes and exact
+// window locations/hashes against caller-supplied evidence. ExpectedPreimage
+// does NOT specify expected segment VA/size, so MatchOnly is not exact segment
+// layout or live identity proof, nor evidence of actual function traversal or
+// runtime patch authorization. No expected game identity is bundled here.
 PreimageMatch VerifyPreimage(const Record &record, const ExpectedPreimage &expected) noexcept;
 enum class Result {
     Ok, Disabled, Busy, OwnerUnavailable, InvalidName, HashBudget,

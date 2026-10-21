@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -57,6 +58,12 @@ def main():
             log = (a.output/'aarch64-run.log').read_text()
             objects = [json.loads(line) for line in log.splitlines() if line.startswith('{')]
             assert objects[-1]['architecture'] == 'aarch64' and objects[-1]['production_connected'] is False
+            assert objects[-1]['checks_scope'] == 'cumulative_including_portable'
+            assert objects[-1]['checks'] == objects[-1]['portable_checks'] + objects[-1]['aarch64_checks_after_portable']
+            bases = json.loads((a.output/'aarch64/relocation-bases.json').read_text())
+            assert bases['simultaneously_live'] and bases['all_original_bytes_restored']
+            assert len(bases['distinct_bases']) == len(set(bases['distinct_bases'])) == 3
+            assert all(int(base, 16) != 0 for base in bases['distinct_bases'])
             folder = a.output/'aarch64/diagnostics'
             records = [json.loads(line) for path in folder.glob('diagnostics-*.jsonl') for line in path.read_text().splitlines()]
             observed = [row for row in records if row['event'] == 'SYNTHETIC_ABORT_ENTRY']
@@ -66,8 +73,10 @@ def main():
             window = [json.loads(line) for line in (folder/'resource-window.jsonl').read_text().splitlines()]
             assert any(row.get('event') == 'SYNTHETIC_ABORT_ENTRY' for row in window)
             report.update(aarch64_execution='passed_under_qemu_linux_user_not_android', native_result=objects[-1],
+                          execution_backend='QEMU Linux-user', runner_architecture=platform.machine(),
                           native_diagnostics_and_window='actual production writer files parsed',
                           fixture_performance=json.loads((a.output/'aarch64/fixture-performance.json').read_text()),
+                          relocation_bases=bases,
                           raw_entry_event=observed[0], executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
             run(['python3', str(ROOT/'tools/abort-entry-elf-control.py'), '--output', str(a.output/'aarch64-elf'), '--cc', compiler.removesuffix('g++')+'gcc', '--qemu', qemu], a.output/'aarch64-elf.log')
             run([qemu, '--version'], a.output/'qemu-version.log')

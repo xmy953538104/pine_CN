@@ -23,7 +23,7 @@
 #error Assertions must remain enabled.
 #endif
 using namespace abort_tap;
-unsigned checks{};
+unsigned checks{}, portableChecks{};
 #define CHECK(value) do { if (!(value)) { std::fprintf(stderr,"FAIL line%d: %s\n",__LINE__,#value); std::abort(); } ++checks; } while (false)
 std::string Hex(uint64_t value) { char buffer[19]; std::snprintf(buffer,sizeof(buffer),"0x%016llx",static_cast<unsigned long long>(value)); return buffer; }
 Digest Hash(std::string_view value) { return Sha256({reinterpret_cast<const uint8_t *>(value.data()),value.size()}); }
@@ -51,6 +51,9 @@ void HostChecks() {
     e.segmentHash=Sha256(text);e.windowHash=Sha256(std::span(text).subspan(e.windowStart,e.windowSize));
     Plan p; CHECK(Prepare(text,e.moduleId,e,p)==Stop::None);
     const auto original=text;
+    auto disabled=e;disabled.enabled=false;const auto preparedAfter=p.after;
+    CHECK(Apply(text,disabled,p)==Stop::Disabled);
+    CHECK(text==original&&p.after==preparedAfter);
     auto reject=[&](Evidence bad,Digest actual,Stop expected){Plan unused;const auto before=text;CHECK(Prepare(text,actual,bad,unused)==expected);CHECK(text==before);};
     auto bad=e;bad.enabled=false;reject(bad,e.moduleId,Stop::Disabled);
     bad=e;bad.syntheticOwned=false;reject(bad,e.moduleId,Stop::Scope);
@@ -74,8 +77,12 @@ void HostChecks() {
     CHECK(Branch(e.base+e.tail,e.base+e.target,false,tail));Put(text,e.tail,tail);
     e.segmentHash=Sha256(text);e.windowHash=Sha256(std::span(text).subspan(e.windowStart,e.windowSize));
     CHECK(Prepare(text,e.moduleId,e,p)==Stop::None);const auto entryOriginal=text;
+    disabled=e;disabled.enabled=false;const auto entryPreparedAfter=p.after;
+    CHECK(Apply(text,disabled,p)==Stop::Disabled);
+    CHECK(text==entryOriginal&&p.after==entryPreparedAfter);
     CHECK(Apply(text,e,p)==Stop::None);CHECK(Target(Word(text,e.call),e.base+e.call,false,target)&&target==e.base+e.stub);
-    CHECK(Rollback(text,e,p)==Stop::None&&text==entryOriginal);
+    // Disabling blocks installation, but must still permit exact rollback.
+    CHECK(Rollback(text,disabled,p)==Stop::None&&text==entryOriginal);
     bad=e;bad.target+=4;reject(bad,e.moduleId,Stop::Instruction);
     bad=e;bad.original=0xd503201f;reject(bad,e.moduleId,Stop::Instruction);
     std::printf("PASS host SHA256 known vectors, branch boundaries/relocations, identity/window/mapping/bytes fail-closed, staging and conflict-aware rollback (%u assertions)\n",checks);
@@ -134,8 +141,14 @@ void Aarch64Checks(const std::filesystem::path &output){
     for(size_t i{};i<seed.q.size();++i)seed.q[i]=uint8_t(i*37+11);
     seed.nzcv=0xa0000000;seed.fpcr=0xc00000;seed.fpsr=0x800001f;
     control.slot=&slot;control.image=&baselineImage;control.callback=nullptr;
-    for(unsigned placement{};placement<3;++placement){
-        Mapping map;control.got.store(uintptr_t(map.data+map.Offset(fixture_original)));const auto before=std::vector<uint8_t>(map.Bytes().begin(),map.Bytes().end());auto evidence=Describe(map,placement+1);Plan plan;
+    {
+    // Keep all allocations alive throughout relocation testing so mmap cannot
+    // reuse a just-unmapped address. No fixed-address or replacement mappings.
+    std::array<Mapping,3> mappings;
+    for(size_t i{};i<mappings.size();++i)
+        for(size_t j{};j<i;++j) CHECK(mappings[i].data!=mappings[j].data);
+    for(unsigned placement{};placement<mappings.size();++placement){
+        auto &map=mappings[placement];control.got.store(uintptr_t(map.data+map.Offset(fixture_original)));const auto before=std::vector<uint8_t>(map.Bytes().begin(),map.Bytes().end());auto evidence=Describe(map,placement+1);Plan plan;
         ResetSlot(uintptr_t(map.data+map.Offset(fixture_after)),placement+1);seed.x[0]=0xfedcba9876543210;
         CHECK(Prepare(map.Bytes(),evidence.moduleId,evidence,plan)==Stop::None);map.Seal();
         control.image=&baselineImage;Invoke(map.Caller());CHECK(slot.state.load()==0);
@@ -156,6 +169,10 @@ void Aarch64Checks(const std::filesystem::path &output){
         for(unsigned i{};i<40;++i){ResetSlot(expected,placement+1);const auto count=jumpCount;InvokeNoReturn(map.Caller());CHECK(jumpCount==count+1&&lateHelperLr!=expected&&slot.state==2&&slot.x0==seed.x[0]&&slot.lr==expected);CompareState();}
         control.callback=nullptr;baselineImage=returningBaseline;map.Stage();CHECK(Rollback(map.Bytes(),evidence,plan)==Stop::None);CHECK(std::equal(before.begin(),before.end(),map.data));map.Seal();
         ResetSlot(expected,placement+1);control.image=&observedImage;Invoke(map.Caller());CompareState();CHECK(slot.state==0);
+    }
+    std::ofstream bases(output/"relocation-bases.json");
+    bases<<"{\"scope\":\"qemu_linux_user_owned_fixture_not_hardware_or_game\",\"simultaneously_live\":true,\"all_original_bytes_restored\":true,\"distinct_bases\":[\""<<Hex(uintptr_t(mappings[0].data))<<"\",\""<<Hex(uintptr_t(mappings[1].data))<<"\",\""<<Hex(uintptr_t(mappings[2].data))<<"\"]}\n";
+    CHECK(bool(bases));
     }
     // Contending normal Linux fixture threads: original body performs no shared image writes.
     {Mapping map;control.got.store(uintptr_t(map.data+map.Offset(fixture_original)));auto evidence=Describe(map,4);Plan plan;ResetSlot(uintptr_t(map.data+map.Offset(fixture_after)),4);CHECK(Prepare(map.Bytes(),evidence.moduleId,evidence,plan)==Stop::None);CHECK(Apply(map.Bytes(),evidence,plan)==Stop::None);map.Seal();control.image=nullptr;control.callback=nullptr;
@@ -181,15 +198,16 @@ void Aarch64Checks(const std::filesystem::path &output){
      std::atomic<bool> consumed{},accepted{};std::thread bridge([&]{while(slot.state.load(std::memory_order_acquire)!=2)std::this_thread::yield();auto x0=Hex(slot.x0),lr=Hex(slot.lr),sp=Hex(slot.sp),pc=Hex(slot.pc),tls=Hex(slot.tls),generation=std::to_string(slot.generation);const std::pair<std::string_view,std::string_view> fields[]{{"observation_scope","executed_aarch64_fixture_not_game"},{"entry_x0",x0},{"original_caller_lr",lr},{"entry_sp",sp},{"authenticated_entry_site",pc},{"producer_tls",tls},{"generation",generation},{"thread_scope","linux_fixture_tls_not_pine_guest_thread"}};accepted=skyline::diagnostics::EmitFields("resource","SYNTHETIC_ABORT_ENTRY",fields);consumed=true;});
      InvokeNoReturn(map.Caller());CHECK(lateReason==674&&slot.x0!=uint64_t(lateReason));while(!consumed.load())std::this_thread::yield();bridge.join();CHECK(accepted);CHECK(skyline::diagnostics::Flush(5000));skyline::diagnostics::Stop();control.callback=nullptr;
     }
-    std::printf("PASS executed AArch64 fixture: raw entry X0/original LR, all X0-X30/Q0-Q31/SP/NZCV/FPCR/FPSR/TLS equivalence; returning,120 longjmps, disabled/full/reentrant-state, selected LR,3 mapped bases,800 contending returns,unchanged Diagnostics normal-thread bridge (%u assertions)\n",checks);
+    std::printf("PASS controlled QEMU AArch64 fixture: selected-case X0-X30/Q0-Q31/SP/NZCV/FPCR/FPSR/TLS equivalence; returning,3x40 observed longjmps, preloaded disabled/full/busy states (not nested Guest execution), selected LR,3 simultaneously live distinct bases,800 contending returns (not 800 full-state checks),production Diagnostics normal-thread bridge (%u cumulative assertions including %u portable)\n",checks,portableChecks);
 }
 #endif
 int main(int argc,char **argv){
     std::setvbuf(stdout,nullptr,_IONBF,0);
     HostChecks();
+    portableChecks=checks;
 #ifdef __aarch64__
     CHECK(argc==2);std::filesystem::create_directories(argv[1]);Aarch64Checks(argv[1]);
-    std::printf("{\"architecture\":\"aarch64\",\"scope\":\"executed_owned_synthetic_fixture_not_android_or_game\",\"sdk_authenticated\":false,\"production_connected\":false,\"checks\":%u}\n",checks);
+    std::printf("{\"architecture\":\"aarch64\",\"scope\":\"controlled_qemu_linux_user_aarch64_fixture_not_hardware_android_or_game\",\"sdk_authenticated\":false,\"production_connected\":false,\"checks\":%u,\"checks_scope\":\"cumulative_including_portable\",\"portable_checks\":%u,\"aarch64_checks_after_portable\":%u}\n",checks,portableChecks,checks-portableChecks);
 #else
     (void)argc;(void)argv;std::printf("{\"architecture\":\"host\",\"aarch64_execution\":false,\"production_connected\":false,\"checks\":%u}\n",checks);
 #endif

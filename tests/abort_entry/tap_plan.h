@@ -81,6 +81,9 @@ inline Stop Prepare(std::span<const uint8_t> text, const Digest &actualId, const
     return Stop::None;
 }
 inline Stop Apply(std::span<uint8_t> text, const Evidence &e, Plan &plan) {
+    // Prepare is not an authorization to install after this quiescent-stage
+    // evidence has been disabled. Rollback remains available while disabled.
+    if (!e.enabled) return Stop::Disabled;
     if (!e.syntheticOwned || !e.producersQuiescent || !e.writable || e.executable || e.base!=plan.base || e.generation!=plan.generation || plan.call>text.size() || text.size()-plan.call<4) return Stop::Mapping;
     if (Sha256(text)!=plan.before || Word(text,plan.call)!=plan.original) return Stop::Conflict;
     Put(text,plan.call,plan.replacement); plan.after=Sha256(text); return Stop::None;

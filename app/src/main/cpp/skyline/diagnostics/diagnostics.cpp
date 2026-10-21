@@ -630,8 +630,11 @@ void Run(Sink &s) noexcept {
             {"resource_window_last_failure_reason", ResourceWindowFailureReasonName(resources.lastWindowFailure.reason)},
             {"resource_window_last_error_code", ResourceWindowErrnoName(resources.lastWindowFailure.error)},
             {"resource_window_last_errno", std::to_string(resources.lastWindowFailure.error)},
-            {"runtime_final_drain_timeouts", std::to_string(s.runtimeOwnerDrainTimeouts.load())},
             {"admission_policy", "bounded_mpsc_64_cas_and_64_context_attempts_no_mutex_wait"}};
+        // Preserve the never-enabled/default sink schema/fixtures. Only an
+        // actual optional-module drain failure adds this diagnostic counter.
+        if(auto timeouts=s.runtimeOwnerDrainTimeouts.load())
+            summary.fields.emplace_back("runtime_final_drain_timeouts",std::to_string(timeouts));
         auto line = Serialize(summary, c);
         if (bytes && bytes + line.size() > c.maxFileBytes) rotate();
         file.write(line.data(), line.size()); file.flush();

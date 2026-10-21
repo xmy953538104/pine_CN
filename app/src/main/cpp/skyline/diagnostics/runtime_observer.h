@@ -70,6 +70,9 @@ public:
 };
 #ifdef PINE_DIAG_RUNTIME_TEST
 inline thread_local void (*beforeActivation)(ProcessObservation &){};
+inline thread_local void (*beforePublication)(Module &) noexcept{};
+std::array<std::shared_ptr<Module>,16> FillRegistryForTest();
+void HoldRegistryForTest(std::atomic<bool> &entered,const std::atomic<bool> &release);
 #endif
 struct Module {
     image::Record input;

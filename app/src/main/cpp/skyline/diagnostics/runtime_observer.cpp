@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <mutex>
 #include <cstdio>
+#ifdef PINE_DIAG_RUNTIME_TEST
+#include <thread>
+#endif
 
 namespace skyline::diagnostics::runtime {
 namespace {
@@ -103,6 +106,20 @@ const Profile &SdkProfile() noexcept {
       {{{0,0x40e870},{0x40f000,0x532155},{0x942000,0x60760}}},0x2d64e0,0x3e97e0,0x7a0371,0x7a032a};
     return profile;
 }
+#ifdef PINE_DIAG_RUNTIME_TEST
+std::array<std::shared_ptr<Module>,16> FillRegistryForTest() {
+    std::array<std::shared_ptr<Module>,16> owners;
+    for(auto &owner:owners)owner=std::make_shared<Module>();
+    auto &registry=Get();std::lock_guard lock(registry.mutex);
+    for(size_t i{};i<owners.size();++i)registry.modules[i]=owners[i];
+    return owners;
+}
+void HoldRegistryForTest(std::atomic<bool> &entered,const std::atomic<bool> &release) {
+    auto &registry=Get();std::lock_guard lock(registry.mutex);
+    entered.store(true,std::memory_order_release);
+    while(!release.load(std::memory_order_acquire))std::this_thread::yield();
+}
+#endif
 void ConfigureIdentity(bool enabled) noexcept {
     auto old=optionEpoch.load(std::memory_order_relaxed);
     while(!optionEpoch.compare_exchange_weak(old,((old+2)&~uint64_t(1))|(enabled?1:0),std::memory_order_acq_rel)) {}
@@ -194,6 +211,13 @@ void ScopedLoad::Mapped(std::span<uint8_t> text,std::span<const uint8_t> ro,uint
         if(p.closed.load()||p.loadsSealed.load()||module->optionEpoch!=optionEpoch.load())return;
         module->callPc=base+expected.callVa;module->pltPc=base+expected.pltVa;
         module->noCallbackPc=base+expected.noCallbackVa;module->insufficientPc=base+expected.insufficientVa;
+#ifdef PINE_DIAG_RUNTIME_TEST
+        if(beforePublication)beforePublication(*module);
+#endif
+        // Admission may fail on capacity or try-lock contention. Reserve it
+        // before touching either text or stub. The worker ignores this weak
+        // pending entry until all immutable fields are release-published below.
+        if(!Register(module))throw StopReason::Capacity;
         if(load->reservation){
             if(patch.size()<load->reservation||load->patchUsage>patch.size()-load->reservation)throw StopReason::Capacity;
             auto stub=patch.last(load->reservation);
@@ -206,7 +230,6 @@ void ScopedLoad::Mapped(std::span<uint8_t> text,std::span<const uint8_t> ro,uint
             __builtin___clear_cache(reinterpret_cast<char*>(base),reinterpret_cast<char*>(base+text.size()));
             module->observerInstalled=true;
         }
-        if(!Register(module))throw StopReason::Capacity;
         p.storage=module;p.published.store(module.get(),std::memory_order_release);
         uint64_t pending=0;
         const bool admitted=p.admission.compare_exchange_strong(pending,1,std::memory_order_acq_rel);

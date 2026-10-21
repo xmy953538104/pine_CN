@@ -8,6 +8,8 @@
 #include <vector>
 #include <cstdio>
 #include <fstream>
+#include <chrono>
+#include <cstring>
 using namespace skyline::diagnostics;
 namespace r=skyline::diagnostics::runtime;
 namespace i=skyline::diagnostics::image;
@@ -24,7 +26,11 @@ int main(int argc,char **argv){
  auto source=i::Capture(input);assert(source);
  {
  r::ProcessObservation process(profile,r::Domain::ControlledSynthetic);
+ // Configure the controlled consumer fixture before release publication;
+ // immutable fields must never race the actual diagnostics worker.
+ r::beforePublication=[](r::Module &module) noexcept {module.observerInstalled=true;};
  {r::ScopedLoad load(process,&source->record);r::ScopedLoad::Mapped(bytes[0],bytes[1],0x7100000000,0x7100000000,0x3000,true);}
+ r::beforePublication=nullptr;
  assert(process.Validated());assert(Flush(5000));
  std::ifstream events(std::filesystem::path(argv[1])/"diagnostics-0.jsonl");
  const std::string emitted{std::istreambuf_iterator<char>(events),{}};
@@ -32,7 +38,6 @@ int main(int argc,char **argv){
  auto module=process.Binding();assert(module&&module->domain==r::Domain::ControlledSynthetic&&module->cachePublished);
  // Consumer-only controlled injection, NOT executed Guest capture. Exercise
  // actual slot admission/worker/Flush with interrupted and duplicate records.
- module->observerInstalled=true;
  auto first=process.AttachThread(37),second=process.AttachThread(38);assert(first&&second);
  first->x0=0xfedcba9876543210ULL;first->lr=module->callPc+4;first->sp=0x70001000;first->observerPc=0x70002000;
  first->state.store(1,std::memory_order_release);assert(Flush(5000));
@@ -78,6 +83,31 @@ int main(int argc,char **argv){
  {r::ProcessObservation p(profile,r::Domain::ControlledSynthetic);
  {r::ScopedLoad load(p,&source->record);r::ConfigureIdentity(false);r::ConfigureIdentity(true);
  r::ScopedLoad::Mapped(bytes[0],bytes[1],0x7100000000,0x7100000000,0x3000,true);}assert(!p.Validated()&&!p.Binding());}
+ // The actual controlled Mapped installer must acquire registry admission
+ // before changing a BL/stub. Full and contended registry are real conditions,
+ // not a fabricated return status. This host test does not execute Guest code.
+ r::ConfigureIdentity(true);
+ auto transactionBytes=bytes;auto &code=transactionBytes[0];
+ auto word=[&](size_t offset,uint32_t value){std::memcpy(code.data()+offset,&value,4);};
+ word(0,0x94000010);word(64,0x90000010);word(68,0xf9400211);word(72,0x91000210);word(76,0xd61f0220);
+ auto transactionProfile=profile;transactionProfile.callVa=0;transactionProfile.pltVa=64;transactionProfile.originalBl=0x94000010;
+ i::Input transactionInput=input;
+ for(size_t n{};n<3;++n){transactionInput.segments[n].contents=transactionBytes[n];transactionProfile.preimage.segmentHashes[n]=i::Sha256(transactionBytes[n]);}
+ for(size_t n{};n<2;++n)transactionProfile.preimage.windows[n].hash=i::Sha256(std::span(transactionBytes[n]).first(8));
+ i::Configure(true,{transactionProfile.requests.data(),2});
+ auto transactionSource=i::Capture(transactionInput);assert(transactionSource);
+ auto rejectedInstall=[&]{
+  auto text=code;std::array<uint8_t,4096> patch;patch.fill(0x5a);const auto originalPatch=patch;
+  r::ProcessObservation p(transactionProfile,r::Domain::ControlledSynthetic,true);
+  {r::ScopedLoad load(p,&transactionSource->record);assert(r::ScopedLoad::ReservationBytes()==4096);
+   r::ScopedLoad::Mapped(text,transactionBytes[1],0x7100001000,0x7100000000,0x4000,true,patch);}
+  assert(!p.Validated()&&!p.Binding()&&text==code&&patch==originalPatch);
+ };
+ {auto owners=r::FillRegistryForTest();rejectedInstall();}
+ {std::atomic<bool> entered{},release{};std::thread holder([&]{r::HoldRegistryForTest(entered,release);});
+  const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+  while(!entered.load(std::memory_order_acquire)&&std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+  assert(entered);rejectedInstall();release.store(true,std::memory_order_release);holder.join();}
  ModuleOwner owned;assert(TryModuleOwner(owned));std::atomic<uint64_t> gate{7};
  const std::pair<std::string_view,std::string_view> fields[]{{"source_domain","controlled_synthetic"}};
  assert(!EmitForModuleOwner(owned,"module_runtime","REJECT_DISABLED",fields,&gate,8));

@@ -38,7 +38,7 @@ After these corrections, local controlled AArch64 execution passed all 14 cases,
 The normal Gradle JVM-only task graph passed `tools/ci/verify-jvm-only.py`. Its actual test task could not resolve offline JitPack colorpicker and renderscript artifacts; no denied resource was retried online. For an independent JVM exporter run, supply existing Kotlin compiler/JUnit/serialization classpaths:
 
 ```sh
-python3 tools/tests/test-runtime-export.py \
+python3 tools/tests/run-runtime-export.py \
   --compiler-classpath "$PINE_KOTLIN_COMPILER_CLASSPATH" \
   --classpath "$PINE_EXPORT_TEST_CLASSPATH" \
   --capture /tmp/pine-runtime-evidence/logs/unknown \
@@ -46,6 +46,12 @@ python3 tools/tests/test-runtime-export.py \
 ```
 
 This runs the unchanged production DiagnosticExport and original RuntimePipelineExportTest, with the actual portable SelectedScanRecord parser extracted verbatim and its real dependencies. No dependency stubs are used. It omits the unrelated Android SelectedScanReports worker, makes no downloads, and produces source/input/ZIP hashes. Local execution passed with real QEMU writer input, one retained callsite row in the ZIP resource window, raw `0xfedcba9876543210` intact and `runtime_connected=false`. This is JVM export evidence, not an Android Activity/SAF or app execution result.
+
+The explicit exporter runner is named `run-runtime-export.py` because it requires classpaths and a writer capture. It is outside the argument-free `test-*.py` fast-check discovery glob. The runtime-observer regression additionally compiles without `PINE_DIAG_RUNTIME_TEST`: the controlled constructor must be unavailable, and the normal production constructor must reserve zero observer bytes and attach no Guest slots even with readonly identity explicitly selected. This is host execution of the closed gate, not Android lifecycle qualification.
+
+An O2 Debug APK attempt on exact `806731f58e41644b907cde1df20a60ce010e6373` ran `./gradlew --offline --no-daemon --build-cache -PpineNativeDebugOptimization=2 assembleFullDebug --stacktrace` and failed before compilation at `:app:dataBindingMergeDependencyArtifactsFullDebug`. The uncached fixed dependencies were `com.github.KikiManjaro:colorpicker:v1.1.12` and `com.github.android:renderscript-intrinsics-replacement-toolkit:344be3f`. The environment also lacks `app/libraries/perfetto/sdk`; its pinned submodule is `e5293f1cf1800d5776f4bfe96d1ec0aeec30cd46`. No restricted download was retried, and no replacement dependency was introduced. No APK, packaged ELF, matching symbols or actual candidate signature was produced or claimed.
+
+The existing `.github/workflows/diagnostics-performance.yml` is the O2 candidate path: it requires successful fast checks for the exact source and the repository's existing CI signer (public certificate SHA256 `70edcdc802bb16afe9665ecd3d342ea74b217a79b6efb4dbdfbb3ea3eddf16c1`). It must not fall back to a local Debug signer, add credentials, or activate the observer. To resume, the owner can publish the exact missing artifacts and pinned Perfetto source in the managed environment/cache, or run the existing CI workflow with its existing signing configuration once prerequisites are available. Its optional runtime attempt remains disabled; neither build success nor QEMU evidence satisfies the original Android safety acceptance gate.
 
 GitHub CI status remains unknown: previous Actions list and PR metadata reads returned Forbidden without captured HTTP headers/status or approval-review rejection text. Their origin is unknown. None of those resources, historical PR22 metadata, or denied Perfetto/JitPack resources was retried through this environment or an alternate route.
 

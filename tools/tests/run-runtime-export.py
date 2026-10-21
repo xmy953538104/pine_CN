@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the actual exporter/test on writer files without Android/JitPack dependencies.
 
+This explicit runner is outside the argument-free test-*.py CI discovery glob.
 The caller supplies Kotlin compiler and JVM dependency classpaths. This script
 does not download dependencies. Only the Android selected-scan writer is omitted;
 its portable record parser is extracted verbatim, with its real dependencies.

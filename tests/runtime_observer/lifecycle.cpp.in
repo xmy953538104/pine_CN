@@ -274,8 +274,13 @@ int main(int argc,char**argv){
         assert(!std::memcmp(&interrupted,&original,sizeof(original))&&tls==&thread->ctx);
         nce::NCE::SignalHandler(SIGINT,&info,&interrupted,&tls);assert(interrupted.uc_mcontext.sp==original.uc_mcontext.sp);
         thread->ctx.hostSp=reinterpret_cast<u8*>(0x3456789a0);tls=&thread->ctx;
+        // No slot (production CLOSED/OFF) retains the original terminal SP,
+        // even with a valid saved native SP. Only an attached slot opts in.
+        nce::NCE::SignalHandler(SIGINT,&info,&interrupted,&tls);assert(interrupted.uc_mcontext.sp==original.uc_mcontext.sp);
+        assert(interrupted.uc_mcontext.pc==uint64_t(&std::longjmp)&&interrupted.uc_mcontext.regs[0]==uint64_t(thread->originalCtx)&&interrupted.uc_mcontext.regs[1]==1&&!tls);
+        r::GuestSlot marker;thread->ctx.diagnosticSlot=&marker;tls=&thread->ctx;
         nce::NCE::SignalHandler(SIGINT,&info,&interrupted,&tls);assert(interrupted.uc_mcontext.sp==uint64_t(thread->ctx.hostSp));
-        thread->ctx.hostSp=nullptr;DeviceState::thread.reset();
+        thread->ctx.hostSp=nullptr;thread->ctx.diagnosticSlot=nullptr;DeviceState::thread.reset();
         auto stack=mmap(nullptr,65536,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(stack!=MAP_FAILED);
         thread->stackTop=static_cast<u8*>(stack)+65536;thread->entry=reinterpret_cast<void*>(&LifecycleSpin);thread->releaseTail=false;
         LifecycleGuestEntered=0;thread->Start();Until([]{return LifecycleGuestEntered.load(std::memory_order_acquire)==1;});

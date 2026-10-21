@@ -197,14 +197,15 @@ namespace skyline::nce {
             }
         }
 
-        // We are escaping Guest execution, not resuming it. TLS was restored
-        // by GuestSafeSignalHandler; the native longjmp entry also needs the
-        // native stack saved by KNceThread::Run, rather than the interrupted
-        // Guest SP (which may be guarded and fails fortified libc's checks).
-        // Keep fault formatting above on the original Guest context. During
-        // the initial Run transition hostSp may not yet have been published;
-        // its interrupted SP is still native, so leave that value untouched.
-        if (threadContext->hostSp)
+        // Only an attached observer thread takes this native-stack escape.
+        // Production installation is CLOSED and creates no slots, retaining
+        // the original terminal path when observation is off. The controlled
+        // path restores native SP before libc longjmp (Guest SP may be guarded
+        // and fails fortified libc's checks). Keep original fault formatting
+        // above; handled/resumable traps returned before this point. A null
+        // hostSp during initial Run publication leaves the native SP intact.
+        // Real Android qualification is still required before slot admission.
+        if (threadContext->diagnosticSlot && threadContext->hostSp)
             mctx.sp = reinterpret_cast<u64>(threadContext->hostSp);
         mctx.pc = reinterpret_cast<u64>(&std::longjmp);
         mctx.regs[0] = reinterpret_cast<u64>(state.thread->originalCtx);

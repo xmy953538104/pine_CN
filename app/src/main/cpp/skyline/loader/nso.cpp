@@ -5,6 +5,7 @@
 #include <nce.h>
 #include <kernel/types/KProcess.h>
 #include <boost/regex/v5/regex.hpp>
+#include <diagnostics/nso_image.h>
 #include "nso.h"
 
 namespace skyline::loader {
@@ -59,7 +60,34 @@ namespace skyline::loader {
 
         PrintRoContentsInfo(executable.ro.contents);
 
-        return loader->LoadExecutable(process, state, executable, offset, name, dynamicallyLinked);
+        // Experimental metadata only: default-off gate, owned unpadded input
+        // copies/hashes BEFORE NCE/symbol patching. Never retains symbolic spans
+        // or dereferences the eventual Guest mapping. Observation failure cannot
+        // change LoadExecutable's selection, bytes or exception propagation.
+        namespace image = diagnostics::image;
+        std::unique_ptr<image::Pending> observation;
+        if (image::Enabled()) {
+            image::Input input;
+            std::memcpy(input.buildId.data(), header.buildId.data(), input.buildId.size());
+            input.name = name;
+            input.segments[0] = {header.text.memoryOffset, header.text.decompressedSize, executable.text.contents};
+            input.segments[1] = {header.ro.memoryOffset, header.ro.decompressedSize, executable.ro.contents};
+            input.segments[2] = {header.data.memoryOffset, header.data.decompressedSize, executable.data.contents};
+            const bool declared[]{header.flags.textHash, header.flags.roHash, header.flags.dataHash};
+            for (size_t i{}; i < 3; ++i) {
+                std::memcpy(input.segments[i].declaredHash.data(), header.segmentHashes[i].data(), 32);
+                input.segments[i].hashDeclared = declared[i];
+            }
+            observation = image::Capture(input);
+        }
+        auto info{loader->LoadExecutable(process, state, executable, offset, name, dynamicallyLinked)};
+        if (observation) {
+            const auto textAddress{reinterpret_cast<uintptr_t>(info.entry)};
+            if (textAddress >= header.text.memoryOffset)
+                image::Publish(std::move(observation), std::static_pointer_cast<const void>(process),
+                               reinterpret_cast<uintptr_t>(info.base), info.size, textAddress - header.text.memoryOffset);
+        }
+        return info;
     }
 
     void *NsoLoader::LoadProcessData(const std::shared_ptr<kernel::type::KProcess> &process, const DeviceState &state) {

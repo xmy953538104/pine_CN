@@ -24,6 +24,7 @@
 #include <sstream>
 #include <stdexcept>
 #include "identity_observer.h"
+#include "module_identity.h"
 #include <thread>
 #include <vector>
 #include <pthread.h>
@@ -698,6 +699,29 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         ++s.accepted; s.wake.notify_one(); return true;
     } catch (...) { drop(s.droppedAllocation); return false; }
 }
+}
+bool TryModuleOwner(ModuleOwner &output) noexcept {
+    try {
+        auto &s = Get();
+        Producer producer(s); // pin configuration against Stop/Start
+        if (!producer) return false;
+        std::unique_lock lock(s.mutex, std::try_to_lock);
+        if (!lock || !IsEnabled(s) || s.config.sessionId.empty() ||
+            s.config.processRunId.empty() || s.activeLaunchId.empty()) return false;
+        ModuleOwner owner;
+        auto copy = [](const std::string &source, auto &target) {
+            if (source.size() >= target.size()) return false;
+            std::copy(source.begin(), source.end(), target.begin());
+            return true;
+        };
+        if (!copy(s.config.sessionId, owner.session) || !copy(s.config.processRunId, owner.process) ||
+            !copy(s.activeLaunchId, owner.launch)) return false;
+        owner.sinkGeneration = s.producers.load(std::memory_order_relaxed) & ProducerGenerationMask;
+        owner.launchEpoch = s.observationEpoch.load(std::memory_order_relaxed);
+        if (owner.launchEpoch & 1) return false;
+        output = owner;
+        return true;
+    } catch (...) { return false; }
 }
 bool ResourceObservationEnabled() noexcept {
     return resourceEnabled.load(std::memory_order_relaxed) && Enabled();

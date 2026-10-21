@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: MPL-2.0
+// Replaced sections are the actual repository header structs and LoadNso body.
+#include "nso_image.h"
+#include "diagnostics.h"
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <vector>
+namespace skyline {
+using u8=uint8_t;using u32=uint32_t;using u64=uint64_t;
+namespace util {template<typename T> T MakeMagic(const char *v) {T r{};std::memcpy(&r,v,sizeof(T));return r;} size_t AlignUp(size_t v,size_t alignment){return (v+alignment-1)&~(alignment-1);} }
+namespace constant {constexpr size_t PageSize=4096;}
+struct DeviceState {};
+struct exception:std::runtime_error{template<typename... A>exception(const char *m,A...):std::runtime_error(m){}};
+namespace kernel::type {struct KProcess {};}
+namespace vfs {struct Backing {
+    std::array<u8,256> header{};int segmentCalls{},failSegment{};
+    template<typename T>T Read(){T value{};std::memcpy(&value,header.data(),sizeof(T));return value;}
+};}
+namespace loader {
+struct Executable {
+    struct Segment {std::vector<u8> contents;u32 offset{};} text,ro,data;
+    struct Subsection{u32 offset{},size{};}dynsym,dynstr;
+    size_t bssSize{};
+};
+struct Loader {
+    struct ExecutableLoadInfo{u8 *base;size_t size;void *entry;};
+    int calls{};bool fail{};bool gotDynamic{};size_t gotOffset{};std::string gotName;
+    ExecutableLoadInfo LoadExecutable(const std::shared_ptr<kernel::type::KProcess>&,const DeviceState&,Executable&e,size_t offset,const std::string&name,bool dynamic){
+        ++calls;gotDynamic=dynamic;gotOffset=offset;gotName=name;
+        assert(e.text.contents.size()==4096&&e.ro.contents.size()==4096&&e.data.contents.size()==13);
+        assert(e.text.contents[0]==0x11&&e.text.contents[116]==0x11&&e.text.contents[117]==0);
+        assert(e.ro.contents[100]==0x22&&e.ro.contents[101]==0&&e.bssSize==4083);
+        assert(e.dynsym.offset==8&&e.dynsym.size==24&&e.dynstr.offset==40&&e.dynstr.size==16);
+        std::fill(e.text.contents.begin(),e.text.contents.end(),0xee);
+        std::fill(e.ro.contents.begin(),e.ro.contents.end(),0xff); // simulated ordinary mutation only
+        if(fail)throw std::runtime_error("original LoadExecutable failure");
+        return {reinterpret_cast<u8*>(0x7100000000),0x4000,reinterpret_cast<void*>(0x7100001000)};
+    }
+};
+struct NsoLoader:Loader {
+/* REAL_HEADER_STRUCTS */
+    static std::vector<u8> GetSegment(const std::shared_ptr<vfs::Backing>&backing,const NsoSegmentHeader&segment,u32 compressedSize){
+        assert(compressedSize==0);if(++backing->segmentCalls==backing->failSegment)throw std::runtime_error("original segment failure");
+        return std::vector<u8>(segment.decompressedSize,segment.fileOffset==1?0x11:segment.fileOffset==2?0x22:0x33);
+    }
+    static void PrintRoContentsInfo(const std::vector<u8>&contents){assert(contents.size()==4096);}
+    static ExecutableLoadInfo LoadNso(Loader*,const std::shared_ptr<vfs::Backing>&,const std::shared_ptr<kernel::type::KProcess>&,const DeviceState&,size_t,const std::string&,bool);
+};
+/* REAL_LOAD_NSO */
+}
+}
+int main(int argc,char **argv){
+    assert(argc==2);using namespace skyline;using namespace skyline::loader;using namespace skyline::diagnostics;
+    Config config;config.directory=argv[1];config.sessionId="loader-session";config.processRunId="loader-process";assert(Start(config));SetLaunchId("loader-launch",true);
+    auto backing=std::make_shared<vfs::Backing>();auto process=std::make_shared<kernel::type::KProcess>();
+    NsoLoader::NsoHeader header{};header.magic=util::MakeMagic<u32>("NSO0");
+    header.text={1,0,117};header.ro={2,4096,101};header.data={3,8192,13};header.bssSize=4;
+    header.dynsym={8,24};header.dynstr={40,16};
+    auto *id=reinterpret_cast<u8*>(header.buildId.data());for(unsigned i{};i<32;++i)id[i]=u8(i+1);
+    std::memcpy(backing->header.data(),&header,sizeof(header));
+    for(bool enabled:{false,true}){
+        assert(image::Configure(enabled)==image::Result::Ok);Loader loader;backing->segmentCalls=0;
+        const auto info=NsoLoader::LoadNso(&loader,backing,process,{},0x5000,"sdk",true);
+        assert(loader.calls==1&&loader.gotDynamic&&loader.gotOffset==0x5000&&loader.gotName=="sdk"&&backing->segmentCalls==3);
+        assert(info.entry==reinterpret_cast<void*>(0x7100001000));
+        ModuleOwner owner;assert(TryModuleOwner(owner));image::Record record;
+        const auto result=image::Snapshot(owner,process,"sdk",record);
+        assert(result==(enabled?image::Result::Ok:image::Result::Disabled));
+        if(enabled){assert(record.buildId[0]==1&&record.buildId[7]==8&&record.buildId[8]==9&&record.buildId[31]==32);
+            std::vector<u8> text(117,0x11);assert(record.segments[0].computedHash==image::Sha256(text));assert(record.segments[0].size==117&&!record.liveBytesVerified);}
+        image::Configure(enabled);loader.fail=true;backing->segmentCalls=0;
+        try{NsoLoader::LoadNso(&loader,backing,process,{},0x5000,"sdk",true);assert(false);}catch(const std::runtime_error&e){assert(std::string(e.what())=="original LoadExecutable failure");}
+        assert(image::Snapshot(owner,process,"sdk",record)==(enabled?image::Result::NotFound:image::Result::Disabled));
+        loader.fail=false;backing->segmentCalls=0;backing->failSegment=2;
+        try{NsoLoader::LoadNso(&loader,backing,process,{},0x5000,"sdk",true);assert(false);}catch(const std::runtime_error&e){assert(std::string(e.what())=="original segment failure");}
+        backing->failSegment=0;
+    }
+    image::Configure(false);Stop();std::puts("PASS actual LoadNso body: identical segment/patch inputs, forwarded selection arguments, owned prepatch identity, original segment/loader exceptions, default disabled");
+}

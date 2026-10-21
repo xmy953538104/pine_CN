@@ -6,11 +6,13 @@
 #include <fcntl.h>
 #include "memory.h"
 #include "types/KProcess.h"
+#include <diagnostics/runtime_observer.h>
 
 namespace skyline::kernel {
     MemoryManager::MemoryManager(const DeviceState &state) noexcept : state{state}, processHeapSize{}, memRefs{} {}
 
     MemoryManager::~MemoryManager() noexcept {
+        if (diagnosticLifetime) diagnosticLifetime->Invalidate(diagnostics::runtime::StopReason::ProcessExit);
         if (base.valid() && !base.empty())
             munmap(reinterpret_cast<void *>(base.data()), base.size());
         if (codeBase36Bit.valid() && !codeBase36Bit.empty())
@@ -18,6 +20,7 @@ namespace skyline::kernel {
     }
 
     void MemoryManager::MapInternal(const std::pair<u8 *, ChunkDescriptor> &newDesc) {
+        if (diagnosticLifetime) diagnosticLifetime->BeforeMappingMutation(reinterpret_cast<uintptr_t>(newDesc.first),newDesc.second.size);
         // The chunk that contains / precedes the new chunk base address
         auto firstChunkBase{chunks.lower_bound(newDesc.first)};
         if (newDesc.first <= firstChunkBase->first && firstChunkBase != chunks.begin())
@@ -381,6 +384,7 @@ namespace skyline::kernel {
     }
 
     span<u8> MemoryManager::CreateMirror(span<u8> mapping) {
+        if (diagnosticLifetime) diagnosticLifetime->BeforeMappingMutation(reinterpret_cast<uintptr_t>(mapping.data()),mapping.size());
         // Get the host address of the mapping
         mapping = GetHostSpan(mapping);
 
@@ -411,6 +415,7 @@ namespace skyline::kernel {
 
         size_t mirrorOffset{};
         for (const auto &region : regions) {
+            if (diagnosticLifetime) diagnosticLifetime->BeforeMappingMutation(reinterpret_cast<uintptr_t>(region.data()),region.size());
             // Get the host address of the region
             auto hostRegion{GetHostSpan(region)};
 
@@ -584,6 +589,7 @@ namespace skyline::kernel {
     }
 
     __attribute__((always_inline)) void MemoryManager::FreeMemory(span<u8> memory) {
+        if (diagnosticLifetime) diagnosticLifetime->BeforeMappingMutation(reinterpret_cast<uintptr_t>(memory.data()),memory.size());
         // Get the host address of memory
         memory = GetHostSpan(memory);
 

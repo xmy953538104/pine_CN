@@ -7,6 +7,7 @@
 #include <common.h>
 #include <common/file_descriptor.h>
 #include <map>
+namespace skyline::diagnostics::runtime { class ProcessObservation; }
 
 namespace skyline {
     namespace kernel::type {
@@ -265,6 +266,7 @@ namespace skyline {
             void ForeachChunkInRange(span<u8> memory, auto editCallback);
 
           public:
+            diagnostics::runtime::ProcessObservation *diagnosticLifetime{}; // owner outlives manager
             memory::AddressSpaceType addressSpaceType{};
             span<u8> addressSpace{}; //!< The entire address space
             span<u8> codeBase36Bit{}; //!< A mapping in the lower 36 bits of the address space for mapping code and stack on 36-bit guests

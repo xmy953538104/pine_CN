@@ -8,6 +8,7 @@
 #include <kernel/types/KProcess.h>
 #include <kernel/memory.h>
 #include <unistd.h>
+#include <diagnostics/runtime_observer.h>
 #include "loader.h"
 
 namespace skyline::loader {
@@ -103,6 +104,14 @@ namespace skyline::loader {
         std::memcpy(executableBase, executable.text.contents.data(), executable.text.contents.size());
         std::memcpy(executableBase + executable.ro.offset, executable.ro.contents.data(), roSize);
         std::memcpy(executableBase + executable.data.offset, executable.data.contents.data(), dataSize - executable.bssSize);
+
+        if (diagnostics::runtime::ScopedLoad::Active()) {
+            // Actual load-owned aliases, before the process admits Guest threads.
+            __builtin___clear_cache(reinterpret_cast<char *>(executableBase), reinterpret_cast<char *>(executableBase + textSize));
+            __builtin___clear_cache(reinterpret_cast<char *>(executableGuestBase), reinterpret_cast<char *>(executableGuestBase + textSize));
+            diagnostics::runtime::ScopedLoad::Mapped({executableBase,textSize},{executableBase+executable.ro.offset,roSize},
+                reinterpret_cast<uintptr_t>(executableGuestBase),reinterpret_cast<uintptr_t>(guestBase),size,true);
+        }
 
         return {guestBase, size, executableGuestBase + executable.text.offset};
     }

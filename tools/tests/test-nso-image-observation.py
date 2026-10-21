@@ -13,7 +13,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='pine-nso-identity-') as temporary:
         out = Path(temporary)
         common = [os.environ.get('CXX', 'c++'), '-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread', '-I'+str(DIAG)]
-        sources = [str(DIAG/'nso_image.cpp'), str(DIAG/'diagnostics.cpp')]
+        sources = [str(DIAG/'nso_image.cpp'), str(DIAG/'diagnostics.cpp'), str(DIAG/'runtime_observer.cpp')]
         subprocess.run([*common, str(ROOT/'tests/abort_entry/nso_image_test.cpp'), *sources, '-o', str(out/'metadata')], check=True)
         subprocess.run([str(out/'metadata'), str(out/'logs')], check=True)
         header = (ROOT/'app/src/main/cpp/skyline/loader/nso.h').read_text()

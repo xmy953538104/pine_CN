@@ -161,6 +161,7 @@ add_library(skyline SHARED
         ${source_DIR}/skyline/logger/logger.cpp
         ${source_DIR}/skyline/diagnostics/diagnostics.cpp
         ${source_DIR}/skyline/diagnostics/nso_image.cpp
+        ${source_DIR}/skyline/diagnostics/runtime_observer.cpp
         ${source_DIR}/skyline/jit/coproc_15.cpp
         ${source_DIR}/skyline/jit/jit_core_32.cpp
         ${source_DIR}/skyline/jit/jit32.cpp

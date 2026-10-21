@@ -120,9 +120,9 @@ class DiagnosticsActivity : AppCompatActivity() {
         layout.addView(Button(this).apply {
             text = "Diagnostic categories / 诊断项目"
             setOnClickListener {
-                val names = arrayOf("content", "storage", "guest", "exception", "resource")
+                val names = arrayOf("content", "storage", "guest", "exception", "resource", "module_runtime")
                 val saved = prefs.getString("categories", "") ?: ""
-                val selected = BooleanArray(names.size) { saved.isEmpty() || names[it] in saved.split(",") }
+                val selected = BooleanArray(names.size) { (saved.isEmpty() && names[it] != "module_runtime") || names[it] in saved.split(",") }
                 AlertDialog.Builder(this@DiagnosticsActivity).setTitle("Lifecycle events always enabled")
                     .setMultiChoiceItems(names, selected) { _, index, checked -> selected[index] = checked }
                     .setPositiveButton(android.R.string.ok) { _, _ ->

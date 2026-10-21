@@ -9,6 +9,7 @@
 #include "skyline/diagnostics/initialization.h"
 #include "skyline/diagnostics/identity_jni.h"
 #include "skyline/diagnostics/resource_observer.h"
+#include "skyline/diagnostics/runtime_observer.h"
 #include "selected_jni.h"
 #include "skyline/nce.h"
 #include <csignal>
@@ -385,6 +386,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_c
     JNIEnv *env, jclass, jstring path, jboolean enabled, jboolean verbose, jint maxFiles, jstring session, jstring categories, jstring processRunId) {
     try {
     skyline::diagnostics::ConfigureResourceObservation(false, "unspecified");
+    skyline::diagnostics::runtime::ConfigureIdentity(false);
     skyline::diagnostics::Stop();
     if (!enabled) return false;
     skyline::diagnostics::Config config;
@@ -395,7 +397,10 @@ extern "C" JNIEXPORT jboolean JNICALL Java_emu_skyline_diagnostics_Diagnostics_c
     config.processRunId = ConvertDiagnosticJString(env, processRunId);
     config.maxFiles = static_cast<size_t>(std::clamp(maxFiles, 2, 8));
     if (env->ExceptionCheck()) return false;
-    return skyline::diagnostics::Start(config);
+    const bool started = skyline::diagnostics::Start(config);
+    const auto selected = std::string(",") + config.categories + ",";
+    skyline::diagnostics::runtime::ConfigureIdentity(started && config.verbose && selected.find(",module_runtime,") != std::string::npos);
+    return started;
     } catch (...) { return false; }
 }
 

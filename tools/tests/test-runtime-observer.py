@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Production identity wiring with controlled host data; no Guest/device claim."""
+from pathlib import Path
+import os
+import subprocess
+import tempfile
+ROOT=Path(__file__).resolve().parents[2]
+CORE=ROOT/'app/src/main/cpp/skyline/diagnostics'
+with tempfile.TemporaryDirectory(prefix='pine-runtime-observer-') as directory:
+    output=Path(directory)
+    subprocess.run([os.environ.get('CXX','c++'),'-std=c++20','-O2','-Wall','-Wextra','-Werror','-pthread','-DPINE_DIAG_RUNTIME_TEST','-I'+str(CORE),
+                    str(ROOT/'tests/runtime_observer/identity_test.cpp'),str(CORE/'runtime_observer.cpp'),str(CORE/'nso_image.cpp'),str(CORE/'diagnostics.cpp'),'-o',str(output/'identity')],check=True)
+    subprocess.run([str(output/'identity'),str(output/'logs')],check=True)

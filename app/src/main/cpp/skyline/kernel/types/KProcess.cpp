@@ -18,10 +18,12 @@ namespace skyline::kernel::type {
     }
 
     KProcess::KProcess(const DeviceState &state) : memory(state), KSyncObject(state, KType::KProcess) {
+        memory.diagnosticLifetime = &diagnosticObservation;
         trap.InstallStaticInstance();
     }
 
     KProcess::~KProcess() {
+        diagnosticObservation.Invalidate(diagnostics::runtime::StopReason::ProcessExit);
         std::scoped_lock guard{threadMutex};
         disableThreadCreation = true;
         for (const auto &thread : threads)
@@ -29,6 +31,7 @@ namespace skyline::kernel::type {
     }
 
     void KProcess::Kill(bool join, bool all, bool disableCreation) {
+        diagnosticObservation.Invalidate(diagnostics::runtime::StopReason::ProcessExit);
         LOGW("Killing {}{}KProcess{}", join ? "and joining " : "", all ? "all threads in " : "HOS-1 in ", disableCreation ? " with new thread creation disabled" : "");
         // disableCreation is set only when gracefully exiting, it being false means an exception/crash occurred
         if (!disableCreation)
@@ -92,6 +95,7 @@ namespace skyline::kernel::type {
     }
 
     std::shared_ptr<KThread> KProcess::CreateThread(void *entry, u64 argument, void *stackTop, std::optional<i8> priority, std::optional<u8> idealCore) {
+        diagnosticObservation.SealLoads();
         std::scoped_lock guard{threadMutex};
         if (disableThreadCreation)
             return nullptr;

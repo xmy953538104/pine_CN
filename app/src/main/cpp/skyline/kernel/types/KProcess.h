@@ -5,6 +5,7 @@
 
 #include <common/trap_manager.h>
 #include <vfs/npdm.h>
+#include <diagnostics/runtime_observer.h>
 #include "KThread.h"
 #include "KTransferMemory.h"
 #include "KSession.h"
@@ -22,6 +23,7 @@ namespace skyline {
          */
         class KProcess : public KSyncObject {
           public: // We have intermittent public/private members to ensure proper construction/destruction order
+            diagnostics::runtime::ProcessObservation diagnosticObservation; // outlives memory and joined threads
             MemoryManager memory;
             TrapManager trap;
 

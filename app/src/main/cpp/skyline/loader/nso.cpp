@@ -6,6 +6,7 @@
 #include <kernel/types/KProcess.h>
 #include <boost/regex/v5/regex.hpp>
 #include <diagnostics/nso_image.h>
+#include <diagnostics/runtime_observer.h>
 #include "nso.h"
 
 namespace skyline::loader {
@@ -80,6 +81,7 @@ namespace skyline::loader {
             }
             observation = image::Capture(input);
         }
+        diagnostics::runtime::ScopedLoad runtimeLoad(process->diagnosticObservation, observation ? &observation->record : nullptr);
         auto info{loader->LoadExecutable(process, state, executable, offset, name, dynamicallyLinked)};
         if (observation) {
             const auto textAddress{reinterpret_cast<uintptr_t>(info.entry)};

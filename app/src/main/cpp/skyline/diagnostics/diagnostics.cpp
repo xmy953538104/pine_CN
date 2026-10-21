@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include "identity_observer.h"
 #include "module_identity.h"
+#include "runtime_bridge.h"
 #include <thread>
 #include <vector>
 #include <pthread.h>
@@ -255,7 +256,7 @@ uint64_t MonotonicUs() {
 }
 bool Enqueue(Sink &, std::string_view, std::string_view,
     std::span<const std::pair<std::string_view, std::string_view>>, std::string_view,
-    const std::string_view *, std::string_view, std::string_view = {}) noexcept;
+    const std::string_view *, std::string_view, std::string_view = {}, const ModuleOwner * = nullptr) noexcept;
 bool EmitProgress(Sink &s, std::string_view event, std::string_view expectedLaunch = {}) {
     const auto epoch = s.observationEpoch.load();
     if (epoch & 1) return false;
@@ -509,6 +510,7 @@ void Run(Sink &s) noexcept {
         }
         rotate();
         while (true) {
+            runtime::DrainOnWriter(); // normal worker only, never Guest code
             if (!s.stopping && IsEnabled(s)) {
                 // Resource sampling may allocate on this background thread.
                 // Failure must not stop the existing diagnostic sink.
@@ -554,7 +556,7 @@ void Run(Sink &s) noexcept {
             // Only the existing ordinary writer owns this window and does IO.
             // Event timestamps may be out of admission order across producers;
             // retention uses writer ingestion time and preserves original timestamps.
-            const bool resourceRecord = record.category == "resource";
+            const bool resourceRecord = record.category == "resource" || record.category == "module_runtime";
             const bool exceptionObserved = record.category == "exception" ||
                 (record.category == "guest" && (record.event == "GUEST_RUNTIME_ERROR" || record.event == "DFX_LUA_ERROR"));
             const bool guestBreak = record.category == "guest" && record.event == "GUEST_BREAK_REQUEST" &&
@@ -646,6 +648,7 @@ void Run(Sink &s) noexcept {
     }
 }
 void StopLocked(Sink &s) {
+    runtime::ownerEpoch.fetch_add(1,std::memory_order_acq_rel);
     resourceEnabled.store(false, std::memory_order_relaxed);
     // Emit is bounded and never waits for the writer. Only this ordinary-thread
     // lifecycle path waits for active emitters, keeping final counters stable.
@@ -666,12 +669,16 @@ bool CategorySelected(std::string_view selected, std::string_view category) {
 }
 bool Enqueue(Sink &s, std::string_view category, std::string_view event,
              std::span<const std::pair<std::string_view, std::string_view>> fields,
-             std::string_view level, const std::string_view *stage = nullptr, std::string_view expectedLaunch = {}, std::string_view expectedSession) noexcept {
+             std::string_view level, const std::string_view *stage = nullptr, std::string_view expectedLaunch = {}, std::string_view expectedSession,
+             const ModuleOwner *moduleOwner) noexcept {
     const bool critical = CriticalEvent(category, event, level);
     auto drop = [&](std::atomic<uint64_t> &reason) { ++s.dropped; ++reason; if (critical) ++s.criticalDropped; };
     Producer producer(s);
     if (!producer) return false;
     if (!expectedSession.empty() && s.config.sessionId != expectedSession) return false;
+    if (moduleOwner && ((s.producers.load(std::memory_order_relaxed) & ProducerGenerationMask) != moduleOwner->sinkGeneration ||
+        s.config.processRunId != OwnerText(moduleOwner->process) || s.observationEpoch.load(std::memory_order_acquire) != moduleOwner->launchEpoch ||
+        runtime::ownerEpoch.load(std::memory_order_acquire) != moduleOwner->runtimeOwnerEpoch)) return false;
     try {
         // Field sanitation and host thread formatting do not hold the admission lock.
         Record r; r.critical = critical;
@@ -689,6 +696,8 @@ bool Enqueue(Sink &s, std::string_view category, std::string_view event,
         size_t budget = 4096;
         for (auto &[key, value] : fields) { if (r.fields.size() == 24 || !budget) break; auto copy = Sanitize(value, std::min<size_t>(2048, budget)); budget -= std::min(budget, copy.size()); r.fields.emplace_back(Sanitize(key, 64), std::move(copy)); }
         if (!IsEnabled(s) || s.stopping) return false;
+        if (moduleOwner && (s.observationEpoch.load(std::memory_order_acquire) != moduleOwner->launchEpoch ||
+            runtime::ownerEpoch.load(std::memory_order_acquire) != moduleOwner->runtimeOwnerEpoch)) return false;
         CopyDropCounts(r, s);
         const auto result = s.queue.Push(std::move(r), AdmissionLimit(s.config.queueCapacity, critical));
         if (result == Admission::Full) { drop(s.droppedFull); return false; }
@@ -720,6 +729,7 @@ bool TryModuleOwner(ModuleOwner &output) noexcept {
             !copy(s.activeLaunchId, owner.launch)) return false;
         owner.sinkGeneration = s.producers.load(std::memory_order_relaxed) & ProducerGenerationMask;
         owner.launchEpoch = s.observationEpoch.load(std::memory_order_relaxed);
+        owner.runtimeOwnerEpoch = runtime::ownerEpoch.load(std::memory_order_acquire);
         if (owner.launchEpoch & 1) return false;
         output = owner;
         return true;
@@ -727,6 +737,10 @@ bool TryModuleOwner(ModuleOwner &output) noexcept {
 }
 bool ResourceObservationEnabled() noexcept {
     return resourceEnabled.load(std::memory_order_relaxed) && Enabled();
+}
+bool EmitForModuleOwner(const ModuleOwner &owner, std::string_view category, std::string_view event,
+    std::span<const std::pair<std::string_view,std::string_view>> fields) noexcept {
+    return Enqueue(Get(),category,event,fields,"INFO",nullptr,OwnerText(owner.launch),OwnerText(owner.session),&owner);
 }
 void ResourceAdd(ResourceMetric metric, uint64_t value) noexcept {
     if (!ResourceObservationEnabled()) return;
@@ -985,6 +999,7 @@ void SetEffectiveExeFs(std::string_view programId, std::string_view contentId, s
 void SetLaunchId(std::string_view launchId, bool newLaunch) noexcept {
     try {
         auto value = Sanitize(launchId, 128); auto &s = Get(); std::lock_guard lock(s.mutex);
+        runtime::ownerEpoch.fetch_add(1,std::memory_order_acq_rel);
         s.observationEpoch.fetch_add(1); // Reject a timer snapshot during the reset/publication boundary.
         try {
         s.activeLaunchId = std::move(value);

@@ -19,6 +19,105 @@ concurrency:
   group: runtime-observer-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  bionic-windows-kit:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      artifact-name: ${{ steps.kit.outputs.artifact-name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Preserve the published df37902a runtime and tool behavior
+        run: >-
+          git diff --exit-code df37902a1d030bddad1965b1716cad9714a09c35 HEAD --
+          app/src/main/cpp tests/runtime_observer tools/tests/test-runtime-lifecycle.py
+          tools/tests/test-runtime-pipeline.py tools/android-bionic/build-bundle.py
+          tools/android-bionic/run-once.js tools/android-bionic/Start-PineBionic.cmd
+          tools/android-bionic/Run-PineBionic.ps1 tools/android-bionic/README.zh-CN.md
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Official pinned NDK
+        run: sdkmanager 'ndk;27.3.13750724'
+      - name: Fixed official Windows Node and its versioned license
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from urllib.request import urlopen
+          import hashlib,os,runpy
+          settings=runpy.run_path('tools/android-bionic/build-bundle.py')
+          directory=Path(os.environ['RUNNER_TEMP'])/'bionic-inputs';directory.mkdir()
+          for name,url in [('node.exe',settings['NODE_ORIGIN']),('Node-LICENSE','https://raw.githubusercontent.com/nodejs/node/v24.19.0/LICENSE')]:
+              with urlopen(url,timeout=60) as source,(directory/name).open('wb') as output:
+                  while block:=source.read(1024*1024):output.write(block)
+          actual=hashlib.sha256((directory/'node.exe').read_bytes()).hexdigest()
+          assert actual==settings['NODE_SHA'],actual
+          print('PASS official Windows Node SHA256',actual)
+          PY
+      - name: Package complete independent Windows and Android kit (no APK)
+        id: kit
+        run: |
+          python3 tools/android-bionic/build-bundle.py \
+            --output "$RUNNER_TEMP/bionic-publication" \
+            --ndk-cxx "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" \
+            --windows-node "$RUNNER_TEMP/bionic-inputs/node.exe" \
+            --node-license "$RUNNER_TEMP/bionic-inputs/Node-LICENSE"
+          python3 - <<'PY'
+          import os,subprocess
+          from pathlib import Path
+          commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:output.write('artifact-name=Pine-Bionic-Windows-Once-'+commit+'\n')
+          folder=Path(os.environ['RUNNER_TEMP'])/'bionic-publication'
+          archive=folder/('Pine-Bionic-Once-'+commit[:8]+'.zip')
+          subprocess.run(['python3','tools/android-bionic/verify-bundle.py',str(archive),'--expected-commit',commit,'--report',str(folder/'package-verification.json')],check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kit.outputs.artifact-name }}
+          path: |
+            ${{ runner.temp }}/bionic-publication/*.zip
+            ${{ runner.temp }}/bionic-publication/package-verification.json
+          if-no-files-found: error
+          compression-level: 0
+  verify-downloaded-windows-kit:
+    needs: bionic-windows-kit
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.bionic-windows-kit.outputs.artifact-name }}
+          path: ${{ runner.temp }}/bionic-downloaded
+      - name: Verify the downloaded full ZIP and execute its Windows runtime only
+        shell: pwsh
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP 'bionic-downloaded'
+          $archives = @(Get-ChildItem $folder -Filter '*.zip')
+          if ($archives.Count -ne 1) { throw 'Expected exactly one complete kit ZIP' }
+          $commit = git rev-parse HEAD
+          python tools/android-bionic/verify-bundle.py $archives[0].FullName --expected-commit $commit
+          if ($LASTEXITCODE) { throw 'Downloaded kit verification failed' }
+          $expanded = Join-Path $env:RUNNER_TEMP 'bionic-expanded'
+          Expand-Archive $archives[0].FullName $expanded
+          $kit = Join-Path $expanded ('Pine-Bionic-Once-' + $commit.Substring(0,8))
+          $version = & (Join-Path $kit 'host/node.exe') --version
+          if ($LASTEXITCODE -or $version -ne 'v24.19.0') { throw 'Packaged Windows runtime failed' }
+          & (Join-Path $kit 'host/node.exe') --check (Join-Path $kit 'host/run-once.js')
+          if ($LASTEXITCODE) { throw 'Packaged collector syntax failed' }
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $kit 'Run-PineBionic.ps1'),[ref]$tokens,[ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+          Write-Output 'PASS downloaded complete Windows kit; Node/CMD/PS/collector/ARM64 ELF/libc++/manifest/guides verified. ANDROID_EXECUTION_PENDING.'
   controlled:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
